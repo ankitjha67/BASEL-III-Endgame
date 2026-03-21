@@ -1,0 +1,180 @@
+"""Capital Aggregation Module — Basel III Endgame 2026.
+
+Master capital calculator that ties all risk modules together.
+Computes CET1, AT1, Tier 2 capital components, aggregates RWA across
+credit, market, operational, and CVA risk, calculates regulatory ratios,
+and generates FR Y-9C and FFIEC 101 reports.
+
+References:
+- 12 CFR 217.10-22: Capital adequacy framework
+- ERBA NPR pp. 34-120: Regulatory capital rule
+- FR Y-9C Schedule HC-R: Regulatory capital reporting
+- FFIEC 101 Schedule A: RWA by exposure type
+"""
+
+from src.capital.capital_params import (
+    CCB_RATE,
+    CCYB_DEFAULT_RATE,
+    CET1_MINIMUM_RATIO,
+    ESLR_TOTAL_CATEGORY_I,
+    GSIBMethod,
+    MSA_RISK_WEIGHT,
+    OUTPUT_FLOOR_APPLIED,
+    OUTPUT_FLOOR_RATE,
+    SCB_FLOOR,
+    SLR_MINIMUM,
+    TIER1_MINIMUM_RATIO,
+    TOTAL_CAPITAL_MINIMUM_RATIO,
+    build_gsib_surcharge_schedule,
+    lookup_gsib_surcharge,
+)
+
+from src.capital.capital_components import (
+    AT1Instrument,
+    AT1Result,
+    CET1Result,
+    CapitalTier,
+    CommonEquityInputs,
+    DeductionCategory,
+    DeductionItem,
+    InstrumentType,
+    LeverageExposureInputs,
+    ThresholdDeductionInputs,
+    Tier2Instrument,
+    Tier2Result,
+    TotalCapitalResult,
+    compute_at1,
+    compute_cet1,
+    compute_threshold_deductions,
+    compute_tier2,
+    compute_tier2_amortization,
+    compute_total_capital,
+    compute_total_leverage_exposure,
+)
+
+from src.capital.rwa_aggregator import (
+    CreditRiskExposureType,
+    CreditRiskRWAInput,
+    CreditRiskRWAItem,
+    CVARiskRWAInput,
+    FFIEC101ScheduleA,
+    MarketRiskRWAInput,
+    OperationalRiskRWAInput,
+    RWABreakdown,
+    aggregate_credit_risk_rwa,
+    aggregate_rwa,
+    build_ffiec_101_schedule_a,
+    convert_capital_charge_to_rwa,
+)
+
+from src.capital.capital_ratios import (
+    BufferRequirements,
+    BufferZone,
+    CapitalAdequacyResult,
+    CapitalRatios,
+    CapitalSurplusDeficit,
+    PCACategory,
+    PCAClassification,
+    classify_buffer_zone,
+    classify_pca,
+    compute_buffer_requirements,
+    compute_capital_adequacy,
+    compute_capital_ratios,
+    compute_surplus_deficit,
+)
+
+from src.capital.capital_reporting import (
+    CapitalAdequacySummary,
+    FRY9C_HCR_PartI,
+    FRY9C_HCR_PartII,
+    HCRPartILineItem,
+    Pillar3_CC1,
+    Pillar3_KM1,
+    Pillar3_OV1,
+    build_capital_adequacy_summary,
+    build_hcr_part_i,
+    build_hcr_part_ii_from_breakdown,
+    build_pillar3_cc1,
+    build_pillar3_km1,
+    build_pillar3_ov1,
+)
+
+__all__ = [
+    # Parameters
+    "CCB_RATE",
+    "CCYB_DEFAULT_RATE",
+    "CET1_MINIMUM_RATIO",
+    "ESLR_TOTAL_CATEGORY_I",
+    "GSIBMethod",
+    "MSA_RISK_WEIGHT",
+    "OUTPUT_FLOOR_APPLIED",
+    "OUTPUT_FLOOR_RATE",
+    "SCB_FLOOR",
+    "SLR_MINIMUM",
+    "TIER1_MINIMUM_RATIO",
+    "TOTAL_CAPITAL_MINIMUM_RATIO",
+    "build_gsib_surcharge_schedule",
+    "lookup_gsib_surcharge",
+    # Components
+    "AT1Instrument",
+    "AT1Result",
+    "CET1Result",
+    "CapitalTier",
+    "CommonEquityInputs",
+    "DeductionCategory",
+    "DeductionItem",
+    "InstrumentType",
+    "LeverageExposureInputs",
+    "ThresholdDeductionInputs",
+    "Tier2Instrument",
+    "Tier2Result",
+    "TotalCapitalResult",
+    "compute_at1",
+    "compute_cet1",
+    "compute_threshold_deductions",
+    "compute_tier2",
+    "compute_tier2_amortization",
+    "compute_total_capital",
+    "compute_total_leverage_exposure",
+    # RWA
+    "CreditRiskExposureType",
+    "CreditRiskRWAInput",
+    "CreditRiskRWAItem",
+    "CVARiskRWAInput",
+    "FFIEC101ScheduleA",
+    "MarketRiskRWAInput",
+    "OperationalRiskRWAInput",
+    "RWABreakdown",
+    "aggregate_credit_risk_rwa",
+    "aggregate_rwa",
+    "build_ffiec_101_schedule_a",
+    "convert_capital_charge_to_rwa",
+    # Ratios
+    "BufferRequirements",
+    "BufferZone",
+    "CapitalAdequacyResult",
+    "CapitalRatios",
+    "CapitalSurplusDeficit",
+    "PCACategory",
+    "PCAClassification",
+    "classify_buffer_zone",
+    "classify_pca",
+    "compute_buffer_requirements",
+    "compute_capital_adequacy",
+    "compute_capital_ratios",
+    "compute_surplus_deficit",
+    # Reporting
+    "CapitalAdequacySummary",
+    "FRY9C_HCR_PartI",
+    "FRY9C_HCR_PartII",
+    "HCRPartILineItem",
+    "Pillar3_CC1",
+    "Pillar3_KM1",
+    "Pillar3_OV1",
+    "build_capital_adequacy_summary",
+    "build_hcr_part_i",
+    "build_hcr_part_ii_from_breakdown",
+    "build_pillar3_cc1",
+    "build_pillar3_km1",
+    "build_pillar3_ov1",
+]
