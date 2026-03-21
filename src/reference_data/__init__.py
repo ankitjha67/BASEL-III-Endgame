@@ -1,7 +1,7 @@
 """Reference data module — counterparty, instrument, and regulatory lookups.
 
 Provides the foundational reference data layer for the Basel III Endgame
-capital engine. No dependencies on other calculation modules.
+capital engine. No dependencies on other src/ modules (except core/).
 
 Reference: ERBA NPR pp. 100-160, BCBS d457, 12 CFR 217.32.
 """
@@ -39,7 +39,7 @@ from src.reference_data.regulatory_lookups import (
 )
 
 __all__ = [
-    # Counterparty reference
+    # Counterparty
     "CounterpartyRecord",
     "CounterpartyRegistry",
     "CounterpartyType",
@@ -49,7 +49,7 @@ __all__ = [
     "SovereignRiskCategory",
     "classify_counterparty_type",
     "get_sa_ccr_alpha",
-    # Instrument reference
+    # Instrument
     "BookClassification",
     "CollateralType",
     "InstrumentRecord",
@@ -61,7 +61,7 @@ __all__ = [
     "is_derivative",
     "is_securitization",
     "is_sft",
-    # Regulatory lookups
+    # Lookups
     "CRE_RW_BY_LTV",
     "RESIDENTIAL_MORTGAGE_RW_BY_LTV",
     "SA_CR_RISK_WEIGHTS",
