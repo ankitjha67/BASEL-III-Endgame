@@ -2,6 +2,7 @@
 __pycache__/
 *.py[cod]
 *$py.class
+*.pyc
 *.so
 *.egg-info/
 dist/
@@ -30,6 +31,11 @@ coverage.xml
 
 # ruff
 .ruff_cache/
+
+# Output
+output/*.xlsx
+output/*.html
+output/*.pdf
 
 # OS
 .DS_Store
