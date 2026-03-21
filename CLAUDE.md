@@ -5,17 +5,33 @@
 - **Model ID**: FNBC-BIII-2026-001
 - **Regulatory Basis**: US Federal Reserve March 2026 Re-Proposal (ERBA + SA + G-SIB Surcharge)
 - **Target**: Production-grade calculation engine for a $3.2T Category I US G-SIB
-- **Language**: Python 3.11+ | Dependencies: numpy, scipy, pandas, plotly, openpyxl
+- **Language**: Python 3.11+ | Dependencies: numpy, scipy, pandas, pydantic, plotly, openpyxl
 - **Estimated Size**: ~49,000 lines across 12 modules, ~120 source files
+
+## Architecture
+```
+src/
+├── core/               # Base classes, enums, data models, exceptions
+├── market_risk/
+│   └── frtb/
+│       ├── sbm/        # Sensitivities-Based Method (GIRR, CSR, Equity, Commodity, FX)
+│       ├── drc/        # Default Risk Charge
+│       └── rrao/       # Residual Risk Add-On
+├── credit_risk/        # SA-CR, IRB
+├── operational_risk/   # Standardized Approach
+├── cva_risk/           # SA-CVA, BA-CVA
+└── utils/              # Math helpers, aggregation, I/O
+tests/                  # Mirror of src/ with pytest tests
+config/                 # Regulatory parameters (JSON/YAML)
+```
 
 ## Critical Rules
 
 ### Code Quality
 - Every function must have a docstring referencing the specific ERBA page number or BCBS d457 section
 - All monetary amounts in USD millions ($M) unless explicitly stated otherwise
-- CamelCase for all variable names, function names, class names (Senior Management UX requirement)
 - Type hints on every function signature
-- No magic numbers — all regulatory parameters must be defined in `src/reference_data/` with citations
+- No magic numbers — all regulatory parameters must be defined in `config/` or `*_params.py` with citations
 - Every calculation must be traceable to a specific regulatory provision
 
 ### Regulatory Accuracy
@@ -26,9 +42,9 @@
 - SA-CCR alpha = 1.4 for financial counterparties, 1.0 for commercial end-users
 - Retail transactor = 45% (not 55% from 2023 NPR)
 - Corporate IG = 65% (self-assessment, no external ratings per Dodd-Frank §939A)
-- G-SIB Method 2 coefficients adjusted by 1.2× downward factor
+- G-SIB Method 2 coefficients adjusted by 1.2x downward factor
 - G-SIB surcharge bands: 20bp score ranges / 0.1% increments (not 100bp/0.5%)
-- NIC in operational risk uses NET basis with 0.7× factor for investment management
+- NIC in operational risk uses NET basis with 0.7x factor for investment management
 - BIC marginal coefficients: 12% / 15% / 18% at $1B / $30B thresholds
 - FRTB threshold: $5B trading activity (4-quarter average), not $1B from 2023
 
@@ -37,12 +53,6 @@
 - Test against known regulatory examples where available
 - Validate that all risk weights match Tables 2-5 in the ERBA NPR
 - Integration test: end-to-end capital calculation must produce realistic GSIB ratios (CET1 10-15%, SLR 5-7%)
-
-### Color Coding (RAG Status)
-- 🟢 Green: Within limit, healthy, no concern
-- 🟡 Amber: Near threshold (>80% of limit), watch item
-- 🔴 Red: Breach, above limit, requires immediate action
-- Apply RAG to: capital ratios vs requirements, large exposures vs 25% T1 limit, ECL coverage ratios, P&L attribution test results, backtesting exceptions
 
 ### Fed Reporting Formats
 - FR Y-9C Schedule HC-R: Regulatory capital (17 line items)
@@ -61,36 +71,36 @@
 
 ```
 reference_data (no deps)
-    ↓
+    |
 data_generation (depends on reference_data)
-    ↓
+    |
 credit_risk/rw_assignment (depends on reference_data)
 credit_risk/obs_ccf (depends on reference_data)
 credit_risk/classification_engine (depends on reference_data)
 credit_risk/crm/* (depends on reference_data, classification_engine)
 credit_risk/large_exposures (depends on rw_assignment)
-    ↓
+    |
 counterparty_risk/saccr/* (depends on reference_data)
 counterparty_risk/cva/* (depends on saccr)
-    ↓
+    |
 securitization/* (depends on reference_data)
-    ↓
+    |
 operational_risk/* (depends on reference_data, financial_statements)
-    ↓
+    |
 market_risk/frtb/* (depends on reference_data, trading_book)
 market_risk/ima/* (depends on frtb)
 market_risk/desk_infrastructure/* (depends on frtb)
 market_risk/testing/* (depends on ima)
-    ↓
+    |
 ecl/* (depends on credit_risk)
-    ↓
+    |
 capital/* (depends on ALL of the above)
 capital/gsib/* (depends on capital)
-    ↓
+    |
 stress_testing/* (depends on capital, ecl)
-    ↓
+    |
 irb/* (depends on credit_risk — for comparison only)
-    ↓
+    |
 pillar2/* (depends on capital)
 pillar3/* (depends on capital)
 reporting/* (depends on ALL)
@@ -105,33 +115,49 @@ reporting/* (depends on ALL)
 - BCBS d424: "Basel III: Finalising Post-Crisis Reforms" (Dec 2017)
 - PRA PS1/26: UK Basel 3.1 Final Rules (Jan 2026)
 
+## Build Phases
+- **Phase 1**: Market Risk -> FRTB -> SBM -> GIRR (Delta, Vega, Curvature) -- COMPLETE
+- **Phase 2**: SBM -> CSR, Equity, Commodity, FX + DRC + RRAO + Master Calculator
+- **Phase 3**: Credit Risk (SA-CR, CRM)
+- **Phase 4**: SA-CCR, CVA Risk
+- **Phase 5**: Operational Risk + Output Floor + Stress Testing
+
+## Commands
+- `pytest tests/ -v` — run all tests
+- `pytest tests/market_risk/frtb/sbm/ -v` — run SBM tests
+- `python -m mypy src/ --strict` — type checking
+- `python -m ruff check src/` — linting
+
 ## Current State
 
-### Completed (From Prior Chat Sessions)
-- V7 regulatory analysis document (1,943 paragraphs covering all 3 NPRs)
-- Interview briefing document
-- 3,225-word reusable master prompt
-- v4 calculation engine (1,033 lines — proof of concept, NOT production)
-- FRTB Phase 1A: Prescribed parameters and aggregation framework (829 lines)
-- FRTB Phase 1B: Position generation and basic calculation (333 lines)
-- Full gap analysis identifying 96 individual items across 12 modules
+### Phase 1 — COMPLETE (GIRR)
+- `src/market_risk/frtb/sbm/girr.py` — 875 lines, full delta/vega/curvature
+- `src/market_risk/frtb/sbm/girr_params.py` — 256 lines, all MAR21 parameters
+- `src/core/` — enums, models, exceptions (Pydantic-based)
+- `src/utils/aggregation.py` — intra/inter-bucket aggregation
+- `tests/market_risk/frtb/sbm/test_girr.py` — 73 tests, all passing
+- **Total Phase 1**: 2,533 lines
+
+### Phase 2 — IN PROGRESS
+Target: CSR Non-Sec, CSR Sec, Equity, Commodity, FX, DRC, RRAO, Master Calculator
+Target lines: ~6,400
 
 ### Gap Analysis Summary
 | Module | Current Lines | Needed Lines | Completion |
 |---|---|---|---|
-| FRTB | 1,162 | 12,800 | 9.1% |
+| FRTB | 2,533 | 12,800 | 20% |
 | CRM | 0 | 2,500 | 0% |
-| SA-CCR | 60 | 3,500 | 1.7% |
+| SA-CCR | 0 | 3,500 | 0% |
 | Stress Testing | 0 | 5,000 | 0% |
-| Credit Classification | 80 | 3,500 | 2.3% |
-| ECL | 30 | 4,000 | 0.8% |
-| CVA | 15 | 2,500 | 0.6% |
-| Securitization | 30 | 2,500 | 1.2% |
+| Credit Classification | 0 | 3,500 | 0% |
+| ECL | 0 | 4,000 | 0% |
+| CVA | 0 | 2,500 | 0% |
+| Securitization | 0 | 2,500 | 0% |
 | IRB | 0 | 2,500 | 0% |
 | Pillar 2 | 0 | 3,500 | 0% |
-| Pillar 3 | 30 | 2,500 | 1.2% |
-| Infrastructure | 40 | 4,000 | 1.0% |
-| **Total** | **~1,450** | **~49,000** | **~3%** |
+| Pillar 3 | 0 | 2,500 | 0% |
+| Infrastructure | 0 | 4,000 | 0% |
+| **Total** | **~2,533** | **~49,000** | **~5%** |
 
 ## How To Develop Each Phase
 
