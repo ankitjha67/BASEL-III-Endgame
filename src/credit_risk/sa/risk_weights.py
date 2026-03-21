@@ -1,0 +1,672 @@
+"""SA-CR Risk Weight Tables and Lookup Logic per US Basel III Endgame.
+
+Implements the complete set of risk weight mappings for the Standardized
+Approach to Credit Risk (SA-CR) under the US Federal Reserve's Basel III
+Endgame re-proposal. The US framework prohibits use of external credit
+ratings (Dodd-Frank Section 939A) and instead relies on:
+
+  - Country Risk Classifications (CRC) for sovereign and bank exposures
+  - Self-assessed investment-grade determination for corporates
+  - LTV ratios for real estate exposures
+  - Exposure sub-type classification for equity exposures
+
+References:
+    - Federal Reserve Basel III Endgame NPR (July 2023, re-proposed Sept 2025)
+    - 12 CFR Part 217, Subpart E, Sections 217.111-217.132
+    - OECD Country Risk Classifications (for CRC mapping)
+    - Basel Committee CRE20-CRE22 (international standard)
+"""
+
+from __future__ import annotations
+
+from typing import Optional
+
+from pydantic import BaseModel, Field
+
+from src.credit_risk.sa.exposure_classes import (
+    CRESubType,
+    EquitySubType,
+    ExposureClass,
+    PSEObligationType,
+    get_cre_ltv_bucket,
+    get_resi_mortgage_ltv_bucket,
+    is_qualifying_mdb,
+)
+
+
+# =========================================================================
+#  Sovereign Risk Weights (by CRC)
+# =========================================================================
+
+SOVEREIGN_RW: dict[int, float] = {
+    0: 0.00,   # CRC 0: US government, Japan, etc.
+    1: 0.00,   # CRC 1: Germany, UK, etc.
+    2: 0.20,   # CRC 2
+    3: 0.50,   # CRC 3
+    4: 1.00,   # CRC 4
+    5: 1.00,   # CRC 5
+    6: 1.50,   # CRC 6
+    7: 1.50,   # CRC 7
+}
+"""Sovereign risk weights indexed by OECD Country Risk Classification.
+
+CRC 0-1 receive 0% for US, other OECD high-grade sovereigns.
+The US government always receives 0% regardless of CRC.
+
+Per 12 CFR 217, Subpart E, Table: Risk weights for sovereign exposures.
+"""
+
+# US government entities that always receive 0% risk weight
+US_SOVEREIGN_ENTITIES: frozenset[str] = frozenset({
+    "US_TREASURY",
+    "US_GOVERNMENT",
+    "FEDERAL_RESERVE",
+    "GNMA",         # Government National Mortgage Association
+    "SBA",          # Small Business Administration (guaranteed portion)
+    "FDIC",         # Federal Deposit Insurance Corporation
+})
+"""US government entities unconditionally assigned 0% risk weight."""
+
+
+# =========================================================================
+#  Bank Risk Weights (by CRC of home sovereign)
+# =========================================================================
+
+BANK_RW: dict[int, float] = {
+    0: 0.20,   # CRC 0: Banks in US, Japan, etc.
+    1: 0.20,   # CRC 1: Banks in Germany, UK, etc.
+    2: 0.50,   # CRC 2
+    3: 0.50,   # CRC 3
+    4: 1.00,   # CRC 4
+    5: 1.00,   # CRC 5
+    6: 1.50,   # CRC 6
+    7: 1.50,   # CRC 7
+}
+"""Bank risk weights indexed by CRC of the bank's home sovereign.
+
+Per 12 CFR 217, Subpart E, Table: Risk weights for bank exposures.
+Under the US framework, bank risk weights are derived from the
+sovereign CRC rather than from external ratings of the bank itself.
+"""
+
+# Short-term interbank claim discount (maturity <= 3 months)
+BANK_SHORT_TERM_RW: dict[int, float] = {
+    0: 0.20,
+    1: 0.20,
+    2: 0.20,
+    3: 0.20,
+    4: 0.50,
+    5: 0.50,
+    6: 1.50,
+    7: 1.50,
+}
+"""Preferential risk weights for short-term interbank claims (<=3 months).
+
+Per 12 CFR 217, Subpart E: short-term interbank exposures denominated
+and funded in the domestic currency may receive preferential treatment.
+"""
+
+
+# =========================================================================
+#  Residential Mortgage Risk Weights (by LTV bucket)
+# =========================================================================
+
+RESI_MORTGAGE_RW: dict[str, float] = {
+    "0-50":  0.40,    # LTV <= 50%
+    "50-60": 0.45,    # 50% < LTV <= 60%
+    "60-70": 0.50,    # 60% < LTV <= 70%
+    "70-80": 0.60,    # 70% < LTV <= 80%
+    "80-90": 0.70,    # 80% < LTV <= 90%
+    "90-100": 0.80,   # 90% < LTV <= 100%
+    "100+":  0.90,    # LTV > 100%
+}
+"""Residential mortgage risk weights by LTV bucket.
+
+Per 12 CFR 217, Subpart E, Table: Risk weights for residential
+real estate exposures. Applies to first-lien, prudently underwritten
+residential mortgages on the borrower's primary or secondary residence.
+
+The 2026 re-proposal refines the LTV bands to be more granular than
+the original July 2023 NPR.
+"""
+
+
+# =========================================================================
+#  Commercial Real Estate Risk Weights
+# =========================================================================
+
+CRE_INCOME_PRODUCING_RW: dict[str, float] = {
+    "0-60":  0.70,    # LTV <= 60%: well-collateralized
+    "60-80": 0.90,    # 60% < LTV <= 80%
+    "80+":   1.10,    # LTV > 80%
+}
+"""Income-producing CRE risk weights by LTV bucket.
+
+Per 12 CFR 217, Subpart E: income-producing real estate exposures
+where repayment depends materially on cash flows generated by the
+real estate.
+"""
+
+CRE_ADC_RW: float = 1.50
+"""Risk weight for acquisition, development, and construction (ADC) loans.
+
+Per 12 CFR 217, Subpart E: ADC exposures receive 150% unless the
+borrower has substantial equity at risk and the property is
+pre-sold or pre-leased.
+"""
+
+CRE_ADC_PRESOLD_RW: float = 1.00
+"""Risk weight for pre-sold/pre-leased ADC loans with substantial equity.
+
+ADC exposures may receive 100% if the exposure meets specific criteria
+for pre-sale/pre-lease and the borrower has contributed substantial
+equity.
+"""
+
+CRE_LAND_RW: float = 1.50
+"""Risk weight for land loans (not qualifying as ADC): 150%."""
+
+
+# =========================================================================
+#  Corporate Risk Weights
+# =========================================================================
+
+CORPORATE_IG_RW: float = 0.65
+"""Risk weight for investment-grade corporate exposures: 65%.
+
+Under the US proposal, investment grade is self-assessed by the
+banking organization based on whether the entity has adequate capacity
+to meet financial commitments for the projected life of the exposure.
+No external ratings are used per Dodd-Frank Section 939A.
+"""
+
+CORPORATE_STANDARD_RW: float = 1.00
+"""Risk weight for non-investment-grade corporate exposures: 100%."""
+
+CORPORATE_SME_RW: float = 0.85
+"""Risk weight for SME corporate exposures: 85%.
+
+Applies to corporates with annual revenue not exceeding approximately
+USD 50 million (EUR 50 million equivalent). The SME supporting factor
+from the international Basel standard is adapted into a flat 85% RW.
+"""
+
+
+# =========================================================================
+#  Retail Risk Weights
+# =========================================================================
+
+RETAIL_RW: float = 0.75
+"""Risk weight for regulatory retail exposures: 75%.
+
+Regulatory retail criteria per 12 CFR 217:
+- Exposure to an individual or small business
+- Part of a well-diversified retail portfolio
+- Total exposure to one counterparty <= USD 1 million
+"""
+
+RETAIL_TRANSACTOR_RW: float = 0.45
+"""Risk weight for retail transactor exposures: 45%.
+
+Per the 2026 re-proposal, retail credit card exposures where the
+obligor has paid the outstanding balance in full at each scheduled
+payment date for the previous 12 months qualify for a reduced 45%
+risk weight.
+"""
+
+
+# =========================================================================
+#  Equity Risk Weights
+# =========================================================================
+
+EQUITY_PUBLIC_TRADED_RW: float = 2.50
+"""Risk weight for publicly traded equity: 250%.
+
+Equity holdings listed on a recognized securities exchange.
+"""
+
+EQUITY_SPECULATIVE_RW: float = 4.00
+"""Risk weight for speculative unlisted equity: 400%."""
+
+EQUITY_VENTURE_CAPITAL_RW: float = 4.00
+"""Risk weight for venture capital / private equity: 400%."""
+
+EQUITY_COMMUNITY_DEV_RW: float = 1.00
+"""Risk weight for community development equity investments: 100%.
+
+Community Reinvestment Act (CRA) qualifying investments.
+"""
+
+EQUITY_FRB_STOCK_RW: float = 1.00
+"""Risk weight for Federal Reserve Bank and FHLB stock: 100%."""
+
+EQUITY_OTHER_RW: float = 1.00
+"""Risk weight for other equity exposures not otherwise classified: 100%."""
+
+EQUITY_RW_BY_SUBTYPE: dict[EquitySubType, float] = {
+    EquitySubType.PUBLIC_TRADED: EQUITY_PUBLIC_TRADED_RW,
+    EquitySubType.SPECULATIVE: EQUITY_SPECULATIVE_RW,
+    EquitySubType.VENTURE_CAPITAL: EQUITY_VENTURE_CAPITAL_RW,
+    EquitySubType.COMMUNITY_DEVELOPMENT: EQUITY_COMMUNITY_DEV_RW,
+    EquitySubType.FEDERAL_RESERVE_STOCK: EQUITY_FRB_STOCK_RW,
+    EquitySubType.OTHER: EQUITY_OTHER_RW,
+}
+"""Equity risk weights by sub-type for quick lookup."""
+
+
+# =========================================================================
+#  Other Exposure Class Risk Weights
+# =========================================================================
+
+PSE_GENERAL_OBLIGATION_RW: float = 0.20
+"""Risk weight for PSE general obligation exposures: 20%."""
+
+PSE_REVENUE_OBLIGATION_RW: float = 0.50
+"""Risk weight for PSE revenue obligation exposures: 50%."""
+
+MDB_QUALIFYING_RW: float = 0.00
+"""Risk weight for qualifying MDB exposures: 0%."""
+
+MDB_NON_QUALIFYING_RW: float = 1.00
+"""Risk weight for non-qualifying MDB exposures: 100%."""
+
+DEFAULTED_RW: float = 1.50
+"""Risk weight for defaulted exposures: 150%.
+
+Applies to exposures past due more than 90 days or placed on
+nonaccrual status.
+"""
+
+SUBORDINATED_DEBT_RW: float = 1.50
+"""Risk weight for subordinated debt and capital instruments: 150%."""
+
+MSA_RW: float = 2.50
+"""Risk weight for mortgage servicing assets: 250%.
+
+The 2026 re-proposal removes the capital deduction approach for MSAs
+and instead applies a 250% risk weight. Previously, MSAs above a
+threshold were deducted from CET1.
+"""
+
+CASH_RW: float = 0.00
+"""Risk weight for cash and cash equivalents: 0%.
+
+Includes cash on hand, gold bullion held in own vaults or on an
+allocated basis, and exposures guaranteed by the US government.
+"""
+
+OTHER_RW: float = 1.00
+"""Risk weight for all other exposures: 100%."""
+
+HVCRE_RW: float = 1.50
+"""Risk weight for high-volatility commercial real estate: 150%.
+
+HVCRE ADC exposures that do not meet the criteria for the reduced
+100% risk weight.
+"""
+
+
+# =========================================================================
+#  Risk Weight Lookup Data Class
+# =========================================================================
+
+class RiskWeightInput(BaseModel):
+    """Input parameters for risk weight determination.
+
+    Encapsulates all the attributes needed to look up the correct
+    SA-CR risk weight for an exposure.
+    """
+
+    exposure_class: ExposureClass = Field(
+        description="SA-CR exposure class for the exposure",
+    )
+    country_risk_class: int = Field(
+        default=0,
+        ge=0,
+        le=7,
+        description="OECD Country Risk Classification (0-7)",
+    )
+    is_us_sovereign: bool = Field(
+        default=False,
+        description="Whether the sovereign is the US government",
+    )
+    is_investment_grade: bool = Field(
+        default=False,
+        description="Self-assessed investment-grade status for corporates",
+    )
+    ltv_ratio: Optional[float] = Field(
+        default=None,
+        ge=0.0,
+        description="Loan-to-value ratio for real estate exposures",
+    )
+    pse_obligation_type: Optional[PSEObligationType] = Field(
+        default=None,
+        description="General vs. revenue obligation for PSE exposures",
+    )
+    mdb_code: Optional[str] = Field(
+        default=None,
+        description="MDB identifier for qualifying check",
+    )
+    equity_sub_type: Optional[EquitySubType] = Field(
+        default=None,
+        description="Sub-type for equity exposures",
+    )
+    cre_sub_type: Optional[CRESubType] = Field(
+        default=None,
+        description="Sub-type for CRE exposures",
+    )
+    maturity_years: float = Field(
+        default=2.5,
+        ge=0.0,
+        description="Remaining maturity in years (for short-term bank claims)",
+    )
+    is_presold_adc: bool = Field(
+        default=False,
+        description="Whether ADC loan is pre-sold/pre-leased with substantial equity",
+    )
+
+
+# =========================================================================
+#  Risk Weight Lookup Functions
+# =========================================================================
+
+def get_sovereign_risk_weight(
+    country_risk_class: int,
+    is_us_sovereign: bool = False,
+) -> float:
+    """Determine the risk weight for a sovereign exposure.
+
+    US government exposures always receive 0%. Other sovereigns are
+    mapped based on their OECD Country Risk Classification.
+
+    Args:
+        country_risk_class: CRC value 0-7.
+        is_us_sovereign: Whether the counterparty is US government.
+
+    Returns:
+        Risk weight as a decimal (e.g., 0.20 for 20%).
+
+    References:
+        12 CFR 217, Subpart E, Section 217.112
+    """
+    if is_us_sovereign:
+        return 0.00
+    return SOVEREIGN_RW.get(country_risk_class, 1.50)
+
+
+def get_bank_risk_weight(
+    country_risk_class: int,
+    maturity_years: float = 2.5,
+) -> float:
+    """Determine the risk weight for a bank exposure.
+
+    Bank risk weights are derived from the CRC of the bank's home
+    sovereign. Short-term interbank claims (maturity <= 3 months,
+    i.e., 0.25 years) may receive preferential treatment.
+
+    Args:
+        country_risk_class: CRC of the bank's home sovereign (0-7).
+        maturity_years: Remaining maturity of the claim in years.
+
+    Returns:
+        Risk weight as a decimal.
+
+    References:
+        12 CFR 217, Subpart E, Section 217.113
+    """
+    if maturity_years <= 0.25:
+        return BANK_SHORT_TERM_RW.get(country_risk_class, 1.50)
+    return BANK_RW.get(country_risk_class, 1.50)
+
+
+def get_corporate_risk_weight(
+    is_investment_grade: bool = False,
+    is_sme: bool = False,
+) -> float:
+    """Determine the risk weight for a corporate exposure.
+
+    Args:
+        is_investment_grade: Self-assessed IG status.
+        is_sme: Whether the corporate qualifies as SME.
+
+    Returns:
+        Risk weight as a decimal.
+
+    References:
+        12 CFR 217, Subpart E, Section 217.114
+    """
+    if is_sme:
+        return CORPORATE_SME_RW
+    if is_investment_grade:
+        return CORPORATE_IG_RW
+    return CORPORATE_STANDARD_RW
+
+
+def get_residential_mortgage_risk_weight(ltv_ratio: float) -> float:
+    """Determine the risk weight for a residential mortgage exposure.
+
+    Args:
+        ltv_ratio: Current LTV ratio as a decimal (e.g., 0.80 for 80%).
+
+    Returns:
+        Risk weight as a decimal.
+
+    References:
+        12 CFR 217, Subpart E, Section 217.118
+    """
+    bucket = get_resi_mortgage_ltv_bucket(ltv_ratio)
+    return RESI_MORTGAGE_RW[bucket]
+
+
+def get_cre_risk_weight(
+    cre_sub_type: CRESubType | None = None,
+    ltv_ratio: float | None = None,
+    is_presold_adc: bool = False,
+) -> float:
+    """Determine the risk weight for a commercial real estate exposure.
+
+    Args:
+        cre_sub_type: The CRE sub-classification.
+        ltv_ratio: Current LTV ratio for income-producing CRE.
+        is_presold_adc: Whether ADC loan is pre-sold with equity at risk.
+
+    Returns:
+        Risk weight as a decimal.
+
+    References:
+        12 CFR 217, Subpart E, Section 217.119
+    """
+    if cre_sub_type == CRESubType.ADC:
+        return CRE_ADC_PRESOLD_RW if is_presold_adc else CRE_ADC_RW
+    if cre_sub_type == CRESubType.LAND:
+        return CRE_LAND_RW
+    # Income-producing (default for CRE)
+    if ltv_ratio is not None:
+        bucket = get_cre_ltv_bucket(ltv_ratio)
+        return CRE_INCOME_PRODUCING_RW[bucket]
+    return 1.00  # Default if no LTV provided
+
+
+def get_equity_risk_weight(
+    equity_sub_type: EquitySubType | None = None,
+) -> float:
+    """Determine the risk weight for an equity exposure.
+
+    Args:
+        equity_sub_type: The equity sub-classification.
+
+    Returns:
+        Risk weight as a decimal.
+
+    References:
+        12 CFR 217, Subpart E, Section 217.120
+    """
+    if equity_sub_type is not None:
+        return EQUITY_RW_BY_SUBTYPE.get(equity_sub_type, EQUITY_OTHER_RW)
+    return EQUITY_OTHER_RW
+
+
+def get_pse_risk_weight(
+    obligation_type: PSEObligationType | None = None,
+) -> float:
+    """Determine the risk weight for a PSE exposure.
+
+    Args:
+        obligation_type: General obligation vs. revenue obligation.
+
+    Returns:
+        Risk weight as a decimal.
+
+    References:
+        12 CFR 217, Subpart E, Section 217.112
+    """
+    if obligation_type == PSEObligationType.REVENUE_OBLIGATION:
+        return PSE_REVENUE_OBLIGATION_RW
+    return PSE_GENERAL_OBLIGATION_RW
+
+
+def get_mdb_risk_weight(mdb_code: str | None = None) -> float:
+    """Determine the risk weight for an MDB exposure.
+
+    Args:
+        mdb_code: The MDB identifier for qualifying status check.
+
+    Returns:
+        Risk weight as a decimal (0% qualifying, 100% non-qualifying).
+
+    References:
+        12 CFR 217, Subpart E, Section 217.112
+    """
+    if is_qualifying_mdb(mdb_code):
+        return MDB_QUALIFYING_RW
+    return MDB_NON_QUALIFYING_RW
+
+
+def get_risk_weight(rw_input: RiskWeightInput) -> float:
+    """Master risk weight lookup for any SA-CR exposure class.
+
+    Dispatches to the appropriate risk weight function based on the
+    exposure class and its characteristics.
+
+    Args:
+        rw_input: Complete set of parameters for risk weight determination.
+
+    Returns:
+        Risk weight as a decimal (e.g., 0.20 for 20%, 1.50 for 150%).
+
+    Raises:
+        ValueError: If required parameters are missing for the exposure class.
+
+    References:
+        12 CFR 217, Subpart E, Sections 217.111-217.132
+    """
+    ec = rw_input.exposure_class
+
+    if ec == ExposureClass.SOVEREIGN:
+        return get_sovereign_risk_weight(
+            rw_input.country_risk_class,
+            rw_input.is_us_sovereign,
+        )
+
+    if ec == ExposureClass.PUBLIC_SECTOR_ENTITY:
+        return get_pse_risk_weight(rw_input.pse_obligation_type)
+
+    if ec == ExposureClass.MULTILATERAL_DEV_BANK:
+        return get_mdb_risk_weight(rw_input.mdb_code)
+
+    if ec == ExposureClass.BANK:
+        return get_bank_risk_weight(
+            rw_input.country_risk_class,
+            rw_input.maturity_years,
+        )
+
+    if ec == ExposureClass.CORPORATE:
+        return get_corporate_risk_weight(
+            is_investment_grade=rw_input.is_investment_grade,
+        )
+
+    if ec == ExposureClass.CORPORATE_SME:
+        return CORPORATE_SME_RW
+
+    if ec == ExposureClass.RETAIL:
+        return RETAIL_RW
+
+    if ec == ExposureClass.RETAIL_TRANSACTOR:
+        return RETAIL_TRANSACTOR_RW
+
+    if ec == ExposureClass.RESIDENTIAL_MORTGAGE:
+        if rw_input.ltv_ratio is None:
+            raise ValueError(
+                "ltv_ratio is required for residential mortgage exposures"
+            )
+        return get_residential_mortgage_risk_weight(rw_input.ltv_ratio)
+
+    if ec == ExposureClass.COMMERCIAL_REAL_ESTATE:
+        return get_cre_risk_weight(
+            cre_sub_type=rw_input.cre_sub_type or CRESubType.INCOME_PRODUCING,
+            ltv_ratio=rw_input.ltv_ratio,
+            is_presold_adc=rw_input.is_presold_adc,
+        )
+
+    if ec == ExposureClass.HIGH_VOLATILITY_CRE:
+        return HVCRE_RW
+
+    if ec == ExposureClass.EQUITY:
+        return get_equity_risk_weight(rw_input.equity_sub_type)
+
+    if ec == ExposureClass.SUBORDINATED_DEBT:
+        return SUBORDINATED_DEBT_RW
+
+    if ec == ExposureClass.DEFAULTED:
+        return DEFAULTED_RW
+
+    if ec == ExposureClass.CASH:
+        return CASH_RW
+
+    if ec == ExposureClass.MSA:
+        return MSA_RW
+
+    if ec == ExposureClass.OTHER:
+        return OTHER_RW
+
+    # Fallback (should not be reached with complete enum coverage)
+    return OTHER_RW
+
+
+# =========================================================================
+#  Risk Weight Summary Table (for reporting)
+# =========================================================================
+
+class RiskWeightSchedule(BaseModel):
+    """Complete risk weight schedule for SA-CR reporting.
+
+    Provides a structured summary of all applicable risk weights for
+    regulatory reporting and internal governance.
+    """
+
+    sovereign_rw: dict[int, float] = Field(default_factory=lambda: dict(SOVEREIGN_RW))
+    bank_rw: dict[int, float] = Field(default_factory=lambda: dict(BANK_RW))
+    bank_short_term_rw: dict[int, float] = Field(
+        default_factory=lambda: dict(BANK_SHORT_TERM_RW)
+    )
+    resi_mortgage_rw: dict[str, float] = Field(
+        default_factory=lambda: dict(RESI_MORTGAGE_RW)
+    )
+    cre_income_producing_rw: dict[str, float] = Field(
+        default_factory=lambda: dict(CRE_INCOME_PRODUCING_RW)
+    )
+    corporate_ig_rw: float = CORPORATE_IG_RW
+    corporate_standard_rw: float = CORPORATE_STANDARD_RW
+    corporate_sme_rw: float = CORPORATE_SME_RW
+    retail_rw: float = RETAIL_RW
+    retail_transactor_rw: float = RETAIL_TRANSACTOR_RW
+    equity_rw: dict[str, float] = Field(
+        default_factory=lambda: {k.value: v for k, v in EQUITY_RW_BY_SUBTYPE.items()}
+    )
+    defaulted_rw: float = DEFAULTED_RW
+    subordinated_debt_rw: float = SUBORDINATED_DEBT_RW
+    msa_rw: float = MSA_RW
+    cash_rw: float = CASH_RW
+    other_rw: float = OTHER_RW
+    hvcre_rw: float = HVCRE_RW
+    cre_adc_rw: float = CRE_ADC_RW
