@@ -1,0 +1,64 @@
+{
+  "girr": {
+    "description": "GIRR parameters per MAR21.8-21.12 and US Basel III Endgame final rule",
+    "tenors": [0.25, 0.5, 1.0, 2.0, 3.0, 5.0, 7.0, 10.0, 15.0, 20.0, 25.0, 30.0],
+    "delta": {
+      "risk_weights_low_volatility_pct": {
+        "0.25": 1.7,
+        "0.5": 1.7,
+        "1.0": 1.6,
+        "2.0": 1.3,
+        "3.0": 1.2,
+        "5.0": 1.1,
+        "7.0": 1.1,
+        "10.0": 1.1,
+        "15.0": 1.1,
+        "20.0": 1.1,
+        "25.0": 1.1,
+        "30.0": 1.1
+      },
+      "high_volatility_multiplier": 1.4142135623730951,
+      "risk_weight_inflation_pct": 1.6,
+      "risk_weight_cross_currency_basis_pct": 1.6,
+      "low_volatility_currencies": ["USD", "EUR", "GBP", "AUD", "CAD", "JPY", "SEK", "CHF"],
+      "intra_bucket_correlation_theta": 0.03,
+      "intra_bucket_correlation_floor": 0.40,
+      "cross_curve_correlation": 0.999,
+      "inflation_yield_curve_correlation": 0.40,
+      "cross_currency_basis_yield_curve_correlation": 0.00,
+      "inflation_cross_currency_basis_correlation": 0.00,
+      "inter_bucket_correlation": 0.50
+    },
+    "vega": {
+      "risk_weight_pct": 100.0,
+      "liquidity_horizon_days": 60,
+      "option_maturities_years": [0.5, 1.0, 3.0, 5.0, 10.0],
+      "underlying_tenors_years": [0.5, 1.0, 3.0, 5.0, 10.0],
+      "intra_bucket_option_maturity_alpha": 0.01,
+      "intra_bucket_underlying_tenor_alpha": 0.01,
+      "inter_bucket_correlation": 0.50
+    },
+    "curvature": {
+      "description": "Curvature shock = delta risk weight. Correlations = delta correlations squared.",
+      "intra_bucket_correlation_squared": true,
+      "inter_bucket_correlation_squared": true
+    },
+    "correlation_scenarios": {
+      "low": {
+        "description": "rho_low = max(2*rho - 1, 0.75*rho), gamma_low = max(2*gamma - 1, 0.75*gamma)",
+        "intra_formula": "max(2*rho - 1, 0.75*rho)",
+        "inter_formula": "max(2*gamma - 1, 0.75*gamma)"
+      },
+      "medium": {
+        "description": "Base scenario - no adjustment",
+        "intra_formula": "rho",
+        "inter_formula": "gamma"
+      },
+      "high": {
+        "description": "rho_high = min(1.0, 1.25*rho), gamma_high = min(1.0, 1.25*gamma)",
+        "intra_formula": "min(1.0, 1.25*rho)",
+        "inter_formula": "min(1.0, 1.25*gamma)"
+      }
+    }
+  }
+}
