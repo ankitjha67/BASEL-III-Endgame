@@ -261,10 +261,12 @@ class FRTBResult(BaseModel):
 
     # DRC
     drc_nonsec: float = 0.0
+    drc_sec_nonctp: float = 0.0
+    drc_sec_ctp: float = 0.0
 
     @property
     def drc_total(self) -> float:
-        return self.drc_nonsec
+        return self.drc_nonsec + self.drc_sec_nonctp + self.drc_sec_ctp
 
     # RRAO
     rrao_total: float = 0.0

@@ -233,6 +233,44 @@ class DRCExposureType(Enum):
     SECURITIZATION = "SECURITIZATION"
 
 
+class DRCSecBucket(Enum):
+    """DRC Securitization Non-CTP buckets by underlying asset class per MAR22.25."""
+    RMBS = "RMBS"
+    CMBS = "CMBS"
+    ABS_AUTO = "ABS_AUTO"
+    ABS_CARDS = "ABS_CARDS"
+    ABS_STUDENT = "ABS_STUDENT"
+    CLO = "CLO"
+    OTHER = "OTHER"
+
+
+class DRCSecCTPBucket(Enum):
+    """DRC Securitization CTP buckets per MAR22.36."""
+    INDEX_CDS = "INDEX_CDS"
+    BESPOKE = "BESPOKE"
+    NTD = "NTD"
+    OTHER = "OTHER"
+
+
+class DRCSecRating(Enum):
+    """Rating categories for DRC securitization risk weights per MAR22.25."""
+    AAA = "AAA"
+    AA = "AA"
+    A = "A"
+    BBB = "BBB"
+    BB = "BB"
+    B = "B"
+    CCC = "CCC"
+    UNRATED = "UNRATED"
+    DEFAULTED = "DEFAULTED"
+
+
+class DRCSecSeniority(Enum):
+    """Seniority levels for DRC securitization risk weight lookup per MAR22.25."""
+    SENIOR = "SENIOR"
+    NON_SENIOR = "NON_SENIOR"
+
+
 # =========================================================================
 #  RRAO Enums
 # =========================================================================

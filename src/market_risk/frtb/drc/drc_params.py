@@ -8,7 +8,13 @@ Reference: BCBS d457 MAR22, US Federal Reserve Basel III Endgame Final Rule.
 
 from __future__ import annotations
 
-from src.core.enums import DRCExposureType, DRCRatingCategory, DRCSeniority
+from src.core.enums import (
+    DRCExposureType,
+    DRCRatingCategory,
+    DRCSecRating,
+    DRCSecSeniority,
+    DRCSeniority,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -180,3 +186,78 @@ def get_bucket_label(exposure_type: DRCExposureType) -> str:
             (e.g. ``SECURITIZATION`` which is handled separately).
     """
     return DRC_BUCKETS[exposure_type]
+
+
+# =========================================================================
+#  DRC Securitization Parameters -- MAR22.24-22.46
+# =========================================================================
+
+# ---------------------------------------------------------------------------
+#  DRC Securitization risk weights by rating and seniority -- MAR22.25 Table 5
+# ---------------------------------------------------------------------------
+
+DRC_SEC_RISK_WEIGHTS_SENIOR: dict[DRCSecRating, float] = {
+    DRCSecRating.AAA: 0.004,        # 0.4%
+    DRCSecRating.AA: 0.008,         # 0.8%
+    DRCSecRating.A: 0.016,          # 1.6%
+    DRCSecRating.BBB: 0.048,        # 4.8%
+    DRCSecRating.BB: 0.08,          # 8.0%
+    DRCSecRating.B: 0.16,           # 16.0%
+    DRCSecRating.CCC: 0.32,         # 32.0%
+    DRCSecRating.UNRATED: 1.0,      # 100%
+    DRCSecRating.DEFAULTED: 1.0,    # 100%
+}
+
+DRC_SEC_RISK_WEIGHTS_NON_SENIOR: dict[DRCSecRating, float] = {
+    DRCSecRating.AAA: 0.01,         # 1.0%
+    DRCSecRating.AA: 0.02,          # 2.0%
+    DRCSecRating.A: 0.04,           # 4.0%
+    DRCSecRating.BBB: 0.08,         # 8.0%
+    DRCSecRating.BB: 0.16,          # 16.0%
+    DRCSecRating.B: 0.32,           # 32.0%
+    DRCSecRating.CCC: 0.64,         # 64.0%
+    DRCSecRating.UNRATED: 1.0,      # 100%
+    DRCSecRating.DEFAULTED: 1.0,    # 100%
+}
+
+
+# ---------------------------------------------------------------------------
+#  DRC Securitization LGD -- MAR22.26
+#
+#  LGD = 100% for all securitization positions (no recovery assumption).
+# ---------------------------------------------------------------------------
+
+DRC_SEC_LGD: float = 1.0
+"""LGD for securitization positions is 100% per MAR22.26."""
+
+
+# ---------------------------------------------------------------------------
+#  CTP hedge benefit ratio -- MAR22.41
+# ---------------------------------------------------------------------------
+
+CTP_HEDGE_BENEFIT_RATIO: float = 0.5
+"""50% recognition of hedges within CTP buckets per MAR22.41."""
+
+
+def get_sec_risk_weight(
+    rating: DRCSecRating,
+    seniority: DRCSecSeniority,
+) -> float:
+    """Return the DRC securitization risk weight for a given rating and seniority.
+
+    Per MAR22.25 Table 5, risk weights depend on both the external rating
+    category and whether the tranche is senior or non-senior.
+
+    Args:
+        rating: External rating category of the securitization tranche.
+        seniority: Whether the tranche is senior or non-senior.
+
+    Returns:
+        Risk weight as a decimal (e.g. 0.004 for 0.4%).
+
+    Raises:
+        KeyError: If the rating is not recognised.
+    """
+    if seniority == DRCSecSeniority.SENIOR:
+        return DRC_SEC_RISK_WEIGHTS_SENIOR[rating]
+    return DRC_SEC_RISK_WEIGHTS_NON_SENIOR[rating]
