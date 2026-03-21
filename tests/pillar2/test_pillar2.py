@@ -442,19 +442,25 @@ class TestICAAP:
     """Tests for the master ICAAP function."""
 
     def test_icaap_well_capitalized(self) -> None:
-        """ICAAP for a well-capitalized G-SIB."""
+        """ICAAP for a well-capitalized G-SIB.
+
+        Internal CET1 target = 4.5% + 2.5% + 0% + 1.5% + 3.2% + 1.0% + 0.5% = 13.2%
+        So CET1 must exceed 13.2% to meet internal targets.
+        """
         result = compute_icaap(
-            cet1_capital=195_000.0,
-            tier1_capital=215_000.0,
-            total_capital=240_000.0,
+            cet1_capital=210_000.0,
+            tier1_capital=235_000.0,
+            total_capital=265_000.0,
             total_rwa=1_500_000.0,
             leverage_ratio=0.06,
             gsib_surcharge=0.015,
         )
         assert result.meets_pillar1_minimums
         assert result.meets_buffer_requirements
+        # CET1 ratio = 14.0% > 13.2% internal target
+        assert result.meets_internal_targets
         assert result.overall_adequate
-        assert result.cet1_ratio == pytest.approx(195_000.0 / 1_500_000.0)
+        assert result.cet1_ratio == pytest.approx(210_000.0 / 1_500_000.0)
         assert result.total_pillar_2a_addon_rate > 0
 
     def test_icaap_undercapitalized(self) -> None:
