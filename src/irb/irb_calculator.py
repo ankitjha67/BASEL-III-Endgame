@@ -227,7 +227,7 @@ def compute_maturity_adjustment(pd: float, maturity: float) -> float:
     # Clamp maturity
     m = max(EFFECTIVE_MATURITY_MIN, min(maturity, EFFECTIVE_MATURITY_MAX))
 
-    adjustment = (1.0 + (m - 2.5) * b_pd) / (1.0 - 1.5 * b_pd)
+    adjustment = 1.0 + (m - 2.5) * b_pd / (1.0 - 1.5 * b_pd)
     return adjustment
 
 

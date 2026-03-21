@@ -379,7 +379,7 @@ class ECLCalculator:
     def _compute_lifetime_ecl(
         self,
         ead: float,
-        marginal_pds: list[float],
+        pd_term_structure: list[float],
         lgd: float,
         discount_rate: float,
         horizon: int,
@@ -391,7 +391,7 @@ class ECLCalculator:
 
         Args:
             ead: Exposure at default ($M).
-            marginal_pds: Annual marginal PDs.
+            pd_term_structure: Annual marginal PDs.
             lgd: Effective LGD.
             discount_rate: Discount rate.
             horizon: Number of years.
@@ -402,8 +402,8 @@ class ECLCalculator:
         Reference: IFRS 9 §B5.5.28-B5.5.29.
         """
         lifetime_ecl = 0.0
-        for t in range(min(horizon, len(marginal_pds))):
+        for t in range(min(horizon, len(pd_term_structure))):
             df = 1.0 / (1.0 + discount_rate) ** (t + 1)
-            annual_ecl = marginal_pds[t] * lgd * ead * df
+            annual_ecl = pd_term_structure[t] * lgd * ead * df
             lifetime_ecl += annual_ecl
         return lifetime_ecl

@@ -159,18 +159,29 @@ class ScenarioEngine:
 
         for q in range(self.quarters):
             # Credit loss rate driven by unemployment and HPI
-            unemp_factor = unemployment[q] / 0.04 if unemployment else 1.0  # normalized to 4%
-            hpi_factor = 1.0 - 2.0 * (hpi[q] if hpi else 0.0)  # HPI decline increases losses
-            credit_loss_rate = base_provision_rate * unemp_factor * max(hpi_factor, 0.5) / 4.0  # quarterly
+            # Unemployment sensitivity: marginal increase above baseline (4%)
+            # drives incremental losses, but capped to avoid runaway compounding.
+            # Reference: SR 12-7 §III.2 — loss rate sensitivity to macro drivers.
+            unemp_baseline = 0.04
+            unemp_delta = max(0.0, (unemployment[q] if unemployment else unemp_baseline) - unemp_baseline)
+            unemp_factor = 1.0 + 2.0 * unemp_delta  # e.g., 10% unemp -> 1.12x (not 2.5x)
+
+            # HPI: negative changes increase losses modestly
+            hpi_val = hpi[q] if hpi else 0.0
+            hpi_factor = 1.0 - 1.0 * min(hpi_val, 0.0)  # only negative HPI increases losses
+
+            credit_loss_rate = base_provision_rate * unemp_factor * hpi_factor / 4.0  # quarterly
 
             # RWA migration (gradual increase, peaks mid-horizon)
             rwa_pct = rwa_migration * self._bell_curve(q, self.quarters) / 4.0
 
             # NII impact from rate compression
+            # Reference: SR 12-7 §III.2 — NII sensitivity to rate changes.
+            # Pass-through is limited (hedged balance sheets, repricing lags).
             nii_pct = 0.0
             if rates_10y:
                 rate_change = rates_10y[q] - (rates_10y[0] if rates_10y else 0.04)
-                nii_pct = rate_change * 0.5  # 50% pass-through
+                nii_pct = rate_change * 0.15  # 15% pass-through (hedged)
 
             # Trading P&L from equity and spread moves
             trading_pl = 0.0

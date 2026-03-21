@@ -120,8 +120,8 @@ class CapitalProjector:
         self,
         tax_rate: float = 0.21,
         preferred_dividend_quarterly: float = 0.0,
-        at1_capital_ratio: float = 0.015,
-        tier2_capital_ratio: float = 0.02,
+        at1_capital_ratio: float = 0.10,
+        tier2_capital_ratio: float = 0.15,
     ) -> None:
         """Initialize capital projector.
 

@@ -58,6 +58,9 @@ class IRBExposureClass(Enum):
     RETAIL_QUALIFYING_REVOLVING = "RETAIL_QRE"
     """Qualifying revolving retail exposures (credit cards, overdrafts)."""
 
+    RETAIL_QRE = "RETAIL_QRE"
+    """Alias for RETAIL_QUALIFYING_REVOLVING per BCBS d424 CRE32.7."""
+
     RETAIL_OTHER = "RETAIL_OTHER"
     """Other retail exposures not classified as mortgage or QRE."""
 
@@ -262,7 +265,21 @@ class SupervisoryLGD(BaseModel):
 
     Under F-IRB, banks do not estimate their own LGD. Instead, these
     supervisory values are used.
+
+    Supports dict-like access for parameter validation and inspection.
     """
+
+    def __contains__(self, key: str) -> bool:
+        """Check if a field name exists in the model."""
+        return key in self.__class__.model_fields
+
+    def __iter__(self):  # type: ignore[override]
+        """Iterate over field names."""
+        return iter(self.__class__.model_fields)
+
+    def values(self):
+        """Return field values, dict-style."""
+        return self.model_dump().values()
     senior_secured_financial: float = Field(
         default=0.45,
         description="Senior claims on banks, securities firms, insurance companies. "

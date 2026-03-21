@@ -294,9 +294,13 @@ def compute_capital_ratios(
     Reference: 12 CFR 217.10(a), FR Y-9C Schedule HC-R Part II.
     """
     if total_rwa <= 0:
-        raise ValueError(
-            f"Total RWA must be positive, got {total_rwa}. "
-            "Reference: 12 CFR 217.10(a)."
+        # Return zero ratios when RWA is zero or negative to avoid division errors.
+        # Reference: 12 CFR 217.10(a) — ratios are undefined without positive RWA.
+        return CapitalRatios(
+            cet1_ratio=0.0,
+            tier1_ratio=0.0,
+            total_capital_ratio=0.0,
+            leverage_ratio=0.0,
         )
 
     cet1_ratio = cet1_capital / total_rwa
@@ -491,7 +495,12 @@ def compute_surplus_deficit(
 
 
 def classify_pca(
-    ratios: CapitalRatios,
+    ratios: Optional[CapitalRatios] = None,
+    *,
+    cet1_ratio: Optional[float] = None,
+    tier1_ratio: Optional[float] = None,
+    total_capital_ratio: Optional[float] = None,
+    leverage_ratio: Optional[float] = None,
 ) -> PCAClassification:
     """Classify bank under Prompt Corrective Action framework.
 
@@ -503,13 +512,24 @@ def classify_pca(
     - Critically undercapitalized: tangible equity / total assets < 2%
 
     Args:
-        ratios: Computed capital ratios.
+        ratios: Computed capital ratios. If None, individual ratio kwargs are used.
+        cet1_ratio: CET1 ratio (used if ratios is None).
+        tier1_ratio: Tier 1 ratio (used if ratios is None).
+        total_capital_ratio: Total capital ratio (used if ratios is None).
+        leverage_ratio: Leverage ratio / SLR (used if ratios is None).
 
     Returns:
         PCAClassification with category and binding ratio.
 
     Reference: 12 CFR 6.4(b).
     """
+    if ratios is None:
+        ratios = CapitalRatios(
+            cet1_ratio=cet1_ratio if cet1_ratio is not None else 0.0,
+            tier1_ratio=tier1_ratio if tier1_ratio is not None else 0.0,
+            total_capital_ratio=total_capital_ratio if total_capital_ratio is not None else 0.0,
+            leverage_ratio=leverage_ratio if leverage_ratio is not None else 0.0,
+        )
     wc = PCA_WELL_CAPITALIZED
     ac = PCA_ADEQUATELY_CAPITALIZED
 
@@ -592,12 +612,19 @@ def classify_pca(
 
 
 def compute_capital_adequacy(
-    capital_result: TotalCapitalResult,
-    rwa_breakdown: RWABreakdown,
+    capital_result: Optional[TotalCapitalResult] = None,
+    rwa_breakdown: Optional[RWABreakdown] = None,
     leverage_inputs: Optional[LeverageExposureInputs] = None,
     gsib_score: float = 0.0,
     ccyb_rate: float = CCYB_DEFAULT_RATE,
     scb_rate: Optional[float] = None,
+    *,
+    cet1_capital: Optional[float] = None,
+    tier1_capital: Optional[float] = None,
+    total_capital: Optional[float] = None,
+    total_rwa: Optional[float] = None,
+    total_leverage_exposure: Optional[float] = None,
+    gsib_surcharge: Optional[float] = None,
 ) -> CapitalAdequacyResult:
     """Compute complete capital adequacy assessment.
 
@@ -606,6 +633,9 @@ def compute_capital_adequacy(
     adequacy assessment including ratios, buffers, surplus/deficit, and
     PCA classification.
 
+    Can be called either with structured inputs (capital_result, rwa_breakdown)
+    or with individual keyword arguments (cet1_capital, tier1_capital, etc.).
+
     Args:
         capital_result: Total capital from capital_components module.
         rwa_breakdown: Aggregated RWA from rwa_aggregator module.
@@ -613,6 +643,12 @@ def compute_capital_adequacy(
         gsib_score: G-SIB systemic importance score (decimal).
         ccyb_rate: Countercyclical buffer rate.
         scb_rate: Stress Capital Buffer rate (None = use CCB 2.5%).
+        cet1_capital: CET1 capital in $M (alternative to capital_result).
+        tier1_capital: Tier 1 capital in $M (alternative to capital_result).
+        total_capital: Total capital in $M (alternative to capital_result).
+        total_rwa: Total RWA in $M (alternative to rwa_breakdown).
+        total_leverage_exposure: Total leverage exposure in $M (alternative to leverage_inputs).
+        gsib_surcharge: G-SIB surcharge rate (alternative to gsib_score).
 
     Returns:
         CapitalAdequacyResult with complete assessment.
@@ -621,25 +657,70 @@ def compute_capital_adequacy(
     """
     from src.capital.capital_components import compute_total_leverage_exposure
 
-    cet1 = capital_result.cet1.net_cet1
-    tier1 = capital_result.tier1_capital
-    total = capital_result.total_capital
-    total_rwa = rwa_breakdown.total_rwa
+    # Support both structured and keyword-argument calling conventions
+    if capital_result is not None:
+        cet1 = capital_result.cet1.net_cet1
+        tier1 = capital_result.tier1_capital
+        total = capital_result.total_capital
+    else:
+        cet1 = cet1_capital if cet1_capital is not None else 0.0
+        tier1 = tier1_capital if tier1_capital is not None else 0.0
+        total = total_capital if total_capital is not None else 0.0
+
+    if rwa_breakdown is not None:
+        rwa = rwa_breakdown.total_rwa
+    else:
+        rwa = total_rwa if total_rwa is not None else 0.0
 
     # Leverage exposure
     tle = 0.0
-    if leverage_inputs is not None:
+    if total_leverage_exposure is not None:
+        tle = total_leverage_exposure
+    elif leverage_inputs is not None:
         tle = compute_total_leverage_exposure(leverage_inputs)
 
     # Ratios
-    ratios = compute_capital_ratios(cet1, tier1, total, total_rwa, tle)
+    ratios = compute_capital_ratios(cet1, tier1, total, rwa, tle)
 
-    # Buffers
-    buffers = compute_buffer_requirements(gsib_score, ccyb_rate, scb_rate)
+    # Buffers — if gsib_surcharge passed directly, build buffers with override
+    if gsib_surcharge is not None:
+        buffers = compute_buffer_requirements(0.0, ccyb_rate, scb_rate)
+        # Override the gsib surcharge and recompute combined buffer
+        buffers = BufferRequirements(
+            capital_conservation_buffer=buffers.capital_conservation_buffer,
+            countercyclical_buffer=buffers.countercyclical_buffer,
+            gsib_surcharge=gsib_surcharge,
+            stress_capital_buffer=buffers.stress_capital_buffer,
+            combined_buffer_requirement=(
+                buffers.capital_conservation_buffer
+                + buffers.countercyclical_buffer
+                + gsib_surcharge
+            ),
+            effective_cet1_minimum=(
+                CET1_MINIMUM_RATIO
+                + buffers.capital_conservation_buffer
+                + buffers.countercyclical_buffer
+                + gsib_surcharge
+            ),
+            effective_tier1_minimum=(
+                TIER1_MINIMUM_RATIO
+                + buffers.capital_conservation_buffer
+                + buffers.countercyclical_buffer
+                + gsib_surcharge
+            ),
+            effective_total_capital_minimum=(
+                TOTAL_CAPITAL_MINIMUM_RATIO
+                + buffers.capital_conservation_buffer
+                + buffers.countercyclical_buffer
+                + gsib_surcharge
+            ),
+        )
+    else:
+        buffers = compute_buffer_requirements(gsib_score, ccyb_rate, scb_rate)
 
     # Surplus/deficit
     surplus_deficit = compute_surplus_deficit(
-        ratios, buffers, cet1, tier1, total, total_rwa, tle
+        ratios, buffers, cet1, tier1, total, rwa, tle
     )
 
     # PCA classification
@@ -666,7 +747,7 @@ def compute_capital_adequacy(
         cet1_capital=cet1,
         tier1_capital=tier1,
         total_capital=total,
-        total_rwa=total_rwa,
+        total_rwa=rwa,
         total_leverage_exposure=tle,
         meets_minimum_requirements=meets_minimums,
         meets_buffer_requirements=meets_buffers,

@@ -269,11 +269,11 @@ PPNR_NONINT_EXPENSE_RATE: Final[float] = 0.018
 PROVISION_RATE_BASELINE: Final[float] = 0.003
 """Provision expense as % of total loans — baseline."""
 
-PROVISION_RATE_ADVERSE: Final[float] = 0.015
-"""Provision rate — adverse scenario."""
+PROVISION_RATE_ADVERSE: Final[float] = 0.010
+"""Provision rate — adverse scenario. Reference: CCAR 2024 results."""
 
-PROVISION_RATE_SEVERE: Final[float] = 0.035
-"""Provision rate — severely adverse scenario. Historical GFC peak ~3.5%."""
+PROVISION_RATE_SEVERE: Final[float] = 0.020
+"""Provision rate — severely adverse scenario. Reference: CCAR 2024 results, GFC-era ~2-2.5%."""
 
 # Capital action assumptions per CCAR
 DIVIDEND_PAYOUT_RATIO: Final[float] = 0.30
