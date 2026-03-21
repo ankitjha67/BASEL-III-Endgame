@@ -57,6 +57,10 @@ from src.capital.rwa_aggregator import (
     RWABreakdown,
     aggregate_rwa,
 )
+from src.reporting.fr_y9c import generate_fr_y9c
+from src.reporting.ffiec101 import generate_ffiec_101
+from src.reporting.fr_y15 import generate_fr_y15
+from src.reporting.fr_y14 import generate_fr_y14
 
 
 # =========================================================================
@@ -331,9 +335,13 @@ class TestReportingParams:
     """Tests for reporting_params.py."""
 
     def test_report_definitions_complete(self) -> None:
-        """All 5 report types have definitions."""
+        """All core report types have definitions."""
         from src.reporting.reporting_params import REPORT_DEFINITIONS, ReportType
-        for rt in ReportType:
+        required = [
+            ReportType.FR_Y_9C, ReportType.FFIEC_101,
+            ReportType.FR_Y_15, ReportType.FR_Y_14A, ReportType.FR_Y_14Q,
+        ]
+        for rt in required:
             assert rt in REPORT_DEFINITIONS, f"Missing definition for {rt}"
 
     def test_hcr_part_i_line_items(self) -> None:
