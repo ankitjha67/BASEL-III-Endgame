@@ -1,0 +1,9 @@
+[project]
+name = "basel-iii-endgame-engine"
+version = "0.1.0"
+description = "Basel III Endgame 2026 Regulatory Capital Engine — US Fed Re-Proposal"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]

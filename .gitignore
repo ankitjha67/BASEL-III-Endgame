@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.venv/
+output/*.xlsx
+output/*.html
+output/*.pdf
+.env
+*.egg-info/
+dist/
+build/
+.pytest_cache/
