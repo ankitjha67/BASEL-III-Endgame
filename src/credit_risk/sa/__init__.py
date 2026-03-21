@@ -55,6 +55,12 @@ from src.credit_risk.sa.calculator import (
     build_exposure,
     calculate_sacr_rwa,
 )
+from src.credit_risk.sa.obs_ccf import (
+    OBSCategory,
+    OBSCCFCalculator,
+    OBSExposure,
+    OBSResult,
+)
 
 __all__ = [
     # Enums
@@ -89,4 +95,9 @@ __all__ = [
     "SACRResult",
     "build_exposure",
     "calculate_sacr_rwa",
+    # OBS/CCF
+    "OBSCategory",
+    "OBSCCFCalculator",
+    "OBSExposure",
+    "OBSResult",
 ]

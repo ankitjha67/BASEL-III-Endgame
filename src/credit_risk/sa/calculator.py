@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import logging
 from collections import defaultdict
-from typing import Optional
+from typing import Callable, Optional
 
 import numpy as np
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -35,6 +35,11 @@ from src.credit_risk.sa.exposure_classes import (
     classify_exposure,
     ExposureClassificationCriteria,
     is_qualifying_mdb,
+)
+from src.credit_risk.sa.obs_ccf import (
+    OBSCCFCalculator,
+    OBSExposure,
+    OBSResult,
 )
 from src.credit_risk.sa.risk_weights import (
     RiskWeightInput,
@@ -802,6 +807,99 @@ class SACRCalculator:
         incremental = exp_result.rwa
         new_total = baseline_result.total_rwa + incremental
         return incremental, new_total
+
+    def calculate_with_obs(
+        self,
+        on_balance_exposures: list[CreditExposure],
+        obs_exposures: list[OBSExposure],
+        obs_risk_weight_func: Callable[[OBSExposure], float] | None = None,
+    ) -> dict:
+        """Calculate combined RWA from on- and off-balance sheet exposures.
+
+        Integrates on-balance sheet SA-CR RWA with off-balance sheet
+        credit-equivalent amounts (after CCF application) for a
+        comprehensive portfolio-level RWA figure.
+
+        If obs_risk_weight_func is not provided, a default function is
+        used that maps the OBS exposure's exposure_class field to the
+        SA-CR risk weight schedule.
+
+        Args:
+            on_balance_exposures: List of on-balance sheet credit exposures.
+            obs_exposures: List of off-balance sheet exposures for CCF
+                conversion.
+            obs_risk_weight_func: Optional callable returning the risk
+                weight for an OBS exposure. If None, defaults to 100%.
+
+        Returns:
+            Dictionary containing:
+              - on_balance_result: SACRResult for on-balance sheet items
+              - obs_result: OBSResult for off-balance sheet items
+              - combined_ead: Total EAD (on + off balance sheet)
+              - combined_rwa: Total RWA (on + off balance sheet)
+              - combined_capital_requirement: combined_rwa x 8%
+              - obs_share_of_ead: OBS EAD as share of combined EAD
+              - obs_share_of_rwa: OBS RWA as share of combined RWA
+
+        References:
+            12 CFR 217.33 — Off-Balance Sheet Items
+            12 CFR 217, Subpart E — SA-CR RWA
+            BCBS d424 CRE20.69-20.93 — Credit Conversion Factors
+        """
+        # Calculate on-balance sheet RWA
+        on_balance_result = self.calculate(on_balance_exposures)
+
+        # Set up default risk weight function if not provided
+        if obs_risk_weight_func is None:
+            def _default_rw_func(exp: OBSExposure) -> float:
+                """Default RW function: 100% for all OBS exposures.
+
+                Per 12 CFR 217.33, the CEA is assigned the risk weight
+                corresponding to the obligor's SA-CR exposure class.
+                When the exposure class is not specified, a conservative
+                100% risk weight is applied.
+                """
+                return 1.00
+            obs_risk_weight_func = _default_rw_func
+
+        # Calculate OBS credit equivalents and RWA
+        obs_calculator = OBSCCFCalculator()
+        obs_result = obs_calculator.calculate(
+            obs_exposures,
+            risk_weight_func=obs_risk_weight_func,
+        )
+
+        # Combined figures
+        combined_ead = on_balance_result.total_ead + obs_result.total_ead
+        combined_rwa = on_balance_result.total_rwa + obs_result.total_rwa
+
+        obs_ead_share = (
+            obs_result.total_ead / combined_ead if combined_ead > 0 else 0.0
+        )
+        obs_rwa_share = (
+            obs_result.total_rwa / combined_rwa if combined_rwa > 0 else 0.0
+        )
+
+        logger.info(
+            "Combined SA-CR calculation: on-balance EAD=%.2f RWA=%.2f, "
+            "OBS EAD=%.2f RWA=%.2f, combined EAD=%.2f RWA=%.2f",
+            on_balance_result.total_ead,
+            on_balance_result.total_rwa,
+            obs_result.total_ead,
+            obs_result.total_rwa,
+            combined_ead,
+            combined_rwa,
+        )
+
+        return {
+            "on_balance_result": on_balance_result,
+            "obs_result": obs_result,
+            "combined_ead": combined_ead,
+            "combined_rwa": combined_rwa,
+            "combined_capital_requirement": combined_rwa * 0.08,
+            "obs_share_of_ead": obs_ead_share,
+            "obs_share_of_rwa": obs_rwa_share,
+        }
 
 
 # =========================================================================
