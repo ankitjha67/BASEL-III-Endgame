@@ -1,0 +1,23 @@
+{
+  "name": "basel-iii-endgame",
+  "version": "1.0.0",
+  "description": "Production-grade regulatory capital calculation engine implementing the US Federal Reserve's March 2026 Re-Proposal for Category I and II banking organizations (ERBA + Revised SA + G-SIB Surcharge).",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs",
+    "test": "tests"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "http://local_proxy@127.0.0.1:45965/git/ankitjha67/BASEL-III-Endgame"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "docx": "^9.6.1"
+  }
+}
