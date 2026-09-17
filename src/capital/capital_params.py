@@ -159,6 +159,11 @@ def lookup_gsib_surcharge(
     the institution's G-SIB score falls. Scores below the base threshold
     receive no surcharge.
 
+    NOTE (audit 2026-09): ``gsib_calculator.score_to_surcharge`` returns the
+    1.0% MINIMUM for scores below 130bp (semantics: "already-designated
+    G-SIB"), whereas this function returns 0% (semantics: "not a G-SIB").
+    Callers must not mix the two below the 130bp threshold.
+
     Args:
         score: G-SIB systemic importance score (as decimal, e.g. 0.0200 = 200bp).
         schedule: Optional pre-built schedule; built if None.

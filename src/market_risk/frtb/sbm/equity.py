@@ -342,8 +342,10 @@ class EquityCalculator:
             delta_corr = build_equity_intra_bucket_corr_matrix(n, bucket_int, scenario)
             rho_sq = delta_corr ** 2
 
-            # Intra-bucket curvature aggregation per MAR21.5
-            sum_cvr = float(np.sum(cvr_values))
+            # Intra-bucket curvature aggregation per MAR21.5(4)
+            # K_b = sqrt(max(0, sum_k max(CVR_k,0)^2 + sum_{k!=l} rho^2 CVR_k CVR_l psi))
+            sum_cvr = float(np.sum(cvr_values))          # S_b for inter-bucket
+            diag_term = float(np.sum(np.maximum(cvr_values, 0.0) ** 2))
 
             cross_term = 0.0
             for i in range(n):
@@ -354,7 +356,7 @@ class EquityCalculator:
                     )
             cross_term *= 2.0  # symmetric: (i,j) and (j,i)
 
-            k_b = math.sqrt(max(0.0, sum_cvr + cross_term))
+            k_b = math.sqrt(max(0.0, diag_term + cross_term))
 
             bucket_charges[bucket] = k_b
             bucket_net_sens[bucket] = sum_cvr
@@ -557,33 +559,31 @@ class EquityCalculator:
             return 0.0
 
         buckets = list(bucket_charges.keys())
-
-        # Cap S_b to [-K_b, K_b]
-        capped_s: dict[str, float] = {}
-        for b in buckets:
-            k_b = bucket_charges[b]
-            raw_s = bucket_net_sensitivities.get(b, 0.0)
-            capped_s[b] = max(min(raw_s, k_b), -k_b)
-
         sum_kb_squared = sum(k ** 2 for k in bucket_charges.values())
 
-        cross_sum = 0.0
+        gammas: dict[tuple[str, str], float] = {}
         for i, b in enumerate(buckets):
             for j in range(i + 1, len(buckets)):
                 c = buckets[j]
-                b_int = int(b)
-                c_int = int(c)
-                gamma = get_equity_inter_bucket_corr(b_int, c_int)
-                gamma = apply_correlation_scenario(gamma, scenario, is_inter_bucket=True)
-                cross_sum += gamma * capped_s[b] * capped_s[c]
-        cross_sum *= 2.0  # symmetric
+                g = get_equity_inter_bucket_corr(int(b), int(c))
+                gammas[(b, c)] = apply_correlation_scenario(g, scenario, is_inter_bucket=True)
 
-        total_variance = sum_kb_squared + cross_sum
+        def _cross(s: dict[str, float]) -> float:
+            return 2.0 * sum(g * s[b] * s[c] for (b, c), g in gammas.items())
 
+        # MAR21.4(4): first pass uses UNCAPPED S_b
+        raw_s = {b: bucket_net_sensitivities.get(b, 0.0) for b in buckets}
+        total_variance = sum_kb_squared + _cross(raw_s)
         if total_variance >= 0:
             return math.sqrt(total_variance)
-        else:
-            return sum(abs(k) for k in bucket_charges.values())
+
+        # MAR21.4(5): only if negative, recompute with S_b capped to [-K_b, K_b]
+        capped_s = {
+            b: max(min(raw_s[b], bucket_charges[b]), -bucket_charges[b])
+            for b in buckets
+        }
+        total_variance = sum_kb_squared + _cross(capped_s)
+        return math.sqrt(max(total_variance, 0.0))
 
     # --------------------------------------------------------------------- #
     #  Helper: curvature psi function                                        #

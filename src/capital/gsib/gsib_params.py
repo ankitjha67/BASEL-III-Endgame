@@ -301,6 +301,12 @@ class STWFBucketSpec:
 # STWF maturity buckets and weights
 # Per G-SIB NPR p.32, Table 1
 # These weights reflect the rollover risk — shorter maturities get higher weights.
+# TODO: VERIFY -- 12 CFR 217.406(b) Table 2 assigns STWF weights on a
+#   4 x 4 grid of (funding category 1-4) x (residual maturity <=30d /
+#   31-90d / 91-180d / 181-365d), e.g. Cat 1: 25/10/5/0 %, Cat 2:
+#   50/25/10/5 %, Cat 3: 75/50/25/10 %, Cat 4: 100/75/50/25 %.
+#   The single weight vector below (25/10/3/1 %) matches no single
+#   category and collapses the counterparty-type dimension.
 STWF_MATURITY_BUCKETS: Final[list[STWFBucketSpec]] = [
     STWFBucketSpec(
         min_days=0, max_days=30,

@@ -173,26 +173,31 @@ reporting/* (depends on ALL)
 - Reference Data: Counterparty registry, instrument classification
 - Data Generation: Synthetic portfolio and financial statement generators
 
-### Gap Analysis Summary (Updated 2026-03-21)
-| Module | Lines | Target | Completion |
+### Gap Analysis Summary (Audited 2026-09-17 — actual `wc -l` counts)
+| Module | Src Lines | Target | Status |
 |---|---|---|---|
-| FRTB (Market Risk) | 10,850 | 12,800 | 100% |
-| Credit Risk (SA-CR, CRM, LE, OBS) | 4,600 | 4,500 | 100% |
-| SA-CCR (Counterparty) | 1,632 | 3,500 | 100% |
-| CVA Risk | ~2,000 | 2,500 | 100% |
-| Operational Risk | ~1,500 | 2,500 | 100% |
-| Securitization | ~1,500 | 2,500 | 100% |
-| Capital + G-SIB | 6,640 | 6,500 | 100% |
-| ECL | 2,820 | 4,000 | 100% |
-| IRB | 1,203 | 2,500 | 100% |
-| Pillar 2 | 3,048 | 3,500 | 100% |
-| Pillar 3 | 3,032 | 2,500 | 100% |
-| Reporting | 4,080 | 4,000 | 100% |
-| Stress Testing | 1,158 | 5,000 | 100% |
-| Infrastructure/Utils | ~2,000 | 4,000 | 100% |
-| Ref Data + Data Gen | ~1,800 | 2,000 | 100% |
-| Tests | 10,500+ | 8,000 | 100% |
-| **Total** | **~54,000+** | **~49,000** | **100%** |
+| FRTB (Market Risk) | 9,169 | 12,800 | Implemented; see AUDIT_REPORT for MAR21 table deviations |
+| Credit Risk (SA-CR, CRM, LE, OBS) | 4,378 | 4,500 | Implemented |
+| SA-CCR (Counterparty) | 1,171 | 3,500 | Implemented |
+| CVA Risk | 2,926 | 2,500 | Implemented; BA-CVA calibration flagged VERIFY |
+| Operational Risk | 1,635 | 2,500 | Implemented |
+| Securitization | 1,721 | 2,500 | Implemented; K_g / SSFA scaling corrected in audit |
+| Capital + G-SIB | 6,721 | 6,500 | Implemented; STWF grid flagged VERIFY |
+| ECL | 2,820 | 4,000 | Implemented |
+| IRB | 1,220 | 2,500 | Implemented (comparison only) |
+| Pillar 2 | 3,048 | 3,500 | Implemented |
+| Pillar 3 | 3,032 | 2,500 | Implemented |
+| Reporting | 4,080 | 4,000 | Implemented |
+| Stress Testing | 1,169 | 5,000 | Implemented (provision rates calibrated, not sourced) |
+| Utils | 839 | 4,000 | Implemented |
+| Ref Data + Data Gen | 2,040 | 2,000 | Implemented |
+| Core | 625 | — | Implemented |
+| **Src total** | **47,628** | **~49,000** | — |
+| Tests | 11,788 lines / 931 tests | 8,000 | All passing |
+
+Regulatory-accuracy status is tracked in `docs/AUDIT_REPORT.md`.  Every
+parameter table that could not be reconciled to BCBS/ERBA text carries a
+`# TODO: VERIFY` marker in source.
 
 ## How To Develop Each Phase
 

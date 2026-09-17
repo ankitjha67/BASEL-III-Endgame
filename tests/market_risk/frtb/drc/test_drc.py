@@ -55,7 +55,8 @@ class TestDRCParams:
         assert get_lgd(DRCSeniority.SENIOR_UNSECURED) == 0.75
 
     def test_lgd_subordinated(self):
-        assert get_lgd(DRCSeniority.SUBORDINATED) == 0.75
+        """MAR22.12: non-senior (subordinated) debt LGD = 100%."""
+        assert get_lgd(DRCSeniority.SUBORDINATED) == 1.00
 
     def test_lgd_equity(self):
         assert get_lgd(DRCSeniority.EQUITY) == 1.00

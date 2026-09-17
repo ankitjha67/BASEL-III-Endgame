@@ -34,6 +34,7 @@ from src.securitization.sec_params import (
     DEFAULT_POOL_CAPITAL_RATIO,
     MAX_POOL_CAPITAL_RATIO,
     MAX_RISK_WEIGHT,
+    MINIMUM_CAPITAL_RATIO,
     MIN_RISK_WEIGHT_NON_RESEC,
     MIN_RISK_WEIGHT_RESEC,
     P_NON_RESECURITIZATION as P_NON_RESEC,
@@ -41,6 +42,7 @@ from src.securitization.sec_params import (
     P_STC_NON_RESEC,
     RESEC_RW_FLOOR,
     RESEC_RW_MULTIPLIER,
+    RW_PER_UNIT_CAPITAL,
     SEC4_RW_BANDS,
     SEC_ERBA_RW,
     STC_ELIGIBLE_ASSET_TYPES,
@@ -566,19 +568,33 @@ class SecuritizationCalculator:
         if u <= l_val or u <= 0:
             return MAX_RW
 
-        # SSFA formula per CRE40.50
+        # K_SSFA per CRE40.50 — a CAPITAL REQUIREMENT per unit of exposure,
+        # evaluated on [l, u] = [max(A-K_A,0), D-K_A].  When A < K_A this is
+        # K_SSFA(K_A, D) by construction (l = 0).
         try:
             numerator = math.exp(alpha * u) - math.exp(alpha * l_val)
             denominator = alpha * (u - l_val)
-
             if abs(denominator) < 1e-12:
                 return MAX_RW
-
-            rw = numerator / denominator
+            k_ssfa = numerator / denominator
         except (OverflowError, ValueError):
-            rw = MAX_RW
+            return MAX_RW
 
-        # Concentration add-on per CRE40.56
+        # Convert capital requirement to RISK WEIGHT per CRE40.51-52
+        if a >= k_a:
+            # Tranche entirely above K_A: RW = 12.5 x K_SSFA(A, D)
+            rw = RW_PER_UNIT_CAPITAL * k_ssfa
+        else:
+            # Straddle (A < K_A < D): the portion below K_A is 1250%,
+            # the portion above is 12.5 x K_SSFA(K_A, D), thickness-weighted.
+            thickness = d - a
+            below = (k_a - a) / thickness
+            above = (d - k_a) / thickness
+            rw = RW_PER_UNIT_CAPITAL * (below + above * k_ssfa)
+
+        # TODO: VERIFY -- "concentration add-on" below is not part of CRE40
+        # (CRE40.56 addresses resecuritisation / N calculation, not an RW
+        # add-on).  Retained for backward compatibility pending source check.
         if pool.effective_number_of_obligors < CONCENTRATION_N_THRESHOLD:
             concentration_addon = CONCENTRATION_RW_ADDON * (
                 CONCENTRATION_N_THRESHOLD - pool.effective_number_of_obligors
@@ -636,18 +652,20 @@ class SecuritizationCalculator:
 
     @staticmethod
     def _compute_k_g(pool: SecuritizationPool) -> float:
-        """Compute pool capital ratio K_g per CRE40.48.
+        """Compute pool capital requirement K_G per CRE40.48.
 
-        K_g = Pool RWA / Pool EAD
+        K_G = (Pool RWA x 8%) / Pool EAD
 
-        Represents the capital ratio that would apply if the
-        underlying exposures were held directly (not securitized).
+        K_G is the weighted-average CAPITAL REQUIREMENT of the underlying
+        exposures (i.e. RWA converted to capital at the 8% minimum), NOT the
+        RWA density.  A pool with 50% average risk weight therefore has
+        K_G = 4%, not 50%.
 
         Args:
             pool: Pool characteristics.
 
         Returns:
-            K_g as a decimal (e.g., 0.08 for 8%).
+            K_G as a decimal (e.g., 0.04 for a 50%-RW pool).
 
         Reference:
             CRE40.48-49.
@@ -655,7 +673,7 @@ class SecuritizationCalculator:
         if pool.total_ead <= 0:
             return DEFAULT_POOL_CAPITAL_RATIO
 
-        k_g = pool.pool_rwa / pool.total_ead
+        k_g = (pool.pool_rwa * MINIMUM_CAPITAL_RATIO) / pool.total_ead
         return min(k_g, MAX_POOL_CAPITAL_RATIO)
 
     def compute_tranche_thickness(

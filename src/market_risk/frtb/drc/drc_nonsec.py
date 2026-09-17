@@ -521,19 +521,15 @@ class DRCCalculator:
 
         .. math::
 
-            \\mathrm{HBR}_b = \\frac{
-                \\max(\\sum \\mathrm{JTD}^{+} + \\sum \\mathrm{JTD}^{-},\\; 0)
-            }{
-                \\sum \\mathrm{JTD}^{+}
-            }
-
-        where ``JTD+`` are net-long JTDs and ``JTD-`` are net-short JTDs
-        (negative values).
+            \\mathrm{HBR}_b = \\frac{\\sum \\mathrm{netJTD}_{\\mathrm{long}}}
+                                   {\\sum \\mathrm{netJTD}_{\\mathrm{long}}
+                                    + \\sum |\\mathrm{netJTD}_{\\mathrm{short}}|}
 
         The ratio is bounded in [0, 1]:
 
-        - HBR = 1 when there are no shorts (full long exposure).
-        - HBR approaches 0 as shorts grow relative to longs.
+        - HBR = 1 when there are no shorts (shorts give full benefit ... but
+          there are none to benefit from).
+        - HBR -> 0 as shorts dominate longs (shorts increasingly recognised).
 
         Args:
             sum_long_jtd: Sum of positive (net long) JTDs in the bucket.
@@ -546,8 +542,8 @@ class DRCCalculator:
             # No long exposure -- no charge possible
             return 0.0
 
-        numerator = max(sum_long_jtd + sum_short_jtd, 0.0)
-        return numerator / sum_long_jtd
+        denominator = sum_long_jtd + abs(sum_short_jtd)
+        return sum_long_jtd / denominator if denominator > 0.0 else 0.0
 
     # ------------------------------------------------------------------ #
     #  Validation                                                         #

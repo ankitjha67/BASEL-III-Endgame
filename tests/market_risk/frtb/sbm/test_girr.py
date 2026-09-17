@@ -495,14 +495,24 @@ class TestCurvatureCalculation:
         return GIRRCalculator()
 
     def test_single_positive_curvature(self, calc: GIRRCalculator) -> None:
+        """Single positive CVR: K_b = sqrt(max(CVR,0)^2) = |CVR| per MAR21.5(4)."""
         sens = [_curvature_sens(value=50_000.0)]
         result = calc._calculate_curvature_charge(sens, CorrelationScenario.MEDIUM)
-        # K_b = sqrt(max(0, 50000)) = sqrt(50000) ... wait, for single CVR:
-        # K_b = sqrt(max(0, sum_CVR + 0)) = sqrt(50000) ≈ 223.6
-        # Actually: K_b = sqrt(max(0, 50000)) = sqrt(50000) ≈ 223.6
-        # Hmm - actually for single element: sum_CVR = 50000, no cross-terms
-        # K_b = sqrt(max(0, 50000)) = sqrt(50000)
-        assert result.capital_charge == pytest.approx(math.sqrt(50_000.0), rel=1e-6)
+        assert result.capital_charge == pytest.approx(50_000.0, rel=1e-9)
+
+    def test_curvature_two_positive_same_factor_adds_linearly(
+        self, calc: GIRRCalculator
+    ) -> None:
+        """Two +CVR on the same risk factor (rho=1): K_b = CVR1 + CVR2.
+
+        MAR21.5(4): sqrt(a^2 + b^2 + 2*1^2*a*b) = a + b.
+        """
+        sens = [
+            _curvature_sens(value=30_000.0, tenor=GIRRTenor.Y5),
+            _curvature_sens(value=20_000.0, tenor=GIRRTenor.Y5),
+        ]
+        result = calc._calculate_curvature_charge(sens, CorrelationScenario.MEDIUM)
+        assert result.capital_charge == pytest.approx(50_000.0, rel=1e-9)
 
     def test_negative_curvature_floored(self, calc: GIRRCalculator) -> None:
         """Negative total CVR → K_b = sqrt(max(0, ...)) = 0."""

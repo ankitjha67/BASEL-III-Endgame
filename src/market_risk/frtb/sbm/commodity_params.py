@@ -24,6 +24,14 @@ from src.core.enums import CorrelationScenario
 
 # ---------------------------------------------------------------------------
 # Delta risk weights per bucket (MAR21.19 Table 10) -- decimal fractions
+# TODO: VERIFY -- BCBS d457 MAR21.19 Table 10 buckets are:
+#   1 Energy solid (coal) 30%; 2 Energy liquid (crude) 35%;
+#   3 Energy electricity/carbon 60%; 4 Energy natural gas 40%;
+#   5 Freight 80%; 6 Metals non-precious 20%; 7 Gaseous combustibles 35%;
+#   8 Precious metals 20%; 9 Grains & oilseed 35%; 10 Softs/agri 25%;
+#   11 Other 50%.  Intra rho: 55/95/40/80/80/40/65/55/45/15/15 %.
+#   The taxonomy below (light ends / middle / heavy distillates, base
+#   metals, ...) does not match MAR21.19 and must be re-mapped.
 # ---------------------------------------------------------------------------
 COMMODITY_DELTA_RW: dict[int, float] = {
     1: 0.30,   # Coal and crude oil

@@ -132,14 +132,33 @@ class TestInterBucketAggregation:
         total = inter_bucket_aggregation(charges, net_sens, 0.0)
         assert total == pytest.approx(5.0, rel=1e-6)
 
-    def test_s_b_capping(self) -> None:
-        """S_b is capped to [-K_b, K_b] before cross-bucket aggregation."""
+    def test_s_b_not_capped_when_radicand_positive(self) -> None:
+        """MAR21.4(4): first pass uses the UNCAPPED S_b.
+
+        With same-sign sensitivities the radicand is positive, so the
+        MAR21.4(5) alternative (capped) specification must NOT be applied,
+        even though |S_b| > K_b.  Capping here would understate capital.
+        """
         charges = {"A": 5.0, "B": 3.0}
-        # S_b much larger than K_b -> should be capped to K_b
-        net_sens = {"A": 100.0, "B": 100.0}
+        net_sens = {"A": 100.0, "B": 100.0}   # |S_b| >> K_b, radicand > 0
         total = inter_bucket_aggregation(charges, net_sens, 0.5)
-        # Capped: S_A=5, S_B=3
-        expected = math.sqrt(25.0 + 9.0 + 2 * 0.5 * 5.0 * 3.0)
+        expected = math.sqrt(25.0 + 9.0 + 2 * 0.5 * 100.0 * 100.0)
+        assert total == pytest.approx(expected, rel=1e-6)
+        # And it must exceed the (wrong) unconditionally-capped result
+        capped_wrong = math.sqrt(25.0 + 9.0 + 2 * 0.5 * 5.0 * 3.0)
+        assert total > capped_wrong
+
+    def test_s_b_capped_only_when_radicand_negative(self) -> None:
+        """MAR21.4(5): cap S_b to [-K_b, K_b] ONLY if the radicand goes negative.
+
+        Opposite-sign S_b with |S_b| >> K_b drives the uncapped radicand
+        negative (34 - 10000 < 0), so the capped specification applies:
+        S_A = +5, S_B = -3  ->  25 + 9 - 2*0.5*15 = 19.
+        """
+        charges = {"A": 5.0, "B": 3.0}
+        net_sens = {"A": 100.0, "B": -100.0}
+        total = inter_bucket_aggregation(charges, net_sens, 0.5)
+        expected = math.sqrt(25.0 + 9.0 + 2 * 0.5 * 5.0 * (-3.0))
         assert total == pytest.approx(expected, rel=1e-6)
 
     def test_empty_buckets(self) -> None:

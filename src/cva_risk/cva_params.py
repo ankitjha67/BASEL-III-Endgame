@@ -170,6 +170,14 @@ grade equivalents.
 #  BA-CVA Parameters (BCBS d424 / MAR50 / ERBA NPR pp. 280-284)
 # =========================================================================
 
+# TODO: VERIFY -- BCBS d424 (rev. Jul-2020) MAR50.11 applies a discount
+#   scalar DS_BA-CVA = 0.65 to the BA-CVA charge, and MAR50.14 defines
+#   SCR_c = (1/alpha) * RW_c * M_c * EAD_c * DF_c with alpha = 1.4 and
+#   DF_c = (1 - e^{-0.05 M_c}) / (0.05 M_c).  The implementation uses
+#   alpha = 1.0, omits DF_c and the 1/1.4 factor, and uses rating-based
+#   weights (below) rather than the MAR50.17 sector x IG/HY table
+#   (Sov IG 0.5%, Fin IG 5%, Basic-mat IG 3%, ... Fin HY 12%, Other HY 12%).
+#   Confirm the cited ERBA NPR p.281 calibration before production use.
 BA_CVA_ALPHA: Final[float] = 1.0
 """Alpha multiplier for BA-CVA per ERBA NPR p. 281.
 

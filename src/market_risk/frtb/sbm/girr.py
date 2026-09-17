@@ -418,9 +418,15 @@ class GIRRCalculator:
             # Squared correlations for curvature per MAR21.5 ------------------
             rho_sq = delta_corr ** 2
 
-            # Intra-bucket curvature aggregation per MAR21.5 ------------------
+            # Intra-bucket curvature aggregation per MAR21.5(4) ---------------
+            #   K_b = sqrt(max(0, sum_k max(CVR_k,0)^2
+            #                   + sum_{k!=l} rho_kl^2 * CVR_k * CVR_l * psi))
+            # NOTE: the diagonal term is the SQUARE of the positive part, not
+            # the plain sum of CVR_k (which would mix linear and quadratic
+            # terms under the square root).
             n = len(cvr_values)
-            sum_cvr = float(np.sum(cvr_values))
+            sum_cvr = float(np.sum(cvr_values))          # S_b for inter-bucket
+            diag_term = float(np.sum(np.maximum(cvr_values, 0.0) ** 2))
 
             cross_term = 0.0
             for i in range(n):
@@ -431,7 +437,7 @@ class GIRRCalculator:
                     )
             cross_term *= 2.0  # symmetric: (i,j) and (j,i)
 
-            k_b = math.sqrt(max(0.0, sum_cvr + cross_term))
+            k_b = math.sqrt(max(0.0, diag_term + cross_term))
 
             # For curvature inter-bucket, S_b = sum(CVR_k) --------------------
             bucket_charges[bucket] = k_b

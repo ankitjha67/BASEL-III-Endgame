@@ -94,9 +94,25 @@ class TestMaturityAdjustment:
     """Tests for compute_maturity_adjustment per BCBS d424 CRE31.6."""
 
     def test_default_maturity_2_5_years(self) -> None:
-        """At M=2.5 years (default), maturity adjustment factor = 1.0."""
+        """At M=2.5, MA = 1/(1-1.5b) per BCBS d424 CRE31.6 (NOT 1.0).
+
+        b(1%) = (0.11852 - 0.05478*ln(0.01))^2 = 0.13755
+        MA    = 1 / (1 - 1.5*0.13755) = 1.2598
+        """
+        import math
+        b = (0.11852 - 0.05478 * math.log(0.01)) ** 2
+        expected = 1.0 / (1.0 - 1.5 * b)
         ma = compute_maturity_adjustment(0.01, 2.5)
-        assert ma == pytest.approx(1.0)
+        assert ma == pytest.approx(expected, rel=1e-9)
+        assert ma == pytest.approx(1.2598, rel=1e-3)
+
+    def test_maturity_adjustment_matches_bcbs_closed_form(self) -> None:
+        """MA = (1 + (M-2.5) b) / (1 - 1.5 b) for several (PD, M) points."""
+        import math
+        for pd, m in [(0.001, 1.0), (0.01, 3.0), (0.05, 5.0), (0.20, 4.0)]:
+            b = (0.11852 - 0.05478 * math.log(pd)) ** 2
+            expected = (1.0 + (m - 2.5) * b) / (1.0 - 1.5 * b)
+            assert compute_maturity_adjustment(pd, m) == pytest.approx(expected, rel=1e-12)
 
     def test_longer_maturity_higher_adjustment(self) -> None:
         """Longer maturity → higher adjustment (more risk)."""

@@ -92,11 +92,16 @@ SACCR_ASSET_CLASS_PARAMS: dict[SACCRAssetClass, AssetClassParams] = {
     SACCRAssetClass.FX: AssetClassParams(
         supervisory_factor=0.04, correlation=1.0
     ),
+    # CRE52.72 Table 2 -- credit SINGLE-NAME correlation is 50%; index is 80%.
+    # These two classes model single-name credit (IG / speculative-grade).
+    # TODO: VERIFY -- add CREDIT_INDEX_IG (SF 0.38%, rho 0.8) and
+    # CREDIT_INDEX_SG (SF 1.06%, rho 0.8) classes; SF for single-name SG
+    # ranges 0.54% (BBB) to 6.0% (CCC) by rating in CRE52.72.
     SACCRAssetClass.CREDIT_IG: AssetClassParams(
-        supervisory_factor=0.0038, correlation=0.8
+        supervisory_factor=0.0038, correlation=0.5
     ),
     SACCRAssetClass.CREDIT_SPEC: AssetClassParams(
-        supervisory_factor=0.0054, correlation=0.8
+        supervisory_factor=0.0054, correlation=0.5
     ),
     SACCRAssetClass.EQUITY_SINGLE: AssetClassParams(
         supervisory_factor=0.32, correlation=0.5

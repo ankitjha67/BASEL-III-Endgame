@@ -227,7 +227,11 @@ def compute_maturity_adjustment(pd: float, maturity: float) -> float:
     # Clamp maturity
     m = max(EFFECTIVE_MATURITY_MIN, min(maturity, EFFECTIVE_MATURITY_MAX))
 
-    adjustment = 1.0 + (m - 2.5) * b_pd / (1.0 - 1.5 * b_pd)
+    # BCBS d424 CRE31.6 / Basel II para 272:
+    #   K = [...] x (1 - 1.5 b)^-1 x (1 + (M - 2.5) b)
+    # i.e. MA = (1 + (M - 2.5) b) / (1 - 1.5 b).  Note MA != 1 at M = 2.5;
+    # it equals 1 / (1 - 1.5 b), which is the intended calibration.
+    adjustment = (1.0 + (m - 2.5) * b_pd) / (1.0 - 1.5 * b_pd)
     return adjustment
 
 

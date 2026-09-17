@@ -27,6 +27,11 @@ TENORS: list[float] = [0.25, 0.5, 1.0, 2.0, 3.0, 5.0, 7.0, 10.0, 15.0, 20.0, 25.
 
 # ---------------------------------------------------------------------------
 # Non-CTP delta risk weights -- MAR21.14 Table 6
+# TODO: VERIFY -- BCBS d457 MAR21.16 Table 6 has 25 non-CTP buckets split
+#   senior/non-senior x IG/HY x (RMBS prime/mid/sub, CMBS, ABS student/
+#   cards/auto, CLO) plus "Other" (3.5%).  The 8-bucket table below is a
+#   simplification and several RWs (e.g. RMBS sub 2.1% vs 2.0%, CMBS 2.5%
+#   vs 2.0%) do not match the standard.
 # ---------------------------------------------------------------------------
 CSR_SEC_NON_CTP_RW: dict[int, float] = {
     1: 0.009,   # 0.9% - RMBS Prime
@@ -93,6 +98,10 @@ NON_CTP_BUCKET_NAMES: dict[int, str] = {
 
 # ---------------------------------------------------------------------------
 # CTP delta risk weights -- MAR21.15 Table 7
+# TODO: VERIFY -- BCBS d457 MAR21.15 uses the SAME 16-bucket sector x IG/HY
+#   taxonomy as CSR non-sec (not 5 buckets) with RWs 4%/4%/8%/5%/4%/3%/
+#   2%/6% (IG) and 13%/13%/16%/10%/12%/12%/12%/13% (HY).  The 5-bucket
+#   table below does not match and must be re-mapped.
 # ---------------------------------------------------------------------------
 CSR_SEC_CTP_RW: dict[int, float] = {
     1: 0.04,    # 4.0% - CTP IG

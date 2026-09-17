@@ -17,6 +17,17 @@ from src.core.enums import CorrelationScenario
 
 # ---------------------------------------------------------------------------
 # Delta risk weights per bucket (MAR21.17 Table 8) -- decimal fractions
+# TODO: VERIFY -- BCBS d457 MAR21.17 Table 8 bucket taxonomy and RWs are:
+#   1 EM large consumer 55%; 2 EM large telecom/industrials 60%;
+#   3 EM large basic-mat/energy 45%; 4 EM large financials 55%;
+#   5 AE large consumer 30%; 6 AE large telecom/industrials 35%;
+#   7 AE large basic-mat/energy 40%; 8 AE large financials 50%;
+#   9 EM small cap 70%; 10 AE small cap 50%; 11 Other 70%;
+#   12 AE large-cap indices 15%; 13 Other indices 25%.
+#   Intra-bucket rho: 1-4 = 15%, 5-8 = 25%, 9 = 7.5%, 10 = 12.5%,
+#   11 = 0%, 12-13 = 80%.
+#   The table below uses a 5+5+1+2 taxonomy with different RWs for
+#   buckets 5-10 and must be re-mapped before production use.
 # ---------------------------------------------------------------------------
 EQUITY_DELTA_RW: dict[int, float] = {
     1: 0.55,   # EM large cap - Consumer, utilities

@@ -81,12 +81,19 @@ def inter_bucket_aggregation(
     bucket_net_sensitivities: dict[str, float],
     inter_bucket_correlation: float,
 ) -> float:
-    """Compute inter-bucket aggregated capital charge per MAR21.4(4).
+    """Compute inter-bucket aggregated capital charge per MAR21.4(4)-(5).
 
-    Formula:
+    Formula (MAR21.4(4)):
         Capital = sqrt(sum_b K_b^2 + sum_b sum_{c!=b} gamma_bc * S_b * S_c)
 
-    Where S_b is capped: S_b = max(min(sum(WS_k), K_b), -K_b)
+    with S_b = sum_k WS_k (the UNCAPPED net weighted sensitivity).
+
+    Per MAR21.4(5), ONLY if the quantity under the square root is negative
+    is the calculation repeated with the alternative specification
+    S_b = max(min(sum_k WS_k, K_b), -K_b).  Applying the cap unconditionally
+    understates the cross-bucket term whenever |S_b| > K_b (which occurs
+    with imperfectly correlated same-sign sensitivities) and is therefore
+    NOT compliant.
 
     Args:
         bucket_charges: Dict of bucket_id -> K_b.
@@ -100,32 +107,29 @@ def inter_bucket_aggregation(
         return 0.0
 
     buckets = list(bucket_charges.keys())
-
-    # Cap S_b to [-K_b, K_b]
-    capped_s = {}
-    for b in buckets:
-        k_b = bucket_charges[b]
-        raw_s = bucket_net_sensitivities.get(b, 0.0)
-        capped_s[b] = max(min(raw_s, k_b), -k_b)
-
-    # Sum of K_b^2
     sum_kb_squared = sum(k ** 2 for k in bucket_charges.values())
 
-    # Cross-bucket terms
-    cross_sum = 0.0
-    for i, b in enumerate(buckets):
-        for j, c in enumerate(buckets):
-            if i < j:
-                cross_sum += inter_bucket_correlation * capped_s[b] * capped_s[c]
-    cross_sum *= 2  # Symmetric: count both (b,c) and (c,b)
+    def _cross(s: dict[str, float]) -> float:
+        total = 0.0
+        for i, b in enumerate(buckets):
+            for j, c in enumerate(buckets):
+                if i < j:
+                    total += inter_bucket_correlation * s[b] * s[c]
+        return 2.0 * total  # symmetric: (b,c) and (c,b)
 
-    total_variance = sum_kb_squared + cross_sum
-
+    # First pass: uncapped S_b per MAR21.4(4)
+    raw_s = {b: bucket_net_sensitivities.get(b, 0.0) for b in buckets}
+    total_variance = sum_kb_squared + _cross(raw_s)
     if total_variance >= 0:
         return math.sqrt(total_variance)
-    else:
-        # Fallback: sum of individual bucket charges
-        return sum(abs(k) for k in bucket_charges.values())
+
+    # Second pass (MAR21.4(5)): cap S_b to [-K_b, K_b] and recompute
+    capped_s = {
+        b: max(min(raw_s[b], bucket_charges[b]), -bucket_charges[b])
+        for b in buckets
+    }
+    total_variance = sum_kb_squared + _cross(capped_s)
+    return math.sqrt(max(total_variance, 0.0))
 
 
 def curvature_aggregation(

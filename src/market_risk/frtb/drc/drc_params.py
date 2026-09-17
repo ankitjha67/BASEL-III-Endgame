@@ -22,9 +22,11 @@ from src.core.enums import (
 # ---------------------------------------------------------------------------
 
 LGD_VALUES: dict[DRCSeniority, float] = {
-    DRCSeniority.SENIOR_SECURED: 0.25,    # 25%
+    # MAR22.12: covered bonds 25%; senior debt 75%;
+    # equity AND non-senior (subordinated) debt 100%.
+    DRCSeniority.SENIOR_SECURED: 0.25,    # 25% (covered-bond treatment)
     DRCSeniority.SENIOR_UNSECURED: 0.75,  # 75%
-    DRCSeniority.SUBORDINATED: 0.75,      # 75%
+    DRCSeniority.SUBORDINATED: 1.00,      # 100% -- non-senior debt per MAR22.12
     DRCSeniority.EQUITY: 1.00,            # 100%
 }
 
@@ -196,6 +198,11 @@ def get_bucket_label(exposure_type: DRCExposureType) -> str:
 #  DRC Securitization risk weights by rating and seniority -- MAR22.25 Table 5
 # ---------------------------------------------------------------------------
 
+# TODO: VERIFY -- BCBS d457 MAR22.29 sets DRC securitisation (non-CTP) risk
+#   weights equal to the BANKING-BOOK securitisation risk weight (CRE40 /
+#   SEC-ERBA, maturity component set to zero) DIVIDED BY 12.5.  E.g. an AAA
+#   senior tranche at 15% banking-book RW gives 15%/12.5 = 1.2%, not 0.4%.
+#   The rating x seniority table below does not derive from that rule.
 DRC_SEC_RISK_WEIGHTS_SENIOR: dict[DRCSecRating, float] = {
     DRCSecRating.AAA: 0.004,        # 0.4%
     DRCSecRating.AA: 0.008,         # 0.8%

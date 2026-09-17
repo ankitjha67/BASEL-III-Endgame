@@ -248,15 +248,20 @@ class TestSECSA:
         assert delin_result.total_rwa >= clean_result.total_rwa
 
     def test_k_g_computation(self, calc) -> None:
-        """K_g = pool_rwa / total_ead."""
+        """K_G = (pool_rwa x 8%) / total_ead per CRE40.48 (a CAPITAL ratio).
+
+        500e6 x 0.08 / 1e9 = 0.04, i.e. a 50% RW-density pool needs 4%
+        capital.  (Previously the code returned RWA/EAD = 0.50, which is a
+        risk-weight density, not a capital requirement.)
+        """
         from src.securitization.sec_framework import SecuritizationPool
         pool = SecuritizationPool(pool_id="P1", total_ead=1e9, pool_rwa=500e6)
         tranche = self._make_tranche("T1", 0.10, 0.50, 100e6)
         result = calc.calculate([tranche], pool)
-        assert result.k_g == pytest.approx(0.50)
+        assert result.k_g == pytest.approx(0.04)
 
     def test_k_a_with_delinquency(self, calc) -> None:
-        """K_A = K_g + W * (1 - K_g)."""
+        """K_A = K_G + W * (1 - K_G) per CRE40.54."""
         from src.securitization.sec_framework import SecuritizationPool
         pool = SecuritizationPool(
             pool_id="P1", total_ead=1e9, pool_rwa=500e6,
@@ -264,8 +269,48 @@ class TestSECSA:
         )
         tranche = self._make_tranche("T1", 0.10, 0.50, 100e6)
         result = calc.calculate([tranche], pool)
-        expected_ka = 0.50 + 0.2 * (1 - 0.50)
+        k_g = 500e6 * 0.08 / 1e9
+        expected_ka = k_g + 0.2 * (1 - k_g)
         assert result.k_a == pytest.approx(expected_ka)
+
+    def test_ssfa_rw_is_12_5_times_k_ssfa_above_ka(self, calc) -> None:
+        """CRE40.51: for A >= K_A, RW = 12.5 x K_SSFA(A, D)."""
+        import math
+        from src.securitization.sec_framework import (
+            SecuritizationPool, SecuritizationTranche,
+        )
+        # K_G = 400e6*0.08/1e9 = 0.032 ; tranche A=0.05 > K_A, D=0.15, p=0.5
+        pool = SecuritizationPool(pool_id="P1", total_ead=1e9, pool_rwa=400e6,
+                                  effective_number_of_obligors=1000)
+        t = SecuritizationTranche(tranche_id="T1", pool_id="P1",
+                                  attachment_point=0.05, detachment_point=0.15,
+                                  notional=100e6)
+        k_a = 0.032
+        a_ = -1.0 / (0.5 * k_a)
+        u, l = 0.15 - k_a, 0.05 - k_a
+        k_ssfa = (math.exp(a_ * u) - math.exp(a_ * l)) / (a_ * (u - l))
+        expected = max(12.5 * k_ssfa, 0.15)
+        res = calc.calculate([t], pool)
+        assert res.rw_by_tranche["T1"] == pytest.approx(expected, rel=1e-6)
+
+    def test_ssfa_straddle_blends_1250_and_ssfa(self, calc) -> None:
+        """CRE40.52: A < K_A < D blends 1250% (below K_A) with 12.5 x K_SSFA(K_A,D)."""
+        import math
+        from src.securitization.sec_framework import (
+            SecuritizationPool, SecuritizationTranche,
+        )
+        pool = SecuritizationPool(pool_id="P1", total_ead=1e9, pool_rwa=500e6,
+                                  effective_number_of_obligors=1000)  # K_G = 0.04
+        t = SecuritizationTranche(tranche_id="T1", pool_id="P1",
+                                  attachment_point=0.0, detachment_point=0.10,
+                                  notional=100e6)
+        k_a = 0.04
+        a_ = -1.0 / (0.5 * k_a)
+        u = 0.10 - k_a
+        k_ssfa = (math.exp(a_ * u) - 1.0) / (a_ * u)          # l = 0
+        expected = 12.5 * ((k_a - 0.0) / 0.10 + (0.10 - k_a) / 0.10 * k_ssfa)
+        res = calc.calculate([t], pool)
+        assert res.rw_by_tranche["T1"] == pytest.approx(min(expected, 12.5), rel=1e-6)
 
     @staticmethod
     def _make_tranche(tid, a, d, notional):

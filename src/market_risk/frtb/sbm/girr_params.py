@@ -12,6 +12,12 @@ from src.core.enums import CorrelationScenario, GIRRTenor, CurrencyCategory
 
 # ---------------------------------------------------------------------------
 # Standard tenor vertices (years) -- MAR21.8
+# TODO: VERIFY -- BCBS d457 MAR21.8(1) prescribes TEN GIRR delta vertices:
+#   0.25, 0.5, 1, 2, 3, 5, 10, 15, 20, 30 years.  The 7Y and 25Y vertices
+#   below are NOT in the standard.  They carry the neighbouring 1.1% RW so the
+#   numerical impact is limited, but sensitivities should be mapped onto the
+#   10 prescribed vertices before aggregation.  Removing them changes
+#   GIRRTenor (core/enums.py) and several tests.
 # ---------------------------------------------------------------------------
 TENORS: list[float] = [0.25, 0.5, 1.0, 2.0, 3.0, 5.0, 7.0, 10.0, 15.0, 20.0, 25.0, 30.0]
 

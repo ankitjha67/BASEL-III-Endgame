@@ -310,8 +310,10 @@ class FXCalculator:
         delta_corr = build_fx_correlation_matrix(n, scenario)
         rho_sq = delta_corr ** 2
 
-        # Curvature aggregation per MAR21.5
+        # Curvature aggregation per MAR21.5(4)
+        # K = sqrt(max(0, sum_k max(CVR_k,0)^2 + sum_{k!=l} rho^2 CVR_k CVR_l psi))
         sum_cvr = float(np.sum(cvr_values))
+        diag_term = float(np.sum(np.maximum(cvr_values, 0.0) ** 2))
 
         cross_term = 0.0
         for i in range(n):
@@ -322,7 +324,7 @@ class FXCalculator:
                 )
         cross_term *= 2.0
 
-        total_charge = math.sqrt(max(0.0, sum_cvr + cross_term))
+        total_charge = math.sqrt(max(0.0, diag_term + cross_term))
 
         # Build WeightedSensitivity wrappers for reporting
         ws_curvature = [

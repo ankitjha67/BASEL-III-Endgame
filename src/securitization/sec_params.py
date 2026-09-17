@@ -261,6 +261,15 @@ W_THRESHOLD_HIGH: float = 1.0
 # per CRE40.48 — conservative assumption of 8%
 DEFAULT_POOL_CAPITAL_RATIO: float = 0.08
 
+# Minimum total-capital ratio used to convert pool RWA into the pool
+# capital requirement K_G per CRE40.48:  K_G = (RWA_pool x 8%) / EAD_pool.
+MINIMUM_CAPITAL_RATIO: float = 0.08
+
+# Reciprocal of the minimum capital ratio: converts a capital requirement
+# per unit of exposure (K_SSFA) into a risk weight per CRE40.51:
+#   RW = 12.5 x K_SSFA
+RW_PER_UNIT_CAPITAL: float = 12.5
+
 # K_g cap: pool capital ratio cannot exceed 100% per CRE40.49
 MAX_POOL_CAPITAL_RATIO: float = 1.00
 
@@ -312,9 +321,13 @@ RESEC_RW_FLOOR: float = 1.00  # 100%
 
 # Maximum number of effective obligors below which concentration add-on applies
 # per CRE40.56
+# TODO: VERIFY -- No CRE40 provision defines a per-obligor "concentration
+#   risk-weight add-on" of this form (CRE40.56 concerns the effective number
+#   of exposures N used in SEC-IRBA, not an SEC-SA add-on).  Retained from
+#   the original project specification pending a source citation.
 CONCENTRATION_N_THRESHOLD: int = 6
 
-# Concentration ratio risk weight add-on per CRE40.56
+# Concentration ratio risk weight add-on (see TODO above)
 CONCENTRATION_RW_ADDON: float = 0.06  # 6 percentage points per unit
 
 

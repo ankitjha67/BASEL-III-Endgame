@@ -48,6 +48,15 @@ BUCKET_SECTOR_QUALITY: dict[int, tuple[CSRSector, CreditQuality]] = {
 
 # ---------------------------------------------------------------------------
 # Delta risk weights as decimal percentages -- MAR21.12 Table 4
+# TODO: VERIFY -- These values follow the project specification, NOT BCBS
+#   d457 MAR21.13 Table 4.  The BCBS table (18 buckets) is, e.g.:
+#   Sov IG 0.5%, Local-gov IG 1.0%, FINANCIALS IG 5.0%, Basic-mat IG 3.0%,
+#   Consumer IG 3.0%, Tech IG 2.0%, Health/util IG 1.5%, Covered 2.5%,
+#   Sov HY 2.0%, Local-gov HY 4.0%, Financials HY 12.0%, Basic-mat HY 7.0%,
+#   Consumer HY 8.5%, Tech HY 5.5%, Health HY 5.0%, Other 12.0%,
+#   Qualified index IG 1.5%, Qualified index HY 5.0%.
+#   The bucket taxonomy (sector x IG/HY pairs) also differs from MAR21.13.
+#   Re-map before production use.
 # ---------------------------------------------------------------------------
 DELTA_RISK_WEIGHTS: dict[int, float] = {
     1:  0.005,   # 0.5% - Sovereigns IG
