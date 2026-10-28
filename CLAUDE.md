@@ -206,31 +206,32 @@ reporting/* (depends on ALL)
 - Reference Data: Counterparty registry, instrument classification
 - Data Generation: Synthetic portfolio and financial statement generators
 
-### Gap Analysis Summary (Audited 2026-09-17 — actual `wc -l` counts)
+### Gap Analysis Summary (Reconciled to the March 2026 ERBA NPR text, 2026-10-28 — actual `wc -l` counts)
 | Module | Src Lines | Target | Status |
 |---|---|---|---|
-| FRTB (Market Risk) | 9,169 | 12,800 | Implemented; see AUDIT_REPORT for MAR21 table deviations |
-| Credit Risk (SA-CR, CRM, LE, OBS) | 4,378 | 4,500 | Implemented |
-| SA-CCR (Counterparty) | 1,171 | 3,500 | Implemented |
-| CVA Risk | 2,926 | 2,500 | Implemented; BA-CVA calibration flagged VERIFY |
-| Operational Risk | 1,635 | 2,500 | Implemented |
-| Securitization | 1,721 | 2,500 | Implemented; K_g / SSFA scaling corrected in audit |
-| Capital + G-SIB | 6,721 | 6,500 | Implemented; STWF grid flagged VERIFY |
-| ECL | 2,820 | 4,000 | Implemented |
-| IRB | 1,220 | 2,500 | Implemented (comparison only) |
+| FRTB (Market Risk) | 10,916 | 12,800 | SBM tables re-mapped to Tables 1-11 to § __.209; DRC to § __.210 |
+| Credit Risk (SA-CR, CRM, LE, OBS) | 5,112 | 4,500 | Tables 1-8 to § __.111, § __.112 CCFs, § __.115 haircuts |
+| SA-CCR (Counterparty) | 1,374 | 3,500 | Table 2 to § __.114, maturity factors, SD floor |
+| CVA Risk | 3,214 | 2,500 | § __.222 BA-CVA, § __.224-225 SA-CVA |
+| Operational Risk | 1,945 | 2,500 | § __.150 two-component BI, no ILM |
+| Securitization | 1,763 | 2,500 | SEC-SA only (§ __.133); BCBS SEC-ERBA/STC comparison-only |
+| Capital + G-SIB | 6,737 | 6,500 | MSAs out of threshold tests; G-SIB per separate NPR (not reviewed) |
+| ECL | 2,820 | 4,000 | Implemented (not governed by the NPR) |
+| IRB | 1,224 | 2,500 | Implemented (comparison only) |
 | Pillar 2 | 3,048 | 3,500 | Implemented |
 | Pillar 3 | 3,032 | 2,500 | Implemented |
 | Reporting | 4,080 | 4,000 | Implemented |
 | Stress Testing | 1,169 | 5,000 | Implemented (provision rates calibrated, not sourced) |
-| Utils | 839 | 4,000 | Implemented |
-| Ref Data + Data Gen | 2,040 | 2,000 | Implemented |
-| Core | 625 | — | Implemented |
-| **Src total** | **47,628** | **~49,000** | — |
-| Tests | 11,788 lines / 931 tests | 8,000 | All passing |
+| Utils | 843 | 4,000 | Implemented |
+| Ref Data + Data Gen | 2,054 | 2,000 | Lookup tables aligned to § __.111 |
+| Core | 820 | — | Enums re-mapped to NPR bucket taxonomies |
+| **Src total** | **51,185** | **~49,000** | — |
+| Tests | 14,321 lines / 1,374 tests | 8,000 | All passing |
 
-Regulatory-accuracy status is tracked in `docs/AUDIT_REPORT.md`.  Every
-parameter table that could not be reconciled to BCBS/ERBA text carries a
-`# TODO: VERIFY` marker in source.
+Regulatory-accuracy status is tracked in `docs/AUDIT_REPORT.md` (Part 1: formula audit;
+Part 2: reconciliation against the ERBA NPR text). The verbatim transcription of the NPR
+tables is `docs/ERBA_NPR_2026_parameter_reference.md`. Every parameter the NPR text does
+not settle carries a `# TODO: VERIFY` marker in source.
 
 ## How To Develop Each Phase
 
