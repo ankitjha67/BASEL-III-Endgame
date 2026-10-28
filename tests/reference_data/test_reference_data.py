@@ -409,14 +409,14 @@ class TestResidentialMortgageRW:
         assert rw == pytest.approx(0.25)
 
     def test_ltv_80(self) -> None:
-        """70% < LTV <= 80%: 40% RW."""
+        """60% < LTV <= 80%: 30% RW (Table 5 to § __.111)."""
         rw = get_risk_weight(CounterpartyType.RETAIL_MORTGAGE, ltv_ratio=0.75)
-        assert rw == pytest.approx(0.40)
+        assert rw == pytest.approx(0.30)
 
     def test_ltv_above_100(self) -> None:
-        """LTV > 100%: 100% RW (whole-loan approach)."""
+        """LTV > 100%: 70% RW (Table 5 to § __.111)."""
         rw = get_risk_weight(CounterpartyType.RETAIL_MORTGAGE, ltv_ratio=1.10)
-        assert rw == pytest.approx(1.00)
+        assert rw == pytest.approx(0.70)
 
 
 class TestCRERiskWeights:
@@ -456,10 +456,10 @@ class TestCriticalRiskWeights:
         rw = get_risk_weight(CounterpartyType.MSA)
         assert rw == pytest.approx(2.50)
 
-    def test_adc_150_percent(self) -> None:
-        """ADC = 150% RW per ERBA NPR p.145."""
+    def test_adc_100_percent(self) -> None:
+        """ADC that is not HVCRE = 100% RW per ERBA NPR § __.111(f)(4)."""
         rw = get_risk_weight(CounterpartyType.ADC)
-        assert rw == pytest.approx(1.50)
+        assert rw == pytest.approx(1.00)
 
     def test_defaulted_150_percent(self) -> None:
         """Defaulted = 150% RW per 12 CFR 217.32(k)."""

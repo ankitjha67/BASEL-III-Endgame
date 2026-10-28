@@ -1,883 +1,638 @@
-"""Standardized Approach CVA (SA-CVA) capital calculation.
+"""Standardized approach for CVA risk (SA-CVA) — ERBA NPR §__.224–§__.225.
 
-Implements the full SA-CVA framework per BCBS d424 Section 5.2 and
-the US Federal Reserve Basel III Endgame Re-Proposal (ERBA NPR pp. 284-295).
+Implements the SA-CVA aggregation of the March 2026 US re-proposal. The
+SA-CVA is a sensitivities-based method: the banking organization supplies
+sensitivities of aggregate regulatory CVA (s^CVA) and of the market value
+of eligible CVA hedges (s^Hdg) to each risk factor; this module applies the
+regulatory risk weights and correlations of §__.225 and aggregates.
 
-SA-CVA uses a sensitivity-based approach analogous to FRTB SBM, computing
-delta and vega risk charges for counterparty credit spread and interest rate
-risk factors. The key formula is:
+Risk classes (§__.224(b)): delta for interest rate, FX, counterparty
+credit spread, reference credit spread, equity and commodity; vega for
+the five exposure-related classes (no counterparty credit spread vega).
 
-    K_CVA = sqrt(K_spread^2 + K_IR^2 + 2 * rho_type * K_spread * K_IR)
+Formulas (§__.225(a)):
 
-Where:
-    K_spread = inter-bucket aggregation of credit spread delta + vega
-    K_IR     = interest rate component (delta + vega)
-    rho_type = 0.30 (cross-risk-type correlation)
+    WS_k  = RW_k · s_k^CVA − RW_k · s_k^Hdg          (net weighted sensitivity)
+    WS_k^Hdg = RW_k · s_k^Hdg
+    K_b   = sqrt( Σ_k WS_k² + Σ_k Σ_{l≠k} ρ_kl WS_k WS_l + R · Σ_k (WS_k^Hdg)² ),  R = 0.01
+    S_b   = max( min( Σ_k WS_k , K_b ), −K_b )         (always applied)
+    K     = m_CVA · sqrt( Σ_b K_b² + Σ_b Σ_{c≠b} γ_bc S_b S_c ),  m_CVA = 1 (default)
+    K_SA-CVA = Σ_{risk classes} ( K_delta + K_vega )   (simple sum, no diversification)
+    RWA_CVA  = 12.5 · K_SA-CVA
+
+Sensitivity conventions (§__.224(e)): interest rate and credit spread
+delta per 0.0001 absolute shift divided by 0.0001; FX, equity and
+commodity delta per 1% relative shift divided by 0.01; vega per 1%
+relative shift of volatilities divided by 0.01. Regulatory CVA must be
+computed with the inputs of §__.224(d), including a margin period of risk
+of at least 9 + N business days.
 
 All monetary amounts in USD millions ($M).
-
-References:
-    - BCBS d424, Section 5.2: Standardized Approach for CVA risk
-    - BCBS d457 MAR51: SA-CVA detailed specifications
-    - ERBA NPR pp. 284-295: US implementation of SA-CVA
-    - ERBA NPR p. 287: Intra-bucket and inter-bucket correlation
-    - ERBA NPR p. 288: Cross-risk-type aggregation
 """
 
 from __future__ import annotations
 
 import math
-from typing import Optional
+from collections import OrderedDict
+from collections.abc import Hashable
 
 import numpy as np
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from src.cva_risk.cva_params import (
-    BA_CVA_RISK_WEIGHTS,
-    ELIGIBLE_CVA_HEDGE_TYPES,
-    MAX_EFFECTIVE_MATURITY,
-    MIN_EFFECTIVE_MATURITY,
-    RATING_TO_CVA_RATING,
-    SA_CVA_BUCKETS,
-    SA_CVA_INTRA_BUCKET_CORRELATION,
-    SA_CVA_INTER_BUCKET_CORRELATION,
-    SA_CVA_INTER_BUCKET_CORRELATION_MATRIX,
-    SA_CVA_IR_TENOR_VERTICES,
-    SA_CVA_RISK_TYPE_CORRELATION,
-    SA_CVA_TENOR_CORRELATION_BASE,
-    SA_CVA_TENOR_VERTICES,
-    SA_CVA_VEGA_RISK_WEIGHT,
+    RWA_MULTIPLIER,
+    SA_CVA_CCS_INDEX_BUCKET,
+    SA_CVA_CCS_RHO_INDEX_DIFF,
+    SA_CVA_CCS_RHO_INDEX_SAME_INDEX,
+    SA_CVA_CCS_RHO_INDEX_SAME_SERIES,
+    SA_CVA_CCS_RHO_NAME_AFFILIATE,
+    SA_CVA_CCS_RHO_NAME_DIFF,
+    SA_CVA_CCS_RHO_NAME_SAME,
+    SA_CVA_CCS_RHO_QUALITY_DIFF,
+    SA_CVA_CCS_RHO_QUALITY_SAME,
+    SA_CVA_CCS_RHO_TENOR_DIFF,
+    SA_CVA_CCS_RHO_TENOR_SAME,
+    SA_CVA_CCS_TENORS,
+    SA_CVA_COMMODITY_DELTA_RW,
+    SA_CVA_COMMODITY_VEGA_RW,
+    SA_CVA_EQUITY_DELTA_RW,
+    SA_CVA_FX_DELTA_RW,
+    SA_CVA_FX_GAMMA,
+    SA_CVA_FX_VEGA_RW,
+    SA_CVA_HEDGING_DISALLOWANCE_R,
+    SA_CVA_IR_GAMMA,
+    SA_CVA_IR_INFLATION_KEY,
+    SA_CVA_IR_PARALLEL_KEY,
+    SA_CVA_IR_SPECIFIED_CURRENCIES,
+    SA_CVA_IR_TENORS,
+    SA_CVA_IR_VEGA_INFLATION_KEY,
+    SA_CVA_IR_VEGA_RATE_KEY,
+    SA_CVA_IR_VEGA_RHO,
+    SA_CVA_IR_VEGA_RW,
+    SA_CVA_MULTIPLIER_DEFAULT,
+    SA_CVA_RCS_RISK_WEIGHTS,
+    SA_CVA_RCS_VEGA_RW,
+    SA_CVA_VEGA_RISK_CLASSES,
+    CVACreditQuality,
+    CVASector,
     SACVARiskFactorType,
-    get_sa_cva_bucket,
-    get_sa_cva_risk_weight,
-    hedge_maturity_adjustment,
-    is_investment_grade,
-    supervisory_discount_factor,
-    tenor_correlation,
+    ccs_gamma,
+    ccs_quality_category,
+    commodity_gamma,
+    credit_quality_from_grade,
+    equity_gamma,
+    equity_vega_risk_weight,
+    get_ccs_bucket,
+    get_ccs_risk_weight,
+    ir_delta_correlation,
+    ir_delta_risk_weight,
+    normalize_sector,
+    rcs_gamma,
 )
 
-
 # =========================================================================
-#  Data Models
+#  Input model
 # =========================================================================
-
-class SACVACounterparty(BaseModel):
-    """A counterparty for SA-CVA calculation.
-
-    Per ERBA NPR p. 284: Each counterparty is characterized by its sector,
-    credit quality, exposure at default, and effective maturity.
-    """
-    counterparty_id: str = Field(description="Unique counterparty identifier")
-    sector: str = Field(
-        default="CORPORATE",
-        description="Sector: SOVEREIGN, FINANCIAL, CORPORATE, PUBLIC_SECTOR, OTHER"
-    )
-    rating: str = Field(
-        default="BBB",
-        description="Credit rating or internal grade equivalent"
-    )
-    ead: float = Field(description="Exposure at Default in $M")
-    effective_maturity: float = Field(
-        default=2.5,
-        description="Effective maturity in years, clipped to [1, 5]"
-    )
-    is_financial: bool = Field(
-        default=False,
-        description="True if financial institution (affects SA-CCR alpha)"
-    )
-    netting_set_id: str = Field(
-        default="",
-        description="Netting set this counterparty belongs to"
-    )
-
-    @field_validator("effective_maturity")
-    @classmethod
-    def clip_maturity(cls, v: float) -> float:
-        """Clip effective maturity to [1, 5] per ERBA NPR p. 283."""
-        return max(MIN_EFFECTIVE_MATURITY, min(v, MAX_EFFECTIVE_MATURITY))
-
-    @property
-    def credit_quality(self) -> str:
-        """Determine IG vs HY/NR classification per ERBA NPR p. 282."""
-        return "IG" if is_investment_grade(self.rating) else "HY"
-
 
 class SACVASensitivity(BaseModel):
-    """A single CVA sensitivity for SA-CVA delta or vega calculation.
+    """One SA-CVA sensitivity record per ERBA NPR §__.224(e) / §__.225(b).
 
-    Per ERBA NPR p. 285: Sensitivities represent the change in CVA
-    for a unit shift in the underlying risk factor.
+    ``cva_sensitivity`` is the sensitivity of aggregate regulatory CVA to
+    the risk factor (s_k^CVA) and ``hedge_sensitivity`` the sensitivity of
+    the market value of all eligible CVA hedges (s_k^Hdg), both in $M per
+    unit shift using the §__.224(e) conventions. Records sharing the same
+    risk factor are summed before weighting.
+
+    Risk factor identification by risk class:
+        - Interest rate delta: ``currency`` plus ``tenor`` (1, 2, 5, 10, 30
+          for specified currencies) or ``is_inflation``; for non-specified
+          currencies any tenor sensitivity is pooled into the single
+          parallel-shift factor.
+        - Interest rate vega: ``currency`` plus ``is_inflation`` (inflation
+          volatility) or not (rate volatility).
+        - FX delta/vega: ``currency`` (the non-reporting currency).
+        - Counterparty credit spread delta: ``entity_id``, ``tenor`` (0.5, 1,
+          3, 5, 10), ``credit_quality``, and ``sector`` /
+          ``government_backed_financial`` / ``is_index`` (+ ``index_series``)
+          to place the entity in a Table 3 bucket; ``affiliate_group`` marks
+          legal entities under common control.
+        - Reference credit spread delta/vega: ``bucket`` 1–17 (Table 5);
+          ``credit_quality`` selects the bucket 8 weight.
+        - Equity delta/vega: ``bucket`` 1–13 (Table 8).
+        - Commodity delta/vega: ``bucket`` 1–12 (Table 9).
     """
-    counterparty_id: str = Field(description="Counterparty this sensitivity belongs to")
-    risk_factor_type: SACVARiskFactorType = Field(
-        description="Type of risk factor (credit spread, IR, FX, etc.)"
-    )
-    tenor: float = Field(
-        description="Tenor vertex in years (e.g., 0.5, 1.0, 3.0, 5.0, 10.0)"
-    )
-    value: float = Field(description="Sensitivity value in $M")
-    bucket: int = Field(
-        default=0,
-        description="SA-CVA bucket number (auto-assigned if 0)"
-    )
-    is_vega: bool = Field(
-        default=False,
-        description="True if this is a vega sensitivity, False for delta"
-    )
-    currency: str = Field(
-        default="USD",
-        description="Currency of the sensitivity"
-    )
+    risk_class: SACVARiskFactorType
+    is_vega: bool = False
+    cva_sensitivity: float = Field(description="s_k^CVA in $M per unit shift")
+    hedge_sensitivity: float = Field(default=0.0, description="s_k^Hdg in $M per unit shift")
+    currency: str = Field(default="", description="Currency bucket (IR, FX)")
+    bucket: int = Field(default=0, description="Bucket number (CCS, RCS, equity, commodity)")
+    tenor: float | None = Field(default=None, description="Tenor in years (IR, CCS)")
+    is_inflation: bool = Field(default=False, description="IR inflation (vol) factor")
+    entity_id: str = Field(default="", description="Counterparty / reference name / index id (CCS)")
+    affiliate_group: str = Field(default="", description="Common-control group id (CCS)")
+    index_series: str = Field(default="", description="Index series (CCS bucket 8)")
+    is_index: bool = Field(default=False, description="Credit index under optional treatment (CCS)")
+    sector: CVASector | None = Field(default=None, description="Sector (CCS bucket assignment)")
+    credit_quality: CVACreditQuality | None = Field(default=None)
+    government_backed_financial: bool = Field(default=False, description="CCS bucket 1(c)")
 
-
-class SACVAHedge(BaseModel):
-    """An eligible CVA hedge position for SA-CVA.
-
-    Per ERBA NPR p. 288: Only single-name CDS, index CDS, and contingent
-    CDS are eligible for CVA hedging.
-    """
-    hedge_id: str = Field(description="Unique hedge identifier")
-    counterparty_id: str = Field(
-        default="",
-        description="Counterparty being hedged (for single-name CDS)"
-    )
-    hedge_type: str = Field(
-        description="SINGLE_NAME_CDS, INDEX_CDS, or CONTINGENT_CDS"
-    )
-    notional: float = Field(description="Hedge notional in $M")
-    maturity: float = Field(description="Remaining hedge maturity in years")
-    rating: str = Field(
-        default="BBB",
-        description="Reference entity rating for CDS"
-    )
-    sector: str = Field(
-        default="CORPORATE",
-        description="Reference entity sector"
-    )
-    tenor: float = Field(
-        default=5.0,
-        description="CDS tenor vertex for sensitivity mapping"
-    )
-    bucket: int = Field(
-        default=0,
-        description="SA-CVA bucket number (auto-assigned if 0)"
-    )
-
-    @field_validator("hedge_type")
+    @field_validator("sector", mode="before")
     @classmethod
-    def validate_hedge_type(cls, v: str) -> str:
-        """Ensure hedge type is eligible per ERBA NPR p. 288."""
-        if v not in ELIGIBLE_CVA_HEDGE_TYPES:
+    def _coerce_sector(cls, v: object) -> CVASector | None:
+        if v is None or isinstance(v, CVASector):
+            return v
+        return normalize_sector(str(v))
+
+    @field_validator("credit_quality", mode="before")
+    @classmethod
+    def _coerce_quality(cls, v: object) -> CVACreditQuality | None:
+        if v is None or isinstance(v, CVACreditQuality):
+            return v
+        return credit_quality_from_grade(str(v))
+
+    @field_validator("currency")
+    @classmethod
+    def _upper_ccy(cls, v: str) -> str:
+        return v.strip().upper()
+
+    @model_validator(mode="after")
+    def _validate_by_class(self) -> SACVASensitivity:
+        rc = self.risk_class
+        if self.is_vega and rc not in SA_CVA_VEGA_RISK_CLASSES:
             raise ValueError(
-                f"Hedge type {v!r} not eligible. Must be one of: "
-                f"{sorted(ELIGIBLE_CVA_HEDGE_TYPES)}"
+                "No vega capital requirement is computed for the counterparty "
+                "credit spread risk class (ERBA NPR §__.224(b)(2))"
             )
-        return v
+        if rc in (SACVARiskFactorType.INTEREST_RATE, SACVARiskFactorType.FX):
+            if not self.currency:
+                raise ValueError(f"{rc.value} sensitivity requires a currency")
+        if rc is SACVARiskFactorType.INTEREST_RATE and not self.is_vega:
+            specified = self.currency in SA_CVA_IR_SPECIFIED_CURRENCIES
+            if specified and not self.is_inflation:
+                if self.tenor is None or float(self.tenor) not in SA_CVA_IR_TENORS:
+                    raise ValueError(
+                        f"IR delta tenor for specified currency must be one of "
+                        f"{SA_CVA_IR_TENORS}, got {self.tenor}"
+                    )
+        if rc is SACVARiskFactorType.COUNTERPARTY_CREDIT_SPREAD:
+            if self.tenor is None or float(self.tenor) not in SA_CVA_CCS_TENORS:
+                raise ValueError(
+                    f"Counterparty credit spread tenor must be one of {SA_CVA_CCS_TENORS}"
+                )
+            if not self.entity_id:
+                raise ValueError("Counterparty credit spread sensitivity requires entity_id")
+            if self.credit_quality is None:
+                raise ValueError("Counterparty credit spread sensitivity requires credit_quality")
+            if self.bucket == 0:
+                if not self.is_index and self.sector is None:
+                    raise ValueError("Provide sector, is_index or an explicit bucket (Table 3)")
+                self.bucket = get_ccs_bucket(
+                    self.sector or CVASector.OTHER_SECTOR,
+                    self.government_backed_financial,
+                    self.is_index,
+                )
+            elif self.bucket == SA_CVA_CCS_INDEX_BUCKET:
+                self.is_index = True
+            if not 1 <= self.bucket <= 8:
+                raise ValueError("Counterparty credit spread bucket must be 1–8")
+        if rc is SACVARiskFactorType.REFERENCE_CREDIT_SPREAD:
+            if not 1 <= self.bucket <= 17:
+                raise ValueError("Reference credit spread bucket must be 1–17 (Table 5)")
+            if self.bucket == 8 and self.credit_quality is None:
+                raise ValueError(
+                    "Reference credit spread bucket 8 requires credit_quality "
+                    "(speculative 3.0% / sub-speculative 7.0%)"
+                )
+        if rc is SACVARiskFactorType.EQUITY and not 1 <= self.bucket <= 13:
+            raise ValueError("Equity bucket must be 1–13 (Table 8)")
+        if rc is SACVARiskFactorType.COMMODITY and not 1 <= self.bucket <= 12:
+            raise ValueError("Commodity bucket must be 1–12 (Table 9)")
+        return self
+
+    # ---- derived classification ------------------------------------------
+
+    @property
+    def bucket_key(self) -> Hashable:
+        """Bucket identifier: currency for IR/FX, bucket number otherwise."""
+        if self.risk_class in (SACVARiskFactorType.INTEREST_RATE, SACVARiskFactorType.FX):
+            return self.currency
+        return self.bucket
+
+    @property
+    def factor_key(self) -> Hashable:
+        """Risk factor identifier within the bucket (records sharing a key are summed)."""
+        rc = self.risk_class
+        if rc is SACVARiskFactorType.INTEREST_RATE:
+            if self.is_vega:
+                return SA_CVA_IR_VEGA_INFLATION_KEY if self.is_inflation else SA_CVA_IR_VEGA_RATE_KEY
+            if self.is_inflation:
+                return SA_CVA_IR_INFLATION_KEY
+            if self.currency in SA_CVA_IR_SPECIFIED_CURRENCIES:
+                return float(self.tenor)  # type: ignore[arg-type]
+            return SA_CVA_IR_PARALLEL_KEY
+        if rc is SACVARiskFactorType.FX:
+            return self.currency
+        if rc is SACVARiskFactorType.COUNTERPARTY_CREDIT_SPREAD:
+            return (self.entity_id, self.index_series, float(self.tenor))  # type: ignore[arg-type]
+        # Reference credit spread, equity, commodity: one factor per bucket.
+        return self.bucket
+
+    @property
+    def risk_weight(self) -> float:
+        """RW_k per ERBA NPR §__.225 Tables 1, 3, 5, 8, 9 and §__.225(b)."""
+        rc = self.risk_class
+        if rc is SACVARiskFactorType.INTEREST_RATE:
+            if self.is_vega:
+                return SA_CVA_IR_VEGA_RW
+            specified = self.currency in SA_CVA_IR_SPECIFIED_CURRENCIES
+            return ir_delta_risk_weight(self.factor_key, specified)  # type: ignore[arg-type]
+        if rc is SACVARiskFactorType.FX:
+            return SA_CVA_FX_VEGA_RW if self.is_vega else SA_CVA_FX_DELTA_RW
+        if rc is SACVARiskFactorType.COUNTERPARTY_CREDIT_SPREAD:
+            assert self.credit_quality is not None
+            return get_ccs_risk_weight(
+                self.sector or CVASector.OTHER_SECTOR,
+                self.credit_quality,
+                self.government_backed_financial,
+                self.is_index,
+            )
+        if rc is SACVARiskFactorType.REFERENCE_CREDIT_SPREAD:
+            if self.is_vega:
+                return SA_CVA_RCS_VEGA_RW
+            q = self.credit_quality or CVACreditQuality.INVESTMENT_GRADE
+            return SA_CVA_RCS_RISK_WEIGHTS[self.bucket][q]
+        if rc is SACVARiskFactorType.EQUITY:
+            if self.is_vega:
+                return equity_vega_risk_weight(self.bucket)
+            return SA_CVA_EQUITY_DELTA_RW[self.bucket]
+        if self.is_vega:
+            return SA_CVA_COMMODITY_VEGA_RW
+        return SA_CVA_COMMODITY_DELTA_RW[self.bucket]
+
+
+# =========================================================================
+#  Result models
+# =========================================================================
+
+class SACVAFactorResult(BaseModel):
+    """Aggregated risk factor k within a bucket (ERBA NPR §__.225(a))."""
+    factor: str
+    cva_sensitivity: float = Field(description="Σ s_k^CVA in $M")
+    hedge_sensitivity: float = Field(description="Σ s_k^Hdg in $M")
+    weighted_sensitivity: float = Field(description="WS_k = RW·(s^CVA − s^Hdg) in $M")
+    hedge_weighted_sensitivity: float = Field(description="WS_k^Hdg = RW·s^Hdg in $M")
 
 
 class SACVABucketResult(BaseModel):
-    """Result of SA-CVA intra-bucket aggregation for a single bucket.
+    """Intra-bucket aggregation result (ERBA NPR §__.225(a))."""
+    bucket: str
+    capital_charge: float = Field(description="K_b in $M")
+    sum_weighted_sensitivity: float = Field(description="Σ_k WS_k in $M")
+    s_b: float = Field(description="max(min(ΣWS_k, K_b), −K_b) in $M")
+    hedge_disallowance_term: float = Field(description="R·Σ_k (WS_k^Hdg)² in $M²")
+    factors: list[SACVAFactorResult] = Field(default_factory=list)
 
-    Per ERBA NPR p. 287: Intra-bucket aggregation uses counterparty
-    correlation rho = 0.35 for different counterparties within the
-    same sector bucket.
-    """
-    bucket: int = Field(description="SA-CVA bucket number (1-10)")
-    bucket_name: str = Field(default="", description="Descriptive bucket name")
-    capital_charge: float = Field(
-        description="K_b: intra-bucket capital charge in $M"
-    )
-    net_weighted_sensitivity: float = Field(
-        description="S_b = sum of weighted sensitivities in $M"
-    )
-    counterparty_count: int = Field(
-        default=0,
-        description="Number of counterparties in this bucket"
-    )
-    gross_exposure: float = Field(
-        default=0.0,
-        description="Gross weighted sensitivity before netting in $M"
-    )
-    hedge_benefit: float = Field(
-        default=0.0,
-        description="Reduction due to hedges in $M"
-    )
+
+class SACVARiskClassResult(BaseModel):
+    """Risk-class level result for delta or vega (ERBA NPR §__.225(a))."""
+    risk_class: SACVARiskFactorType
+    is_vega: bool
+    capital_charge: float = Field(description="K = m_CVA·sqrt(ΣK_b² + ΣΣγ S_b S_c) in $M")
+    capital_charge_unscaled: float = Field(description="K before m_CVA in $M")
+    bucket_results: list[SACVABucketResult] = Field(default_factory=list)
 
 
 class SACVAResult(BaseModel):
-    """Complete SA-CVA capital charge result.
-
-    Per ERBA NPR p. 288: K_CVA = sqrt(K_spread^2 + K_IR^2 + 2*rho*K_spread*K_IR)
-    """
-    k_spread: float = Field(
-        description="Credit spread component capital charge in $M"
-    )
-    k_ir: float = Field(
-        default=0.0,
-        description="Interest rate component capital charge in $M"
-    )
-    k_cva: float = Field(
-        description="Total SA-CVA capital charge in $M"
-    )
-    rwa: float = Field(
-        description="CVA RWA = K_CVA * 12.5 in $M"
-    )
+    """SA-CVA capital requirement per ERBA NPR §__.224–§__.225."""
     approach: str = Field(default="SA-CVA")
-    bucket_results: list[SACVABucketResult] = Field(default_factory=list)
-    counterparty_breakdown: dict[str, float] = Field(
-        default_factory=dict,
-        description="Capital contribution by counterparty ID"
-    )
-    delta_charge: float = Field(
-        default=0.0,
-        description="Delta component of the spread charge in $M"
-    )
-    vega_charge: float = Field(
-        default=0.0,
-        description="Vega component of the spread charge in $M"
-    )
-    hedge_benefit_total: float = Field(
-        default=0.0,
-        description="Total hedge benefit across all buckets in $M"
-    )
+    k_cva: float = Field(description="Σ risk classes (K_delta + K_vega) in $M")
+    rwa: float = Field(description="12.5 · K_SA-CVA in $M")
+    m_cva: float = Field(default=SA_CVA_MULTIPLIER_DEFAULT)
+    delta_charge: float = Field(default=0.0, description="Σ delta K across risk classes in $M")
+    vega_charge: float = Field(default=0.0, description="Σ vega K across risk classes in $M")
+    risk_class_results: list[SACVARiskClassResult] = Field(default_factory=list)
+
+    @property
+    def k_by_risk_class(self) -> dict[str, float]:
+        """K per (risk class, delta|vega) label, $M."""
+        return {
+            f"{r.risk_class.value}:{'VEGA' if r.is_vega else 'DELTA'}": r.capital_charge
+            for r in self.risk_class_results
+        }
 
 
 # =========================================================================
-#  SA-CVA Sensitivity Generation
+#  Correlation helpers
 # =========================================================================
 
-def compute_counterparty_cs_sensitivity(
-    counterparty: SACVACounterparty,
-    tenor: float = 5.0,
+class _Factor:
+    """Internal accumulator for one risk factor within a bucket."""
+
+    __slots__ = ("key", "cva", "hdg", "ws", "ws_hdg", "meta")
+
+    def __init__(self, key: Hashable, meta: SACVASensitivity) -> None:
+        self.key = key
+        self.cva = 0.0
+        self.hdg = 0.0
+        self.ws = 0.0
+        self.ws_hdg = 0.0
+        self.meta = meta
+
+
+def _ccs_rho(a: SACVASensitivity, b: SACVASensitivity) -> float:
+    """Intra-bucket counterparty credit spread correlation per ERBA NPR §__.225(b)(3).
+
+    ρ_kl = ρ_tenor × ρ_name × ρ_quality with ρ_tenor 100%/90%, ρ_name
+    100% (same entity) / 90% (affiliates) / 50%, ρ_quality 100% (same
+    category; speculative and sub-speculative are one category) / 80%. In
+    the index bucket ρ_name is 100% (same index and series) / 90% (same
+    index, different series) / 80%.
+    """
+    rho_tenor = SA_CVA_CCS_RHO_TENOR_SAME if a.tenor == b.tenor else SA_CVA_CCS_RHO_TENOR_DIFF
+    if a.bucket == SA_CVA_CCS_INDEX_BUCKET:
+        if a.entity_id == b.entity_id and a.index_series == b.index_series:
+            rho_name = SA_CVA_CCS_RHO_INDEX_SAME_SERIES
+        elif a.entity_id == b.entity_id:
+            rho_name = SA_CVA_CCS_RHO_INDEX_SAME_INDEX
+        else:
+            rho_name = SA_CVA_CCS_RHO_INDEX_DIFF
+    else:
+        if a.entity_id == b.entity_id:
+            rho_name = SA_CVA_CCS_RHO_NAME_SAME
+        elif a.affiliate_group and a.affiliate_group == b.affiliate_group:
+            rho_name = SA_CVA_CCS_RHO_NAME_AFFILIATE
+        else:
+            rho_name = SA_CVA_CCS_RHO_NAME_DIFF
+    assert a.credit_quality is not None and b.credit_quality is not None
+    same_q = ccs_quality_category(a.credit_quality) == ccs_quality_category(b.credit_quality)
+    rho_quality = SA_CVA_CCS_RHO_QUALITY_SAME if same_q else SA_CVA_CCS_RHO_QUALITY_DIFF
+    return rho_tenor * rho_name * rho_quality
+
+
+def intra_bucket_correlation(
+    risk_class: SACVARiskFactorType,
+    is_vega: bool,
+    f_k: _Factor,
+    f_l: _Factor,
 ) -> float:
-    """Compute the credit spread delta sensitivity for a counterparty.
+    """ρ_kl between two risk factors of the same bucket per ERBA NPR §__.225(b).
 
-    Per ERBA NPR p. 285: The CVA sensitivity to a 1bp shift in the
-    counterparty's credit spread, approximated as:
-        s_c,t = EAD_c * d_c * M_c * RW_c
-
-    Where d_c is the supervisory discount factor and RW_c is the
-    sector/quality risk weight.
-
-    Args:
-        counterparty: The counterparty to compute sensitivity for.
-        tenor: Tenor vertex to assign the sensitivity.
-
-    Returns:
-        Credit spread sensitivity in $M.
+    Interest rate delta: Table 2 (specified currencies) or 40% (parallel vs
+    inflation, other currencies); interest rate vega: 40% between rate and
+    inflation volatility; counterparty credit spread: product of tenor,
+    name and quality factors. FX, reference credit spread, equity and
+    commodity buckets contain a single risk factor.
     """
-    d_c = supervisory_discount_factor(counterparty.effective_maturity)
-    rw = get_sa_cva_risk_weight(counterparty.sector, counterparty.credit_quality)
-    return counterparty.ead * d_c * counterparty.effective_maturity * rw
+    if f_k.key == f_l.key:
+        return 1.0
+    if risk_class is SACVARiskFactorType.INTEREST_RATE:
+        if is_vega:
+            return SA_CVA_IR_VEGA_RHO
+        specified = f_k.meta.currency in SA_CVA_IR_SPECIFIED_CURRENCIES
+        return ir_delta_correlation(f_k.key, f_l.key, specified)  # type: ignore[arg-type]
+    if risk_class is SACVARiskFactorType.COUNTERPARTY_CREDIT_SPREAD:
+        return _ccs_rho(f_k.meta, f_l.meta)
+    # Single-factor buckets never reach here with distinct keys.
+    return 1.0
 
 
-def generate_counterparty_sensitivities(
-    counterparty: SACVACounterparty,
-    tenors: Optional[list[float]] = None,
-) -> list[SACVASensitivity]:
-    """Generate SA-CVA credit spread sensitivities for a counterparty.
-
-    Per ERBA NPR p. 285: Sensitivities are allocated across the standard
-    tenor vertices. If no explicit tenors are provided, all exposure is
-    assigned to the 5Y vertex (most common for derivatives).
-
-    Args:
-        counterparty: The counterparty.
-        tenors: Optional list of tenor vertices. Defaults to [5.0].
-
-    Returns:
-        List of SACVASensitivity objects.
-    """
-    if tenors is None:
-        tenors = [5.0]
-
-    bucket = get_sa_cva_bucket(counterparty.sector, counterparty.credit_quality)
-    total_sens = compute_counterparty_cs_sensitivity(counterparty)
-
-    # Distribute sensitivity across tenors (equal allocation if multiple)
-    per_tenor = total_sens / len(tenors) if tenors else total_sens
-
-    sensitivities = []
-    for t in tenors:
-        sensitivities.append(SACVASensitivity(
-            counterparty_id=counterparty.counterparty_id,
-            risk_factor_type=SACVARiskFactorType.COUNTERPARTY_CREDIT_SPREAD,
-            tenor=t,
-            value=per_tenor,
-            bucket=bucket,
-            is_vega=False,
-        ))
-
-    return sensitivities
+def cross_bucket_correlation(
+    risk_class: SACVARiskFactorType,
+    bucket_b: Hashable,
+    bucket_c: Hashable,
+) -> float:
+    """γ_bc per ERBA NPR §__.225(b): IR 50%, FX 60%, CCS Table 4, RCS Tables
+    6–7, equity and commodity per §__.225(b)(5)–(6). Identical for delta and
+    vega within a risk class."""
+    if bucket_b == bucket_c:
+        return 1.0
+    if risk_class is SACVARiskFactorType.INTEREST_RATE:
+        return SA_CVA_IR_GAMMA
+    if risk_class is SACVARiskFactorType.FX:
+        return SA_CVA_FX_GAMMA
+    b, c = int(str(bucket_b)), int(str(bucket_c))
+    if risk_class is SACVARiskFactorType.COUNTERPARTY_CREDIT_SPREAD:
+        return ccs_gamma(b, c)
+    if risk_class is SACVARiskFactorType.REFERENCE_CREDIT_SPREAD:
+        return rcs_gamma(b, c)
+    if risk_class is SACVARiskFactorType.EQUITY:
+        return equity_gamma(b, c)
+    return commodity_gamma(b, c)
 
 
 # =========================================================================
-#  Hedge Sensitivity Computation
+#  Aggregation
 # =========================================================================
 
-def compute_hedge_sensitivity(
-    hedge: SACVAHedge,
-    exposure_maturity: float = 5.0,
-) -> SACVASensitivity:
-    """Compute the credit spread sensitivity for a CVA hedge.
+def aggregate_bucket(
+    risk_class: SACVARiskFactorType,
+    is_vega: bool,
+    factors: list[_Factor],
+    hedging_disallowance: float = SA_CVA_HEDGING_DISALLOWANCE_R,
+) -> tuple[float, float, float]:
+    """Intra-bucket aggregation per ERBA NPR §__.225(a).
 
-    Per ERBA NPR p. 289: Hedge sensitivities are computed from the
-    CDS notional, adjusted for maturity mismatch.
+    K_b = sqrt( Σ_k WS_k² + Σ_k Σ_{l≠k} ρ_kl WS_k WS_l + R · Σ_k (WS_k^Hdg)² ).
 
     Args:
-        hedge: The hedge position.
-        exposure_maturity: Maturity of the hedged exposure.
+        risk_class: Risk class of the bucket.
+        is_vega: True for vega factors.
+        factors: Aggregated risk factors of the bucket.
+        hedging_disallowance: R (0.01).
 
     Returns:
-        SACVASensitivity representing the hedge (negative sensitivity).
+        (K_b, Σ_k WS_k, R·Σ_k (WS_k^Hdg)²).
     """
-    quality = "IG" if is_investment_grade(hedge.rating) else "HY"
-    bucket = hedge.bucket if hedge.bucket > 0 else get_sa_cva_bucket(
-        hedge.sector, quality,
-    )
-    rw = get_sa_cva_risk_weight(hedge.sector, quality)
-
-    # Maturity mismatch adjustment per ERBA NPR p. 289
-    mat_adj = hedge_maturity_adjustment(hedge.maturity, exposure_maturity)
-
-    # Hedge sensitivity is negative (offsets exposure)
-    # Per ERBA NPR p. 289: hedge_sens = -notional * rw * mat_adj
-    hedge_value = -hedge.notional * rw * mat_adj * min(hedge.maturity, 5.0)
-
-    return SACVASensitivity(
-        counterparty_id=hedge.counterparty_id,
-        risk_factor_type=SACVARiskFactorType.REFERENCE_CREDIT_SPREAD,
-        tenor=hedge.tenor,
-        value=hedge_value,
-        bucket=bucket,
-        is_vega=False,
-    )
-
-
-# =========================================================================
-#  Intra-Bucket Aggregation
-# =========================================================================
-
-def _intra_bucket_aggregate(
-    weighted_sensitivities: list[float],
-    counterparty_ids: list[str],
-    rho_same: float = SA_CVA_INTRA_BUCKET_CORRELATION,
-) -> tuple[float, float]:
-    """Perform intra-bucket aggregation for SA-CVA per ERBA NPR p. 287.
-
-    Within a bucket, sensitivities from the same counterparty have
-    correlation 1.0; sensitivities from different counterparties have
-    correlation rho (default 0.35).
-
-    Formula:
-        K_b = sqrt(sum_k sum_l rho_kl * WS_k * WS_l)
-    where rho_kl = 1.0 if same counterparty, rho otherwise.
-
-    Args:
-        weighted_sensitivities: List of weighted sensitivity values (WS_k).
-        counterparty_ids: Corresponding counterparty IDs for correlation.
-        rho_same: Correlation for different counterparties in same bucket.
-
-    Returns:
-        Tuple of (K_b, S_b) where K_b is the bucket charge and S_b is
-        the net weighted sensitivity.
-    """
-    n = len(weighted_sensitivities)
-    if n == 0:
-        return 0.0, 0.0
-
-    ws = np.array(weighted_sensitivities, dtype=np.float64)
-    s_b = float(np.sum(ws))
-
-    # Build correlation matrix
-    corr = np.full((n, n), rho_same)
+    n = len(factors)
+    ws = np.array([f.ws for f in factors], dtype=np.float64)
+    ws_hdg = np.array([f.ws_hdg for f in factors], dtype=np.float64)
+    corr = np.eye(n)
     for i in range(n):
-        for j in range(n):
-            if counterparty_ids[i] == counterparty_ids[j]:
-                corr[i, j] = 1.0
-
-    # K_b = sqrt(max(WS' * Corr * WS, 0))
-    ws_col = ws.reshape(-1, 1)
-    variance_sum = float(np.sum(corr * (ws_col @ ws_col.T)))
-
-    if variance_sum >= 0:
-        k_b = math.sqrt(variance_sum)
-    else:
-        # Fallback: sum of squares
-        k_b = math.sqrt(float(np.sum(ws ** 2)))
-
-    return k_b, s_b
+        for j in range(i + 1, n):
+            rho = intra_bucket_correlation(risk_class, is_vega, factors[i], factors[j])
+            corr[i, j] = rho
+            corr[j, i] = rho
+    quad = float(ws @ corr @ ws)
+    hedge_term = hedging_disallowance * float(np.sum(ws_hdg ** 2))
+    k_b = math.sqrt(max(quad + hedge_term, 0.0))
+    return k_b, float(np.sum(ws)), hedge_term
 
 
-def _inter_bucket_aggregate(
-    bucket_charges: dict[int, float],
-    bucket_net_sensitivities: dict[int, float],
-) -> float:
-    """Perform inter-bucket aggregation for SA-CVA per ERBA NPR p. 288.
+def aggregate_risk_class(
+    risk_class: SACVARiskFactorType,
+    bucket_charges: OrderedDict[Hashable, float],
+    bucket_sums: OrderedDict[Hashable, float],
+    m_cva: float = SA_CVA_MULTIPLIER_DEFAULT,
+) -> tuple[float, float, dict[Hashable, float]]:
+    """Inter-bucket aggregation per ERBA NPR §__.225(a).
 
-    Formula:
-        K = sqrt(sum_b K_b^2 + sum_{b!=c} gamma_bc * S_b * S_c)
-
-    Where gamma_bc comes from the inter-bucket correlation matrix and
-    S_b = max(min(net_WS_b, K_b), -K_b).
+    K = m_CVA · sqrt( Σ_b K_b² + Σ_b Σ_{c≠b} γ_bc S_b S_c ) with
+    S_b = max(min(Σ_k WS_k, K_b), −K_b) applied unconditionally
+    (preamble fn. 510).
 
     Args:
-        bucket_charges: Dict of bucket_id -> K_b.
-        bucket_net_sensitivities: Dict of bucket_id -> raw S_b.
+        risk_class: Risk class.
+        bucket_charges: K_b by bucket.
+        bucket_sums: Σ_k WS_k by bucket.
+        m_cva: Multiplier m_CVA.
 
     Returns:
-        Inter-bucket aggregated capital charge in $M.
+        (K scaled by m_CVA, K unscaled, S_b by bucket).
     """
-    if not bucket_charges:
-        return 0.0
-
-    buckets = sorted(bucket_charges.keys())
-
-    # Cap S_b per MAR21.4(4) / ERBA NPR p. 288
-    capped_s: dict[int, float] = {}
-    for b in buckets:
-        k_b = bucket_charges[b]
-        raw_s = bucket_net_sensitivities.get(b, 0.0)
-        capped_s[b] = max(min(raw_s, k_b), -k_b)
-
-    # Sum of K_b^2
-    sum_kb_sq = sum(k ** 2 for k in bucket_charges.values())
-
-    # Cross-bucket terms
-    cross_sum = 0.0
+    buckets = list(bucket_charges.keys())
+    s_b: dict[Hashable, float] = {
+        b: max(min(bucket_sums[b], bucket_charges[b]), -bucket_charges[b]) for b in buckets
+    }
+    total = sum(k * k for k in bucket_charges.values())
     for i, b in enumerate(buckets):
-        for j, c in enumerate(buckets):
-            if b < c:
-                # Buckets are 1-indexed, matrix is 0-indexed
-                gamma = float(
-                    SA_CVA_INTER_BUCKET_CORRELATION_MATRIX[b - 1, c - 1]
-                )
-                cross_sum += gamma * capped_s[b] * capped_s[c]
-    cross_sum *= 2  # Symmetric
-
-    total = sum_kb_sq + cross_sum
-
-    if total >= 0:
-        return math.sqrt(total)
-    else:
-        return sum(abs(k) for k in bucket_charges.values())
+        for c in buckets[i + 1:]:
+            total += 2.0 * cross_bucket_correlation(risk_class, b, c) * s_b[b] * s_b[c]
+    k_unscaled = math.sqrt(max(total, 0.0))
+    return m_cva * k_unscaled, k_unscaled, s_b
 
 
 # =========================================================================
-#  SA-CVA Calculator
+#  Calculator
 # =========================================================================
 
 class SACVACalculator:
-    """Standardized Approach CVA (SA-CVA) capital calculator.
-
-    Implements the full SA-CVA framework per BCBS d424 Section 5.2 and
-    ERBA NPR pp. 284-295.
-
-    The calculation flow:
-    1. Map counterparties to SA-CVA buckets by sector/quality
-    2. Compute credit spread delta sensitivities per counterparty
-    3. Apply risk weights to produce weighted sensitivities
-    4. Intra-bucket aggregation (rho = 0.35 across counterparties)
-    5. Inter-bucket aggregation (gamma from correlation matrix)
-    6. Optionally compute vega and IR components
-    7. Final aggregation: K_CVA = sqrt(K_spread^2 + K_IR^2 + 2*rho*K_spread*K_IR)
+    """SA-CVA calculator per ERBA NPR §__.224–§__.225.
 
     Usage::
 
-        calculator = SACVACalculator()
-        result = calculator.calculate(counterparties, hedges=hedges)
-        print(f"SA-CVA charge: ${result.k_cva:,.2f}M")
-        print(f"CVA RWA: ${result.rwa:,.2f}M")
+        calc = SACVACalculator()
+        result = calc.calculate(sensitivities)        # m_CVA = 1
+        result = calc.calculate(sensitivities, m_cva=1.5)
+
+    Args:
+        m_cva: Default multiplier m_CVA (1.0 unless the primary Federal
+            supervisor requires a higher value in writing, §__.225(a)).
     """
+
+    def __init__(self, m_cva: float = SA_CVA_MULTIPLIER_DEFAULT) -> None:
+        if m_cva < SA_CVA_MULTIPLIER_DEFAULT:
+            raise ValueError("m_CVA may not be below its default value of 1.0 (§__.225(a))")
+        self.m_cva = m_cva
 
     def calculate(
         self,
-        counterparties: list[SACVACounterparty],
-        hedges: Optional[list[SACVAHedge]] = None,
-        sensitivities: Optional[list[SACVASensitivity]] = None,
-        include_vega: bool = True,
-        include_ir: bool = False,
+        sensitivities: list[SACVASensitivity],
+        m_cva: float | None = None,
     ) -> SACVAResult:
-        """Calculate the full SA-CVA capital charge.
+        """Compute K_SA-CVA and RWA per ERBA NPR §__.224(b) / §__.225(a).
 
-        Per ERBA NPR p. 284: The SA-CVA charge is computed from counterparty
-        credit spread sensitivities, with optional IR component.
-
-        Args:
-            counterparties: List of counterparties with EAD and maturity.
-            hedges: Optional list of eligible CVA hedges.
-            sensitivities: Optional pre-computed sensitivities. If not
-                provided, sensitivities are generated from counterparty data.
-            include_vega: Whether to include vega component (default True).
-            include_ir: Whether to include IR component (default False,
-                as most banks only have material credit spread CVA risk).
-
-        Returns:
-            SACVAResult with full charge breakdown.
-        """
-        if not counterparties:
-            return SACVAResult(
-                k_spread=0.0, k_ir=0.0, k_cva=0.0, rwa=0.0,
-            )
-
-        # Step 1: Generate or use provided sensitivities
-        if sensitivities is None:
-            sensitivities = self._generate_all_sensitivities(counterparties)
-
-        # Step 2: Compute hedge sensitivities
-        hedge_sensitivities: list[SACVASensitivity] = []
-        if hedges:
-            # Map counterparty maturities for hedge adjustment
-            cp_maturities = {
-                cp.counterparty_id: cp.effective_maturity
-                for cp in counterparties
-            }
-            for h in hedges:
-                exp_mat = cp_maturities.get(h.counterparty_id, 5.0)
-                hedge_sensitivities.append(
-                    compute_hedge_sensitivity(h, exp_mat)
-                )
-
-        # Step 3: Compute delta spread charge
-        delta_result = self._compute_spread_charge(
-            sensitivities=[s for s in sensitivities if not s.is_vega],
-            hedge_sensitivities=[s for s in hedge_sensitivities if not s.is_vega],
-            counterparties=counterparties,
-        )
-
-        delta_charge = delta_result["charge"]
-        bucket_results = delta_result["bucket_results"]
-        cp_breakdown = delta_result["counterparty_breakdown"]
-        total_hedge_benefit = delta_result["hedge_benefit"]
-
-        # Step 4: Compute vega charge (if enabled)
-        vega_charge = 0.0
-        if include_vega:
-            vega_charge = self._compute_vega_charge(counterparties)
-
-        # Step 5: K_spread = delta + vega
-        k_spread = delta_charge + vega_charge
-
-        # Step 6: Compute IR charge (if enabled)
-        k_ir = 0.0
-        if include_ir:
-            k_ir = self._compute_ir_charge(counterparties)
-
-        # Step 7: Final aggregation per ERBA NPR p. 288
-        # K_CVA = sqrt(K_spread^2 + K_IR^2 + 2 * rho * K_spread * K_IR)
-        rho = SA_CVA_RISK_TYPE_CORRELATION
-        k_cva = math.sqrt(
-            k_spread ** 2
-            + k_ir ** 2
-            + 2.0 * rho * k_spread * k_ir
-        )
-
-        return SACVAResult(
-            k_spread=k_spread,
-            k_ir=k_ir,
-            k_cva=k_cva,
-            rwa=k_cva * 12.5,
-            bucket_results=bucket_results,
-            counterparty_breakdown=cp_breakdown,
-            delta_charge=delta_charge,
-            vega_charge=vega_charge,
-            hedge_benefit_total=total_hedge_benefit,
-        )
-
-    def _generate_all_sensitivities(
-        self,
-        counterparties: list[SACVACounterparty],
-    ) -> list[SACVASensitivity]:
-        """Generate credit spread sensitivities for all counterparties.
-
-        Per ERBA NPR p. 285: Each counterparty generates a set of
-        sensitivities across the standard tenor vertices.
+        For each risk class the delta and (where applicable) vega capital
+        requirements are computed separately and summed across risk
+        classes with no diversification benefit.
 
         Args:
-            counterparties: List of counterparties.
+            sensitivities: Regulatory CVA and hedge sensitivities.
+            m_cva: Override of the multiplier for this calculation.
 
         Returns:
-            List of SACVASensitivity objects.
+            SACVAResult with the total, delta/vega split and per-class detail.
         """
-        all_sens: list[SACVASensitivity] = []
-        for cp in counterparties:
-            all_sens.extend(generate_counterparty_sensitivities(cp))
-        return all_sens
+        mult = self.m_cva if m_cva is None else m_cva
+        if mult < SA_CVA_MULTIPLIER_DEFAULT:
+            raise ValueError("m_CVA may not be below its default value of 1.0 (§__.225(a))")
 
-    def _compute_spread_charge(
-        self,
-        sensitivities: list[SACVASensitivity],
-        hedge_sensitivities: list[SACVASensitivity],
-        counterparties: list[SACVACounterparty],
-    ) -> dict:
-        """Compute the credit spread delta charge with bucket aggregation.
-
-        Per ERBA NPR pp. 285-288:
-        1. Assign sensitivities to buckets
-        2. Intra-bucket aggregation with rho = 0.35
-        3. Inter-bucket aggregation with gamma from correlation matrix
-
-        Args:
-            sensitivities: Counterparty credit spread sensitivities.
-            hedge_sensitivities: Hedge credit spread sensitivities.
-            counterparties: Counterparty list for metadata.
-
-        Returns:
-            Dict with 'charge', 'bucket_results', 'counterparty_breakdown',
-            'hedge_benefit'.
-        """
-        # Group sensitivities by bucket
-        bucket_sens: dict[int, list[tuple[str, float]]] = {}
-        cp_contributions: dict[str, float] = {}
-
+        groups: OrderedDict[tuple[SACVARiskFactorType, bool], list[SACVASensitivity]] = OrderedDict()
         for s in sensitivities:
-            bucket_id = s.bucket
-            if bucket_id not in bucket_sens:
-                bucket_sens[bucket_id] = []
-            bucket_sens[bucket_id].append((s.counterparty_id, s.value))
-            cp_contributions[s.counterparty_id] = (
-                cp_contributions.get(s.counterparty_id, 0.0) + s.value
-            )
+            groups.setdefault((s.risk_class, s.is_vega), []).append(s)
 
-        # Add hedge sensitivities (negative values reduce exposure)
-        total_hedge_benefit = 0.0
-        for hs in hedge_sensitivities:
-            bucket_id = hs.bucket
-            if bucket_id not in bucket_sens:
-                bucket_sens[bucket_id] = []
-            bucket_sens[bucket_id].append((hs.counterparty_id, hs.value))
-            total_hedge_benefit += abs(hs.value)
+        class_results: list[SACVARiskClassResult] = []
+        delta_total = 0.0
+        vega_total = 0.0
+        for rc in SACVARiskFactorType:
+            for is_vega in (False, True):
+                recs = groups.get((rc, is_vega))
+                if not recs:
+                    continue
+                res = self.calculate_risk_class(recs, rc, is_vega, mult)
+                class_results.append(res)
+                if is_vega:
+                    vega_total += res.capital_charge
+                else:
+                    delta_total += res.capital_charge
 
-        # Intra-bucket aggregation
-        bucket_charges: dict[int, float] = {}
-        bucket_net_sens: dict[int, float] = {}
-        bucket_results: list[SACVABucketResult] = []
-
-        for bucket_id in sorted(bucket_sens.keys()):
-            entries = bucket_sens[bucket_id]
-            ws_values = [e[1] for e in entries]
-            cp_ids = [e[0] for e in entries]
-
-            k_b, s_b = _intra_bucket_aggregate(ws_values, cp_ids)
-
-            bucket_charges[bucket_id] = k_b
-            bucket_net_sens[bucket_id] = s_b
-
-            bucket_info = SA_CVA_BUCKETS.get(bucket_id, {})
-            bucket_results.append(SACVABucketResult(
-                bucket=bucket_id,
-                bucket_name=str(bucket_info.get("name", f"Bucket {bucket_id}")),
-                capital_charge=k_b,
-                net_weighted_sensitivity=s_b,
-                counterparty_count=len(set(cp_ids)),
-                gross_exposure=sum(abs(v) for v in ws_values if v > 0),
-                hedge_benefit=sum(abs(v) for v in ws_values if v < 0),
-            ))
-
-        # Inter-bucket aggregation
-        charge = _inter_bucket_aggregate(bucket_charges, bucket_net_sens)
-
-        return {
-            "charge": charge,
-            "bucket_results": bucket_results,
-            "counterparty_breakdown": cp_contributions,
-            "hedge_benefit": total_hedge_benefit,
-        }
-
-    def _compute_vega_charge(
-        self,
-        counterparties: list[SACVACounterparty],
-    ) -> float:
-        """Compute SA-CVA vega charge per ERBA NPR p. 289.
-
-        The vega charge captures the risk from changes in implied volatility
-        of credit spreads. For counterparties with option-like CVA exposure,
-        the vega charge is a fraction of the delta charge.
-
-        Per MAR51.10: vega_RW = 0.55
-
-        Args:
-            counterparties: List of counterparties.
-
-        Returns:
-            Vega capital charge in $M.
-        """
-        # Vega is approximated as a fraction of the delta sensitivity
-        # per ERBA NPR p. 289: vega contribution = RW_vega * delta_sens
-        vega_ws: list[float] = []
-        cp_ids: list[str] = []
-
-        for cp in counterparties:
-            delta_sens = compute_counterparty_cs_sensitivity(cp)
-            vega_sens = delta_sens * SA_CVA_VEGA_RISK_WEIGHT
-            vega_ws.append(vega_sens)
-            cp_ids.append(cp.counterparty_id)
-
-        if not vega_ws:
-            return 0.0
-
-        # Single-bucket aggregation (simplified for vega)
-        k_vega, _ = _intra_bucket_aggregate(
-            vega_ws, cp_ids, rho_same=SA_CVA_INTRA_BUCKET_CORRELATION,
-        )
-        return k_vega
-
-    def _compute_ir_charge(
-        self,
-        counterparties: list[SACVACounterparty],
-    ) -> float:
-        """Compute SA-CVA interest rate component per ERBA NPR p. 290.
-
-        The IR component captures the sensitivity of CVA to changes in
-        risk-free interest rates. For most derivatives portfolios, this
-        is secondary to credit spread risk.
-
-        Per ERBA NPR p. 290: IR sensitivities are computed from the
-        derivative portfolio's exposure to rate changes, weighted by
-        supervisory IR risk weights.
-
-        Args:
-            counterparties: List of counterparties.
-
-        Returns:
-            IR capital charge in $M.
-        """
-        # IR risk weights by tenor per ERBA NPR p. 290
-        ir_risk_weights = {
-            1.0: 0.017,
-            2.0: 0.016,
-            5.0: 0.013,
-            10.0: 0.012,
-            30.0: 0.013,
-        }
-
-        # For each counterparty, compute approximate IR sensitivity
-        # IR sensitivity ~ EAD * d_c * duration_proxy * IR_RW
-        ir_ws: list[float] = []
-        cp_ids: list[str] = []
-
-        for cp in counterparties:
-            d_c = supervisory_discount_factor(cp.effective_maturity)
-            # Map effective maturity to closest IR tenor
-            closest_tenor = min(
-                SA_CVA_IR_TENOR_VERTICES,
-                key=lambda t: abs(t - cp.effective_maturity),
-            )
-            ir_rw = ir_risk_weights.get(closest_tenor, 0.013)
-
-            ir_sens = cp.ead * d_c * cp.effective_maturity * ir_rw
-            ir_ws.append(ir_sens)
-            cp_ids.append(cp.counterparty_id)
-
-        if not ir_ws:
-            return 0.0
-
-        k_ir, _ = _intra_bucket_aggregate(
-            ir_ws, cp_ids, rho_same=SA_CVA_INTRA_BUCKET_CORRELATION,
-        )
-        return k_ir
-
-    def calculate_with_sensitivities(
-        self,
-        sensitivities: list[SACVASensitivity],
-        hedge_sensitivities: Optional[list[SACVASensitivity]] = None,
-    ) -> SACVAResult:
-        """Calculate SA-CVA from pre-computed sensitivities.
-
-        This method is for advanced users who have their own CVA sensitivity
-        engine and want to use the SA-CVA aggregation framework.
-
-        Per ERBA NPR p. 285: When banks compute their own CVA sensitivities,
-        those sensitivities feed directly into the aggregation.
-
-        Args:
-            sensitivities: Pre-computed CVA sensitivities.
-            hedge_sensitivities: Pre-computed hedge sensitivities.
-
-        Returns:
-            SACVAResult with charge breakdown.
-        """
-        if not sensitivities:
-            return SACVAResult(k_spread=0.0, k_ir=0.0, k_cva=0.0, rwa=0.0)
-
-        hedge_sens = hedge_sensitivities or []
-
-        # Separate by risk factor type
-        cs_delta = [s for s in sensitivities
-                    if s.risk_factor_type in (
-                        SACVARiskFactorType.COUNTERPARTY_CREDIT_SPREAD,
-                        SACVARiskFactorType.REFERENCE_CREDIT_SPREAD,
-                    ) and not s.is_vega]
-        cs_vega = [s for s in sensitivities
-                   if s.risk_factor_type in (
-                       SACVARiskFactorType.COUNTERPARTY_CREDIT_SPREAD,
-                       SACVARiskFactorType.REFERENCE_CREDIT_SPREAD,
-                   ) and s.is_vega]
-        ir_delta = [s for s in sensitivities
-                    if s.risk_factor_type == SACVARiskFactorType.INTEREST_RATE
-                    and not s.is_vega]
-
-        # Credit spread delta
-        delta_charge = self._aggregate_sensitivities(cs_delta + hedge_sens)
-
-        # Credit spread vega
-        vega_charge = self._aggregate_sensitivities(cs_vega)
-
-        k_spread = delta_charge + vega_charge
-
-        # IR delta
-        k_ir = self._aggregate_sensitivities(ir_delta)
-
-        # Final aggregation
-        rho = SA_CVA_RISK_TYPE_CORRELATION
-        k_cva = math.sqrt(
-            k_spread ** 2 + k_ir ** 2 + 2.0 * rho * k_spread * k_ir
-        )
-
+        k_total = delta_total + vega_total
         return SACVAResult(
-            k_spread=k_spread,
-            k_ir=k_ir,
-            k_cva=k_cva,
-            rwa=k_cva * 12.5,
-            delta_charge=delta_charge,
-            vega_charge=vega_charge,
+            k_cva=k_total,
+            rwa=k_total * RWA_MULTIPLIER,
+            m_cva=mult,
+            delta_charge=delta_total,
+            vega_charge=vega_total,
+            risk_class_results=class_results,
         )
 
-    def _aggregate_sensitivities(
+    def calculate_risk_class(
         self,
         sensitivities: list[SACVASensitivity],
-    ) -> float:
-        """Aggregate a list of sensitivities using SA-CVA bucket framework.
-
-        Per ERBA NPR pp. 287-288: Two-level aggregation (intra then inter).
+        risk_class: SACVARiskFactorType,
+        is_vega: bool,
+        m_cva: float = SA_CVA_MULTIPLIER_DEFAULT,
+    ) -> SACVARiskClassResult:
+        """Delta or vega capital requirement for one risk class (§__.225(a)).
 
         Args:
-            sensitivities: Sensitivities to aggregate.
+            sensitivities: Records of this risk class and delta/vega type.
+            risk_class: Risk class.
+            is_vega: True for vega.
+            m_cva: Multiplier m_CVA.
 
         Returns:
-            Aggregated capital charge in $M.
+            SACVARiskClassResult with bucket detail.
         """
-        if not sensitivities:
-            return 0.0
-
-        # Group by bucket
-        bucket_data: dict[int, list[tuple[str, float]]] = {}
+        buckets: OrderedDict[Hashable, OrderedDict[Hashable, _Factor]] = OrderedDict()
         for s in sensitivities:
-            b = s.bucket
-            if b not in bucket_data:
-                bucket_data[b] = []
-            bucket_data[b].append((s.counterparty_id, s.value))
+            if s.risk_class is not risk_class or s.is_vega != is_vega:
+                raise ValueError("Sensitivity does not belong to this risk class / type")
+            factors = buckets.setdefault(s.bucket_key, OrderedDict())
+            f = factors.get(s.factor_key)
+            if f is None:
+                f = _Factor(s.factor_key, s)
+                factors[s.factor_key] = f
+            rw = s.risk_weight
+            f.cva += s.cva_sensitivity
+            f.hdg += s.hedge_sensitivity
+            f.ws += rw * s.cva_sensitivity - rw * s.hedge_sensitivity
+            f.ws_hdg += rw * s.hedge_sensitivity
 
-        # Intra-bucket
-        bucket_charges: dict[int, float] = {}
-        bucket_net_sens: dict[int, float] = {}
-
-        for b, entries in bucket_data.items():
-            ws = [e[1] for e in entries]
-            ids = [e[0] for e in entries]
-            k_b, s_b = _intra_bucket_aggregate(ws, ids)
+        bucket_charges: OrderedDict[Hashable, float] = OrderedDict()
+        bucket_sums: OrderedDict[Hashable, float] = OrderedDict()
+        bucket_detail: dict[Hashable, tuple[float, list[SACVAFactorResult]]] = {}
+        for b, factors in buckets.items():
+            flist = list(factors.values())
+            k_b, sum_ws, hedge_term = aggregate_bucket(risk_class, is_vega, flist)
             bucket_charges[b] = k_b
-            bucket_net_sens[b] = s_b
+            bucket_sums[b] = sum_ws
+            bucket_detail[b] = (hedge_term, [
+                SACVAFactorResult(
+                    factor=str(f.key),
+                    cva_sensitivity=f.cva,
+                    hedge_sensitivity=f.hdg,
+                    weighted_sensitivity=f.ws,
+                    hedge_weighted_sensitivity=f.ws_hdg,
+                ) for f in flist
+            ])
 
-        # Inter-bucket
-        return _inter_bucket_aggregate(bucket_charges, bucket_net_sens)
+        k_scaled, k_unscaled, s_b = aggregate_risk_class(
+            risk_class, bucket_charges, bucket_sums, m_cva,
+        )
+        return SACVARiskClassResult(
+            risk_class=risk_class,
+            is_vega=is_vega,
+            capital_charge=k_scaled,
+            capital_charge_unscaled=k_unscaled,
+            bucket_results=[
+                SACVABucketResult(
+                    bucket=str(b),
+                    capital_charge=bucket_charges[b],
+                    sum_weighted_sensitivity=bucket_sums[b],
+                    s_b=s_b[b],
+                    hedge_disallowance_term=bucket_detail[b][0],
+                    factors=bucket_detail[b][1],
+                ) for b in bucket_charges
+            ],
+        )

@@ -27,31 +27,39 @@ from src.core.enums import (
     RiskMeasure,
 )
 from src.core.models import (
-    BucketResult,
     GIRRResult,
-    RiskChargeResult,
     Sensitivity,
-    WeightedSensitivity,
 )
 from src.market_risk.frtb.sbm.girr import GIRRCalculator
 from src.market_risk.frtb.sbm.girr_params import (
     CORRELATION_FLOOR,
     DELTA_RISK_WEIGHTS,
     GAMMA_GIRR,
-    HIGH_VOLATILITY_MULTIPLIER,
-    LOW_VOLATILITY_CURRENCIES,
+    RHO_CROSS_CURVE,
+    RHO_CURVATURE_CROSS_CURVE,
     RHO_INFLATION,
+    RHO_INFLATION_CROSS_CURVE,
     RHO_XCCY_BASIS,
     RW_INFLATION,
     RW_XCCY_BASIS,
+    SPECIFIED_CURRENCIES,
+    SPECIFIED_CURRENCY_RW_DIVISOR,
     TENORS,
     THETA,
+    VEGA_ALPHA,
     VEGA_RISK_WEIGHT,
     apply_correlation_scenario,
+    build_girr_correlation_matrix,
+    build_girr_curvature_correlation_matrix,
     compute_tenor_correlation,
     get_currency_category,
+    get_curvature_risk_weight,
     get_delta_risk_weight,
 )
+
+SQRT2 = math.sqrt(2)
+# 10y USD delta RW = 1.1% / sqrt(2) (ERBA NPR §__.209(b)(1), specified currency)
+RW_10Y_USD = 0.011 / SQRT2
 
 
 # ---------------------------------------------------------------------------
@@ -123,56 +131,80 @@ class TestGIRRParams:
     """Tests for regulatory parameter constants and helper functions."""
 
     def test_tenor_count(self) -> None:
-        """12 standard tenors per MAR21.8."""
-        assert len(TENORS) == 12
+        """Exactly ten delta vertices per ERBA NPR §__.208(b)(1)."""
+        assert len(TENORS) == 10
+        assert len(GIRRTenor) == 10
 
     def test_tenor_values(self) -> None:
-        expected = [0.25, 0.5, 1.0, 2.0, 3.0, 5.0, 7.0, 10.0, 15.0, 20.0, 25.0, 30.0]
+        expected = [0.25, 0.5, 1.0, 2.0, 3.0, 5.0, 10.0, 15.0, 20.0, 30.0]
         assert TENORS == expected
+        assert sorted(t.value for t in GIRRTenor) == expected
 
-    def test_delta_risk_weights_values(self) -> None:
-        """Verify exact risk weights per MAR21.9 Table 1."""
-        assert DELTA_RISK_WEIGHTS[0.25] == 0.017
-        assert DELTA_RISK_WEIGHTS[0.5] == 0.017
-        assert DELTA_RISK_WEIGHTS[1.0] == 0.016
-        assert DELTA_RISK_WEIGHTS[2.0] == 0.013
-        assert DELTA_RISK_WEIGHTS[3.0] == 0.012
-        assert DELTA_RISK_WEIGHTS[5.0] == 0.011
-        assert DELTA_RISK_WEIGHTS[30.0] == 0.011
+    def test_no_7y_or_25y_vertex(self) -> None:
+        """7Y and 25Y are not ERBA NPR vertices."""
+        assert 7.0 not in TENORS and 25.0 not in TENORS
+        assert 7.0 not in DELTA_RISK_WEIGHTS and 25.0 not in DELTA_RISK_WEIGHTS
+        assert not hasattr(GIRRTenor, "Y7") and not hasattr(GIRRTenor, "Y25")
+
+    def test_delta_risk_weights_table_1(self) -> None:
+        """Verify every risk weight per ERBA NPR §__.209(b)(1) Table 1."""
+        expected = {
+            0.25: 0.017, 0.5: 0.017, 1.0: 0.016, 2.0: 0.013, 3.0: 0.012,
+            5.0: 0.011, 10.0: 0.011, 15.0: 0.011, 20.0: 0.011, 30.0: 0.011,
+        }
+        assert DELTA_RISK_WEIGHTS == expected
 
     def test_all_tenors_have_risk_weights(self) -> None:
         for t in TENORS:
             assert t in DELTA_RISK_WEIGHTS
 
-    def test_high_volatility_multiplier(self) -> None:
-        assert abs(HIGH_VOLATILITY_MULTIPLIER - math.sqrt(2)) < 1e-10
+    def test_specified_currency_divisor(self) -> None:
+        assert abs(SPECIFIED_CURRENCY_RW_DIVISOR - math.sqrt(2)) < 1e-10
 
-    def test_low_volatility_currencies(self) -> None:
-        for ccy in ["USD", "EUR", "GBP", "JPY", "CHF", "AUD", "CAD", "SEK"]:
-            assert ccy in LOW_VOLATILITY_CURRENCIES
+    def test_specified_currencies_exact_list(self) -> None:
+        """ERBA NPR §__.209(b)(1): USD, AUD, CAD, EUR, JPY, SEK, GBP -- not CHF."""
+        assert SPECIFIED_CURRENCIES == {"USD", "AUD", "CAD", "EUR", "JPY", "SEK", "GBP"}
+        assert "CHF" not in SPECIFIED_CURRENCIES
 
-    def test_currency_category_low_vol(self) -> None:
-        assert get_currency_category("USD") == CurrencyCategory.LOW_VOLATILITY
-        assert get_currency_category("EUR") == CurrencyCategory.LOW_VOLATILITY
-        assert get_currency_category("usd") == CurrencyCategory.LOW_VOLATILITY
+    def test_currency_category_specified(self) -> None:
+        assert get_currency_category("USD") == CurrencyCategory.SPECIFIED
+        assert get_currency_category("EUR") == CurrencyCategory.SPECIFIED
+        assert get_currency_category("usd") == CurrencyCategory.SPECIFIED
 
-    def test_currency_category_high_vol(self) -> None:
-        assert get_currency_category("BRL") == CurrencyCategory.HIGH_VOLATILITY
-        assert get_currency_category("TRY") == CurrencyCategory.HIGH_VOLATILITY
-        assert get_currency_category("ZAR") == CurrencyCategory.HIGH_VOLATILITY
-        assert get_currency_category("INR") == CurrencyCategory.HIGH_VOLATILITY
+    def test_currency_category_other(self) -> None:
+        for ccy in ["BRL", "TRY", "ZAR", "INR", "CHF"]:
+            assert get_currency_category(ccy) == CurrencyCategory.OTHER
 
-    def test_risk_weight_low_vol(self) -> None:
+    def test_risk_weight_specified_currency_divided_by_sqrt2(self) -> None:
+        """Regulatory example: USD 0.25y = 1.7% / sqrt(2)."""
         rw = get_delta_risk_weight(0.25, "USD")
-        assert rw == 0.017
+        assert rw == pytest.approx(0.017 / SQRT2, rel=1e-12)
 
-    def test_risk_weight_high_vol(self) -> None:
-        rw = get_delta_risk_weight(0.25, "BRL")
-        assert abs(rw - 0.017 * math.sqrt(2)) < 1e-10
+    def test_risk_weight_other_currency_unchanged(self) -> None:
+        """Regulatory example: BRL 0.25y = 1.7% (Table 1 base value)."""
+        assert get_delta_risk_weight(0.25, "BRL") == 0.017
+        assert get_delta_risk_weight(0.25, "CHF") == 0.017
 
     def test_risk_weight_invalid_tenor(self) -> None:
         with pytest.raises(KeyError):
             get_delta_risk_weight(4.0, "USD")
+        with pytest.raises(KeyError):
+            get_delta_risk_weight(7.0, "USD")
+
+    def test_curvature_risk_weight(self) -> None:
+        """Curvature shock = highest delta RW (1.7%), / sqrt(2) if specified."""
+        assert get_curvature_risk_weight("USD") == pytest.approx(0.017 / SQRT2)
+        assert get_curvature_risk_weight("BRL") == pytest.approx(0.017)
+
+    def test_correlation_constants(self) -> None:
+        assert THETA == 0.03
+        assert CORRELATION_FLOOR == 0.40
+        assert RHO_CROSS_CURVE == 0.999
+        assert RHO_INFLATION == 0.40
+        assert RHO_INFLATION_CROSS_CURVE == 0.999
+        assert RHO_XCCY_BASIS == 0.0
+        assert RHO_CURVATURE_CROSS_CURVE == 0.998
+        assert VEGA_ALPHA == 0.01
 
     def test_inflation_risk_weight(self) -> None:
         assert RW_INFLATION == 0.016
@@ -230,6 +262,44 @@ class TestCorrelations:
                 rho = compute_tenor_correlation(t1, t2)
                 assert 0.40 <= rho <= 1.0
 
+    @pytest.mark.parametrize(
+        "tk, tl, expected_pct",
+        [
+            (0.25, 0.5, 97.0), (0.25, 1.0, 91.4), (0.25, 2.0, 81.1),
+            (0.25, 3.0, 71.9), (0.25, 5.0, 56.6), (0.25, 10.0, 40.0),
+            (0.25, 30.0, 40.0), (0.5, 10.0, 56.6), (0.5, 15.0, 41.9),
+            (1.0, 10.0, 76.3), (1.0, 30.0, 41.9), (2.0, 3.0, 98.5),
+            (3.0, 30.0, 76.3), (5.0, 30.0, 86.1), (10.0, 30.0, 94.2),
+            (15.0, 20.0, 99.0), (20.0, 30.0, 98.5),
+        ],
+    )
+    def test_table_2_values(self, tk: float, tl: float, expected_pct: float) -> None:
+        """Spot-check ERBA NPR §__.209(b)(1) Table 2 (rounded to 0.1%)."""
+        assert round(compute_tenor_correlation(tk, tl) * 100, 1) == expected_pct
+
+    def test_full_matrix_inflation_and_xccy_rules(self) -> None:
+        """Yield/inflation 40%, inflation curves 99.9%, xccy 0% with all."""
+        corr = build_girr_correlation_matrix(
+            currency="USD",
+            num_yield_curve_sensitivities=2,
+            curve_labels=["OIS", "SOFR"],
+            tenors=[1.0, 1.0],
+            inflation_labels=["CPI", "RPI"],
+            xccy_basis_labels=["USD/EUR", "USD/JPY"],
+        )
+        assert corr.shape == (6, 6)
+        assert corr[0, 1] == pytest.approx(0.999)        # same tenor, different curve
+        assert corr[0, 2] == pytest.approx(0.40)         # yield vs inflation
+        assert corr[2, 3] == pytest.approx(0.999)        # two inflation curves
+        assert corr[0, 4] == 0.0 and corr[2, 4] == 0.0   # xccy vs everything
+        assert corr[4, 5] == 0.0                         # two different xccy curves
+
+    def test_curvature_correlation_matrix(self) -> None:
+        """100% same curve, 99.8% different curves per ERBA NPR §__.209."""
+        corr = build_girr_curvature_correlation_matrix(["OIS", "OIS", "SOFR"])
+        assert corr[0, 1] == 1.0
+        assert corr[0, 2] == pytest.approx(0.998)
+
     def test_scenario_medium_no_change(self) -> None:
         assert apply_correlation_scenario(0.5, CorrelationScenario.MEDIUM) == 0.5
 
@@ -269,12 +339,17 @@ class TestDeltaCalculation:
         return GIRRCalculator()
 
     def test_single_sensitivity_delta(self, calc: GIRRCalculator) -> None:
-        """Single sensitivity: K_b = RW * |s|."""
+        """Single USD sensitivity: K_b = RW * |s| with RW = 1.1%/sqrt(2)."""
         sens = [_delta_sens(value=1_000_000.0, tenor=GIRRTenor.Y10)]
         result = calc._calculate_delta_charge(sens, CorrelationScenario.MEDIUM)
-        # WS = 0.011 * 1,000,000 = 11,000
-        expected = 11_000.0
-        assert abs(result.capital_charge - expected) < 1.0
+        expected = RW_10Y_USD * 1_000_000.0  # 7,778.17
+        assert result.capital_charge == pytest.approx(expected, rel=1e-9)
+
+    def test_single_sensitivity_other_currency(self, calc: GIRRCalculator) -> None:
+        """Unspecified currency keeps the Table 1 weight: 1.1% * 1M = 11,000."""
+        sens = [_delta_sens(bucket="CHF", value=1_000_000.0, tenor=GIRRTenor.Y10)]
+        result = calc._calculate_delta_charge(sens, CorrelationScenario.MEDIUM)
+        assert result.capital_charge == pytest.approx(11_000.0, rel=1e-9)
 
     def test_two_same_risk_factor_add(self, calc: GIRRCalculator) -> None:
         """Two sensitivities at same tenor+curve → they get correlated at 1.0."""
@@ -283,9 +358,8 @@ class TestDeltaCalculation:
             _delta_sens(value=500_000.0, tenor=GIRRTenor.Y10),
         ]
         result = calc._calculate_delta_charge(sens, CorrelationScenario.MEDIUM)
-        # Two WS of 5500 each, same risk factor (rho=1.0) → K = 5500 + 5500 = 11000
-        expected = 11_000.0
-        assert abs(result.capital_charge - expected) < 1.0
+        expected = RW_10Y_USD * 1_000_000.0
+        assert result.capital_charge == pytest.approx(expected, rel=1e-9)
 
     def test_offsetting_sensitivities(self, calc: GIRRCalculator) -> None:
         """Opposing sensitivities on same risk factor net out."""
@@ -304,7 +378,7 @@ class TestDeltaCalculation:
             _delta_sens(tenor=GIRRTenor.Y10, value=1e6),
         ]
         result = calc._calculate_delta_charge(sens, CorrelationScenario.MEDIUM)
-        sum_individual = 0.016 * 1e6 + 0.011 * 1e6 + 0.011 * 1e6
+        sum_individual = (0.016 * 1e6 + 0.011 * 1e6 + 0.011 * 1e6) / SQRT2
         assert result.capital_charge < sum_individual
         assert result.capital_charge > 0
 
@@ -315,11 +389,11 @@ class TestDeltaCalculation:
             _delta_sens(bucket="EUR", tenor=GIRRTenor.Y10, value=1e6),
         ]
         result = calc._calculate_delta_charge(sens, CorrelationScenario.MEDIUM)
-        # K_usd = K_eur = 11,000
-        # S_usd = S_eur = 11,000
-        # Total = sqrt(11000^2 + 11000^2 + 2*0.5*11000*11000) = 11000*sqrt(3)
-        expected = 11_000.0 * math.sqrt(3)
-        assert abs(result.capital_charge - expected) / expected < 0.01
+        # K_usd = K_eur = S_usd = S_eur = WS
+        # Total = sqrt(WS^2 + WS^2 + 2*0.5*WS*WS) = WS*sqrt(3)
+        ws = RW_10Y_USD * 1e6
+        expected = ws * math.sqrt(3)
+        assert result.capital_charge == pytest.approx(expected, rel=1e-9)
 
     def test_inflation_sensitivity(self, calc: GIRRCalculator) -> None:
         """Inflation uses 1.6% RW, correlated at 40% with yield curve."""
@@ -329,11 +403,21 @@ class TestDeltaCalculation:
         ]
         result = calc._calculate_delta_charge(sens, CorrelationScenario.MEDIUM)
         assert result.capital_charge > 0
-        # WS_10Y = 0.011 * 1M = 11,000
-        # WS_infl = 0.016 * 500K = 8,000
-        # K = sqrt(11000^2 + 8000^2 + 2*0.40*11000*8000)
-        expected = math.sqrt(11000**2 + 8000**2 + 2 * 0.40 * 11000 * 8000)
-        assert abs(result.capital_charge - expected) / expected < 0.01
+        ws_10y = RW_10Y_USD * 1e6
+        ws_infl = 0.016 * 500_000.0  # inflation RW is NOT divided by sqrt(2)
+        expected = math.sqrt(ws_10y**2 + ws_infl**2 + 2 * 0.40 * ws_10y * ws_infl)
+        assert result.capital_charge == pytest.approx(expected, rel=1e-9)
+
+    def test_two_inflation_curves(self, calc: GIRRCalculator) -> None:
+        """Two inflation curves in one currency correlate at 99.9%."""
+        sens = [
+            _delta_sens(rf_type=GIRRRiskFactorType.INFLATION, value=1e6, label="CPI"),
+            _delta_sens(rf_type=GIRRRiskFactorType.INFLATION, value=1e6, label="RPI"),
+        ]
+        result = calc._calculate_delta_charge(sens, CorrelationScenario.MEDIUM)
+        ws = 0.016 * 1e6
+        expected = math.sqrt(2 * ws**2 + 2 * 0.999 * ws**2)
+        assert result.capital_charge == pytest.approx(expected, rel=1e-9)
 
     def test_xccy_basis_zero_correlation(self, calc: GIRRCalculator) -> None:
         """XCCY basis has 0% correlation to yield curve → Pythagorean addition."""
@@ -345,17 +429,16 @@ class TestDeltaCalculation:
             ),
         ]
         result = calc._calculate_delta_charge(sens, CorrelationScenario.MEDIUM)
-        # WS_10Y = 11,000, WS_xccy = 8,000
-        # K = sqrt(11000^2 + 8000^2) ≈ 13,601
-        expected = math.sqrt(11_000**2 + 8_000**2)
-        assert abs(result.capital_charge - expected) / expected < 0.01
+        ws_10y = RW_10Y_USD * 1e6
+        ws_xccy = 0.016 * 500_000.0
+        expected = math.sqrt(ws_10y**2 + ws_xccy**2)
+        assert result.capital_charge == pytest.approx(expected, rel=1e-9)
 
-    def test_high_vol_currency_multiplier(self, calc: GIRRCalculator) -> None:
-        """BRL (high-vol) gets sqrt(2) multiplier on risk weights."""
+    def test_other_currency_uses_base_table(self, calc: GIRRCalculator) -> None:
+        """BRL (not specified) uses the Table 1 weight unchanged."""
         sens = [_delta_sens(bucket="BRL", tenor=GIRRTenor.Y10, value=1e6)]
         result = calc._calculate_delta_charge(sens, CorrelationScenario.MEDIUM)
-        expected = 0.011 * math.sqrt(2) * 1e6
-        assert abs(result.capital_charge - expected) / expected < 0.01
+        assert result.capital_charge == pytest.approx(0.011 * 1e6, rel=1e-9)
 
     def test_bucket_results_populated(self, calc: GIRRCalculator) -> None:
         """Verify bucket results are returned with correct structure."""
@@ -373,9 +456,9 @@ class TestDeltaCalculation:
         ]
         result = calc._calculate_delta_charge(sens, CorrelationScenario.MEDIUM)
         # rho = 1.0 * 0.999 (same tenor, different curve)
-        # K = sqrt(11000^2 + 11000^2 + 2*0.999*11000*11000)
-        expected = math.sqrt(2 * 11000**2 + 2 * 0.999 * 11000**2)
-        assert abs(result.capital_charge - expected) / expected < 0.01
+        ws = RW_10Y_USD * 1e6
+        expected = math.sqrt(2 * ws**2 + 2 * 0.999 * ws**2)
+        assert result.capital_charge == pytest.approx(expected, rel=1e-9)
 
     def test_empty_delta(self, calc: GIRRCalculator) -> None:
         """Empty sensitivities → zero charge."""
@@ -539,13 +622,42 @@ class TestCurvatureCalculation:
         assert result == -200.0
 
     def test_curvature_two_positive(self, calc: GIRRCalculator) -> None:
-        """Two positive CVRs at correlated tenors."""
+        """Two positive CVRs on the same curve: parallel shift => rho = 100%."""
         sens = [
             _curvature_sens(value=50_000.0, tenor=GIRRTenor.Y5),
             _curvature_sens(value=50_000.0, tenor=GIRRTenor.Y10),
         ]
         result = calc._calculate_curvature_charge(sens, CorrelationScenario.MEDIUM)
-        assert result.capital_charge > 0
+        assert result.capital_charge == pytest.approx(100_000.0, rel=1e-9)
+
+    def test_curvature_cross_curve_99_8(self, calc: GIRRCalculator) -> None:
+        """Different curves in one currency: rho = 99.8% (ERBA NPR §__.209)."""
+        sens = [
+            _curvature_sens(value=50_000.0, label="OIS"),
+            _curvature_sens(value=50_000.0, label="SOFR"),
+        ]
+        result = calc._calculate_curvature_charge(sens, CorrelationScenario.MEDIUM)
+        expected = math.sqrt(2 * 50_000.0**2 + 2 * 0.998 * 50_000.0**2)
+        assert result.capital_charge == pytest.approx(expected, rel=1e-9)
+
+    def test_curvature_records_parallel_shock_size(self, calc: GIRRCalculator) -> None:
+        sens = [_curvature_sens(bucket="USD", value=50_000.0)]
+        result = calc._calculate_curvature_charge(sens, CorrelationScenario.MEDIUM)
+        rw = result.bucket_results[0].weighted_sensitivities[0].risk_weight
+        assert rw == pytest.approx(0.017 / SQRT2)
+
+    def test_curvature_rejects_inflation(self) -> None:
+        """ERBA NPR §__.208(b)(3): no curvature for inflation / xccy basis."""
+        from src.core.exceptions import ValidationError
+        sens = [Sensitivity(
+            risk_class=RiskClass.GIRR,
+            risk_measure=RiskMeasure.CURVATURE,
+            bucket="USD",
+            risk_factor_type=GIRRRiskFactorType.INFLATION,
+            value=1_000.0,
+        )]
+        with pytest.raises(ValidationError):
+            GIRRCalculator().calculate(sens)
 
     def test_curvature_multi_currency(self, calc: GIRRCalculator) -> None:
         sens = [
@@ -646,14 +758,16 @@ class TestGIRRIntegration:
         assert result.vega_charge > 0
         assert result.curvature_charge > 0
 
-    def test_high_vol_vs_low_vol_comparison(self) -> None:
-        """High-vol currency should produce higher charge than low-vol."""
+    def test_specified_vs_other_currency_comparison(self) -> None:
+        """A non-specified currency charges sqrt(2) times a specified one."""
         calc = GIRRCalculator()
         usd_sens = [_delta_sens(bucket="USD", value=1e6)]
         brl_sens = [_delta_sens(bucket="BRL", value=1e6)]
         usd_result = calc.calculate(usd_sens)
         brl_result = calc.calculate(brl_sens)
-        assert brl_result.delta_charge > usd_result.delta_charge
+        assert brl_result.delta_charge == pytest.approx(
+            usd_result.delta_charge * SQRT2, rel=1e-9
+        )
 
     def test_validation_non_girr(self) -> None:
         """Non-GIRR sensitivities should be rejected."""
@@ -755,7 +869,7 @@ class TestEdgeCases:
         assert len(result.bucket_results) == 10
 
     def test_all_tenors_single_currency(self, calc: GIRRCalculator) -> None:
-        """All 12 tenors populated for one currency."""
+        """All ten tenors populated for one currency."""
         sens = [
             _delta_sens(tenor=GIRRTenor(t), value=1e6)
             for t in TENORS

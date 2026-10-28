@@ -93,13 +93,15 @@ class TestCSRNonSec:
         result = calc.calculate([])
         assert result.total_charge == 0.0
 
-    def test_high_yield_higher_rw(self, calc):
-        """HY buckets have higher risk weights than IG → higher charge."""
-        ig = [_sens(RiskClass.CSR_NON_SEC, bucket="3", value=1e6)]  # Financials IG
-        hy = [_sens(RiskClass.CSR_NON_SEC, bucket="4", value=1e6)]  # Financials HY
+    def test_speculative_grade_higher_rw(self, calc):
+        """Speculative-grade buckets carry higher RWs than IG (ERBA NPR §__.209(b)(2) Table 3)."""
+        ig = [_sens(RiskClass.CSR_NON_SEC, bucket="3", value=1e6)]   # Financials IG, 5.0%
+        sg = [_sens(RiskClass.CSR_NON_SEC, bucket="11", value=1e6)]  # Financials speculative, 12.0%
         ig_result = calc.calculate(ig)
-        hy_result = calc.calculate(hy)
-        assert hy_result.delta_charge > ig_result.delta_charge
+        sg_result = calc.calculate(sg)
+        assert sg_result.delta_charge > ig_result.delta_charge
+        assert ig_result.delta_charge == pytest.approx(0.05 * 1e6)
+        assert sg_result.delta_charge == pytest.approx(0.12 * 1e6)
 
     def test_scenarios_produce_different_charges(self, calc):
         """Three scenarios should produce non-identical charges."""
@@ -175,31 +177,33 @@ class TestEquity:
         assert calc is not None
 
     def test_single_equity_delta(self, calc):
+        """Bucket 6 (liquid-market large cap telecom/industrials) RW 35%."""
         sens = [_sens(RiskClass.EQUITY, bucket="6", value=1e6, tenor=None)]
         result = calc.calculate(sens)
-        assert result.total_charge > 0
+        assert result.delta_charge == pytest.approx(0.35 * 1e6)
 
-    def test_em_vs_ae_risk_weights(self, calc):
-        """EM (bucket 1) should have higher RW than AE (bucket 6)."""
-        em = [_sens(RiskClass.EQUITY, bucket="1", value=1e6, tenor=None)]
-        ae = [_sens(RiskClass.EQUITY, bucket="6", value=1e6, tenor=None)]
+    def test_em_vs_liquid_market_risk_weights(self, calc):
+        """EM (bucket 2, 60%) should have higher RW than liquid market (bucket 6, 35%)."""
+        em = [_sens(RiskClass.EQUITY, bucket="2", value=1e6, tenor=None)]
+        liquid = [_sens(RiskClass.EQUITY, bucket="6", value=1e6, tenor=None)]
         em_result = calc.calculate(em)
-        ae_result = calc.calculate(ae)
-        assert em_result.delta_charge > ae_result.delta_charge
+        liquid_result = calc.calculate(liquid)
+        assert em_result.delta_charge > liquid_result.delta_charge
 
-    def test_small_cap_highest_rw(self, calc):
-        """Small cap (bucket 11) should have highest single-name RW."""
-        small = [_sens(RiskClass.EQUITY, bucket="11", value=1e6, tenor=None)]
-        large_ae = [_sens(RiskClass.EQUITY, bucket="9", value=1e6, tenor=None)]
-        small_result = calc.calculate(small)
-        large_result = calc.calculate(large_ae)
-        assert small_result.delta_charge > large_result.delta_charge
+    def test_small_cap_and_other_sector_highest_rw(self, calc):
+        """EM small cap (9) and other sector (11) carry 70% > large cap (8) 50%."""
+        small = [_sens(RiskClass.EQUITY, bucket="9", value=1e6, tenor=None)]
+        other = [_sens(RiskClass.EQUITY, bucket="11", value=1e6, tenor=None)]
+        large = [_sens(RiskClass.EQUITY, bucket="8", value=1e6, tenor=None)]
+        assert calc.calculate(small).delta_charge == pytest.approx(0.70 * 1e6)
+        assert calc.calculate(other).delta_charge == pytest.approx(0.70 * 1e6)
+        assert calc.calculate(large).delta_charge == pytest.approx(0.50 * 1e6)
 
     def test_index_lowest_rw(self, calc):
-        """Index bucket (12) should have lowest RW."""
+        """Index bucket (12) has the lowest RW, 15%."""
         idx = [_sens(RiskClass.EQUITY, bucket="12", value=1e6, tenor=None)]
         result = calc.calculate(idx)
-        assert result.total_charge > 0
+        assert result.delta_charge == pytest.approx(0.15 * 1e6)
 
     def test_empty_returns_zero(self, calc):
         result = calc.calculate([])
@@ -238,18 +242,23 @@ class TestCommodity:
         assert result.total_charge > 0
 
     def test_energy_vs_precious_metals(self, calc):
-        """Energy (B1, 30%) vs Precious metals (B7, 20%)."""
+        """Energy solid combustibles (B1, 30%) vs Precious metals (B7, 20%)."""
         energy = [_sens(RiskClass.COMMODITY, bucket="1", value=1e6)]
         metals = [_sens(RiskClass.COMMODITY, bucket="7", value=1e6)]
-        energy_result = calc.calculate(energy)
-        metals_result = calc.calculate(metals)
-        assert energy_result.delta_charge > metals_result.delta_charge
+        assert calc.calculate(energy).delta_charge == pytest.approx(0.30 * 1e6)
+        assert calc.calculate(metals).delta_charge == pytest.approx(0.20 * 1e6)
 
-    def test_electricity_highest_rw(self, calc):
-        """Electricity (B6, 60%) should have high RW."""
-        elec = [_sens(RiskClass.COMMODITY, bucket="6", value=1e6)]
-        result = calc.calculate(elec)
-        assert result.total_charge > 0
+    def test_freight_highest_rw(self, calc):
+        """Freight (B4, 80%) carries the highest commodity RW (Table 9)."""
+        freight = [_sens(RiskClass.COMMODITY, bucket="4", value=1e6)]
+        result = calc.calculate(freight)
+        assert result.delta_charge == pytest.approx(0.80 * 1e6)
+
+    def test_commodity_index_bucket_12(self, calc):
+        """Commodity index bucket 12 (30%) exists in the US rule."""
+        idx = [_sens(RiskClass.COMMODITY, bucket="12", value=1e6)]
+        result = calc.calculate(idx)
+        assert result.delta_charge == pytest.approx(0.30 * 1e6)
 
     def test_empty_returns_zero(self, calc):
         result = calc.calculate([])
@@ -287,12 +296,17 @@ class TestFX:
         result = calc.calculate(sens)
         assert result.total_charge > 0
 
-    def test_fx_risk_weight_15pct(self, calc):
-        """FX RW is 15%, so charge on single position = 15% * value."""
+    def test_fx_risk_weight_specified_pair(self, calc):
+        """EUR/USD is a specified pair: RW = 15% / sqrt(2) (ERBA NPR §__.209(b)(7))."""
         sens = [_sens(RiskClass.FX, bucket="EURUSD", value=1e6, tenor=None)]
         result = calc.calculate(sens)
-        # Single position: charge = 0.15 * 1e6 = 150,000
-        assert abs(result.delta_charge - 150_000) / 150_000 < 0.05
+        assert result.delta_charge == pytest.approx(0.15 / math.sqrt(2) * 1e6)
+
+    def test_fx_risk_weight_15pct_other_pair(self, calc):
+        """USD/RUB is not a specified pair: RW = 15%."""
+        sens = [_sens(RiskClass.FX, bucket="USDRUB", value=1e6, tenor=None)]
+        result = calc.calculate(sens)
+        assert result.delta_charge == pytest.approx(0.15 * 1e6)
 
     def test_multi_pair(self, calc):
         sens = [

@@ -1,29 +1,30 @@
 """GIRR Risk Charge Calculator -- FRTB Sensitivities-Based Method.
 
 Implements the General Interest Rate Risk (GIRR) capital charge calculation
-per MAR21.8-21.12 of the Basel III Endgame framework.
+per the US ERBA NPR (March 2026), 12 CFR 217 Subpart F §__.206-§__.209
+(BCBS d457 MAR21.8-21.12 cross-reference).
 
 GIRR covers:
-- Delta risk: Linear sensitivities to risk-free yield curves, inflation, and XCCY basis
+- Delta risk: Linear sensitivities to risk-free yield curves (ten vertices),
+  inflation, and cross-currency basis (§__.208(b)(1), §__.209(b)(1)).
 - Vega risk: Sensitivities to implied volatilities of interest rate options
-- Curvature risk: Non-linear risk from options on interest rates
+  on the option-maturity x underlying-maturity grid (§__.208(b)(2)).
+- Curvature risk: Parallel-shift curvature of each yield curve; no curvature
+  for inflation or cross-currency basis (§__.208(b)(3)).
 
-Reference: BCBS d457 MAR21, US Federal Reserve Basel III Endgame Final Rule.
+All parameters are sourced from :mod:`girr_params`.
 """
 
 from __future__ import annotations
 
 import math
 from collections import defaultdict
-from typing import Sequence
 
 import numpy as np
 
 from src.core.enums import (
     CorrelationScenario,
-    CurrencyCategory,
     GIRRRiskFactorType,
-    GIRRTenor,
     RiskClass,
     RiskMeasure,
 )
@@ -36,23 +37,15 @@ from src.core.models import (
     WeightedSensitivity,
 )
 from src.market_risk.frtb.sbm.girr_params import (
-    DELTA_RISK_WEIGHTS,
     GAMMA_GIRR,
-    RHO_CROSS_CURVE,
-    RHO_INFLATION,
-    RHO_INFLATION_XCCY,
-    RHO_XCCY_BASIS,
     RW_INFLATION,
     RW_XCCY_BASIS,
-    TENORS,
-    VEGA_ALPHA,
-    VEGA_OPTION_MATURITIES,
     VEGA_RISK_WEIGHT,
-    VEGA_UNDERLYING_TENORS,
     apply_correlation_scenario,
     build_girr_correlation_matrix,
-    compute_tenor_correlation,
-    get_currency_category,
+    build_girr_curvature_correlation_matrix,
+    compute_vega_maturity_correlation,
+    get_curvature_risk_weight,
     get_delta_risk_weight,
 )
 from src.utils.aggregation import intra_bucket_aggregation, inter_bucket_aggregation
@@ -175,11 +168,13 @@ class GIRRCalculator:
     ) -> RiskChargeResult:
         """Calculate GIRR delta risk charge for one correlation scenario.
 
-        Steps per MAR21.4:
+        Steps per ERBA NPR §__.206(b) and §__.209(b)(1):
 
         1. Group sensitivities by bucket (currency).
-        2. Apply risk weights: ``WS_k = RW_k * s_k``.
-        3. Build correlation matrix per bucket.
+        2. Apply risk weights: ``WS_k = RW_k * s_k`` (Table 1, divided by
+           sqrt(2) for specified currencies).
+        3. Build the intra-bucket correlation matrix (Table 2 tenor
+           correlations, 99.9% cross-curve, 40% inflation, 0% basis).
         4. Intra-bucket aggregation:
            ``K_b = sqrt(WS^T * rho * WS)``.
         5. Inter-bucket aggregation with ``gamma = 50%``.
@@ -208,7 +203,9 @@ class GIRRCalculator:
             yc_labels: list[str] = []
             yc_tenors: list[float] = []
             infl_ws: list[WeightedSensitivity] = []
+            infl_labels: list[str] = []
             xccy_ws: list[WeightedSensitivity] = []
+            xccy_labels: list[str] = []
 
             for ws in ws_list:
                 rf_type = ws.sensitivity.risk_factor_type
@@ -222,11 +219,10 @@ class GIRRCalculator:
                     )
                 elif rf_type == GIRRRiskFactorType.INFLATION:
                     infl_ws.append(ws)
+                    infl_labels.append(ws.sensitivity.label or "INFLATION")
                 elif rf_type == GIRRRiskFactorType.CROSS_CURRENCY_BASIS:
                     xccy_ws.append(ws)
-
-            include_inflation = len(infl_ws) > 0
-            include_xccy = len(xccy_ws) > 0
+                    xccy_labels.append(ws.sensitivity.label or "XCCY")
 
             # Build correlation matrix via girr_params helper -----------------
             corr = build_girr_correlation_matrix(
@@ -234,9 +230,9 @@ class GIRRCalculator:
                 num_yield_curve_sensitivities=len(yc_ws),
                 curve_labels=yc_labels,
                 tenors=yc_tenors,
-                include_inflation=include_inflation,
-                include_xccy_basis=include_xccy,
                 scenario=scenario,
+                inflation_labels=infl_labels,
+                xccy_basis_labels=xccy_labels,
             )
 
             # Assemble the ordered WS vector (yield curves, then infl, xccy) --
@@ -286,11 +282,12 @@ class GIRRCalculator:
     ) -> RiskChargeResult:
         """Calculate GIRR vega risk charge for one correlation scenario.
 
-        Vega uses (per MAR21.44-47):
+        Vega per ERBA NPR §__.208(b)(2) and §__.209 Table 11:
 
-        - Risk weight: 100% for GIRR since ``min(sqrt(60/10), 1.0) = 1.0``.
-        - 2-D correlation: option-maturity x underlying-tenor.
-        - Same three-scenario framework as delta.
+        - Risk weight: 100% for GIRR (Table 11).
+        - 2-D correlation: ``min(rho_option_maturity * rho_underlying_maturity, 1)``
+          with ``alpha = 1%``.
+        - Inter-bucket ``gamma = 50%`` (same as delta).
 
         Args:
             sensitivities: GIRR vega sensitivities only.
@@ -357,13 +354,21 @@ class GIRRCalculator:
     ) -> RiskChargeResult:
         """Calculate GIRR curvature risk charge for one correlation scenario.
 
-        Curvature per MAR21.5:
+        Curvature per ERBA NPR §__.206(b)(3), §__.208(b)(3) and the
+        §__.209 curvature paragraph:
 
-        - ``CVR_k = max(CVR_k_up, CVR_k_down)`` for each risk factor (the
-          *sensitivity value* already encodes the net CVR per risk factor).
-        - Intra-bucket:
-          ``K_b = max(0, sum(CVR) + sum_{k!=l} rho_kl^2 * psi(CVR_k, CVR_l))``
-        - Uses **squared** correlations from delta.
+        - The curvature shock is a parallel shift of every vertex of a
+          yield curve by the bucket's highest delta risk weight
+          (:func:`girr_params.get_curvature_risk_weight`), so each curve is
+          ONE curvature risk factor.  The *sensitivity value* is the net
+          ``CVR_k`` for that curve computed with that shock.
+        - Inflation and cross-currency basis carry no curvature charge and
+          are rejected by validation.
+        - Intra-bucket correlation: 100% within a curve, 99.8% between
+          different curves (stated directly by the NPR; not re-squared).
+        - ``K_b = sqrt(max(0, sum_k max(CVR_k,0)^2
+          + sum_{k!=l} rho_kl * CVR_k * CVR_l * psi))``.
+        - Inter-bucket correlation: ``gamma^2`` with ``gamma = 50%``.
 
         Args:
             sensitivities: GIRR curvature sensitivities only.
@@ -386,41 +391,16 @@ class GIRRCalculator:
                 [s.value for s in bucket_sens], dtype=np.float64
             )
 
-            # Build the delta correlation matrix, then square it ---------------
-            yc_labels: list[str] = []
-            yc_tenors: list[float] = []
-            yc_count = 0
-            has_inflation = False
-            has_xccy = False
-
-            for s in bucket_sens:
-                if s.risk_factor_type == GIRRRiskFactorType.YIELD_CURVE:
-                    yc_count += 1
-                    yc_labels.append(s.label or "DEFAULT")
-                    yc_tenors.append(
-                        s.tenor.value if s.tenor is not None else 0.25
-                    )
-                elif s.risk_factor_type == GIRRRiskFactorType.INFLATION:
-                    has_inflation = True
-                elif s.risk_factor_type == GIRRRiskFactorType.CROSS_CURRENCY_BASIS:
-                    has_xccy = True
-
-            delta_corr = build_girr_correlation_matrix(
-                currency=bucket,
-                num_yield_curve_sensitivities=yc_count,
-                curve_labels=yc_labels,
-                tenors=yc_tenors,
-                include_inflation=has_inflation,
-                include_xccy_basis=has_xccy,
-                scenario=scenario,
+            # Curve-level curvature correlation (100% same curve, 99.8%
+            # different curves) per ERBA NPR §__.209 ---------------------------
+            curve_labels = [s.label or "DEFAULT" for s in bucket_sens]
+            rho_curv = build_girr_curvature_correlation_matrix(
+                curve_labels, scenario
             )
 
-            # Squared correlations for curvature per MAR21.5 ------------------
-            rho_sq = delta_corr ** 2
-
-            # Intra-bucket curvature aggregation per MAR21.5(4) ---------------
+            # Intra-bucket curvature aggregation per §__.206(b)(3) ------------
             #   K_b = sqrt(max(0, sum_k max(CVR_k,0)^2
-            #                   + sum_{k!=l} rho_kl^2 * CVR_k * CVR_l * psi))
+            #                   + sum_{k!=l} rho_kl * CVR_k * CVR_l * psi))
             # NOTE: the diagonal term is the SQUARE of the positive part, not
             # the plain sum of CVR_k (which would mix linear and quadratic
             # terms under the square root).
@@ -432,7 +412,7 @@ class GIRRCalculator:
             for i in range(n):
                 for j in range(i + 1, n):
                     cross_term += (
-                        rho_sq[i, j]
+                        rho_curv[i, j]
                         * self._psi(cvr_values[i], cvr_values[j])
                     )
             cross_term *= 2.0  # symmetric: (i,j) and (j,i)
@@ -443,11 +423,13 @@ class GIRRCalculator:
             bucket_charges[bucket] = k_b
             bucket_net_sens[bucket] = sum_cvr
 
-            # Build WeightedSensitivity wrappers for reporting -----------------
+            # Build WeightedSensitivity wrappers for reporting; the recorded
+            # risk weight is the parallel shock size used to compute CVR_k.
+            curvature_rw = get_curvature_risk_weight(bucket)
             ws_curvature = [
                 WeightedSensitivity(
                     sensitivity=s,
-                    risk_weight=1.0,
+                    risk_weight=curvature_rw,
                     weighted_value=s.value,
                 )
                 for s in bucket_sens
@@ -463,8 +445,8 @@ class GIRRCalculator:
             )
 
         # Inter-bucket curvature aggregation -----------------------------------
-        # Per MAR21.5: gamma for curvature is the same as delta, but
-        # correlations are squared.
+        # ERBA NPR §__.209 (curvature): gamma_bc for curvature is the delta
+        # gamma squared.
         gamma = apply_correlation_scenario(
             self._inter_bucket_gamma, scenario, is_inter_bucket=True
         )
@@ -511,10 +493,11 @@ class GIRRCalculator:
     ) -> WeightedSensitivity:
         """Apply risk weight to a single delta sensitivity.
 
-        Rules per MAR21.9:
+        Rules per ERBA NPR §__.209(b)(1):
 
-        - **Yield curve:** risk weight from the tenor table, adjusted
-          upward by ``sqrt(2)`` for high-volatility currencies.
+        - **Yield curve:** Table 1 risk weight for the vertex, DIVIDED by
+          ``sqrt(2)`` for specified currencies (USD, AUD, CAD, EUR, JPY,
+          SEK, GBP); all other currencies use Table 1 unchanged.
         - **Inflation:** ``RW = 1.6%``.
         - **XCCY basis:** ``RW = 1.6%``.
 
@@ -564,8 +547,8 @@ class GIRRCalculator:
     ) -> WeightedSensitivity:
         """Apply vega risk weight to a single vega sensitivity.
 
-        For GIRR, the vega risk weight is 100% per MAR21.44 because
-        ``min(sqrt(RWsigma * LH / T), 1) = min(sqrt(60/10), 1) = 1.0``.
+        For GIRR, the vega risk weight is 100% per ERBA NPR §__.209
+        Table 11 (BCBS MAR21.92 cross-reference).
 
         Args:
             sensitivity: A single vega sensitivity.
@@ -592,14 +575,14 @@ class GIRRCalculator:
         """Build the full intra-bucket correlation matrix for delta.
 
         Delegates to :func:`girr_params.build_girr_correlation_matrix` after
-        extracting the necessary metadata from the sensitivity list.
-
-        Full ``(N_yc + 1_infl + 1_xccy)`` matrix:
+        extracting the necessary metadata from the sensitivity list.  The
+        matrix is ordered yield-curve factors, then inflation, then
+        cross-currency basis (ERBA NPR §__.209(b)(1)):
 
         - **Tenor-to-tenor (same curve):**
           ``max(exp(-0.03 * |Tk - Tl| / min(Tk, Tl)), 0.40)``
         - **Cross-curve:** multiply tenor correlation by 0.999.
-        - **Inflation to yield curve:** 0.40.
+        - **Inflation to yield curve:** 0.40; inflation curves 0.999.
         - **XCCY basis to everything:** 0.00.
 
         Args:
@@ -611,8 +594,8 @@ class GIRRCalculator:
         """
         yc_labels: list[str] = []
         yc_tenors: list[float] = []
-        has_inflation = False
-        has_xccy = False
+        infl_labels: list[str] = []
+        xccy_labels: list[str] = []
 
         for s in sensitivities:
             if s.risk_factor_type == GIRRRiskFactorType.YIELD_CURVE:
@@ -621,9 +604,9 @@ class GIRRCalculator:
                     s.tenor.value if s.tenor is not None else 0.25
                 )
             elif s.risk_factor_type == GIRRRiskFactorType.INFLATION:
-                has_inflation = True
+                infl_labels.append(s.label or "INFLATION")
             elif s.risk_factor_type == GIRRRiskFactorType.CROSS_CURRENCY_BASIS:
-                has_xccy = True
+                xccy_labels.append(s.label or "XCCY")
 
         currency = sensitivities[0].bucket if sensitivities else "USD"
         return build_girr_correlation_matrix(
@@ -631,9 +614,9 @@ class GIRRCalculator:
             num_yield_curve_sensitivities=len(yc_labels),
             curve_labels=yc_labels,
             tenors=yc_tenors,
-            include_inflation=has_inflation,
-            include_xccy_basis=has_xccy,
             scenario=scenario,
+            inflation_labels=infl_labels,
+            xccy_basis_labels=xccy_labels,
         )
 
     # --------------------------------------------------------------------- #
@@ -647,19 +630,20 @@ class GIRRCalculator:
     ) -> np.ndarray:
         """Build the intra-bucket correlation matrix for vega risk.
 
-        Vega correlations are two-dimensional per MAR21.47:
+        Vega correlations are two-dimensional per ERBA NPR §__.209 (vega
+        paragraph; BCBS MAR21.93 cross-reference):
 
         .. math::
 
-            \\rho_{kl} = \\rho^{\\mathrm{opt}}_{kl}
-                        \\times \\rho^{\\mathrm{tenor}}_{kl}
+            \\rho_{kl} = \\min\\bigl(\\rho^{\\mathrm{opt}}_{kl}
+                        \\times \\rho^{\\mathrm{und}}_{kl},\\; 1\\bigr)
 
         where:
 
         - ``rho_opt(k, l) = exp(-alpha * |Tk_opt - Tl_opt| / min(Tk_opt, Tl_opt))``
-        - ``rho_tenor(k, l) = exp(-alpha * |Tk_und - Tl_und| / min(Tk_und, Tl_und))``
+        - ``rho_und(k, l) = exp(-alpha * |Tk_und - Tl_und| / min(Tk_und, Tl_und))``
 
-        and ``alpha = 0.01`` per the regulatory parameter.
+        and ``alpha = 1%``.
 
         Args:
             sensitivities: Vega sensitivities for one bucket.
@@ -679,28 +663,14 @@ class GIRRCalculator:
                 # Option maturity correlation ----------------------------------
                 opt_i = si.option_maturity if si.option_maturity else 0.5
                 opt_j = sj.option_maturity if sj.option_maturity else 0.5
-                if opt_i == opt_j:
-                    rho_opt = 1.0
-                else:
-                    rho_opt = math.exp(
-                        -VEGA_ALPHA
-                        * abs(opt_i - opt_j)
-                        / min(opt_i, opt_j)
-                    )
+                rho_opt = compute_vega_maturity_correlation(opt_i, opt_j)
 
-                # Underlying tenor correlation ---------------------------------
+                # Underlying residual maturity correlation ---------------------
                 und_i = si.tenor.value if si.tenor is not None else 0.5
                 und_j = sj.tenor.value if sj.tenor is not None else 0.5
-                if und_i == und_j:
-                    rho_tenor = 1.0
-                else:
-                    rho_tenor = math.exp(
-                        -VEGA_ALPHA
-                        * abs(und_i - und_j)
-                        / min(und_i, und_j)
-                    )
+                rho_und = compute_vega_maturity_correlation(und_i, und_j)
 
-                rho = rho_opt * rho_tenor
+                rho = min(rho_opt * rho_und, 1.0)
                 rho = apply_correlation_scenario(rho, scenario)
                 corr[i, j] = rho
                 corr[j, i] = rho
@@ -758,7 +728,7 @@ class GIRRCalculator:
         bucket_net_cvr: dict[str, float],
         gamma_sq: float,
     ) -> float:
-        """Curvature inter-bucket aggregation per MAR21.5(5).
+        """Curvature inter-bucket aggregation per ERBA NPR §__.206(b)(3).
 
         Formula::
 
@@ -850,6 +820,19 @@ class GIRRCalculator:
                 raise ValidationError(
                     f"Vega sensitivity for bucket '{s.bucket}' must "
                     f"specify an option_maturity."
+                )
+
+        # ERBA NPR §__.208(b)(3): no curvature for inflation / xccy basis -----
+        for s in sensitivities:
+            if (
+                s.risk_measure == RiskMeasure.CURVATURE
+                and s.risk_factor_type != GIRRRiskFactorType.YIELD_CURVE
+            ):
+                raise ValidationError(
+                    f"Curvature sensitivity for bucket '{s.bucket}' has risk "
+                    f"factor type {s.risk_factor_type.value}; the ERBA NPR "
+                    f"prescribes no curvature charge for inflation or "
+                    f"cross-currency basis risk factors."
                 )
 
     # --------------------------------------------------------------------- #

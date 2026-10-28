@@ -4,8 +4,9 @@ Provides risk weight lookup by counterparty type and other regulatory
 classification parameters. All risk weights per the 2026 US re-proposal.
 
 Key regulatory references:
-- ERBA NPR pp. 100-160: SA-CR risk weight tables
-- 12 CFR 217.32: Risk-weighted assets for general risk weights
+- ERBA NPR (March 2026) common rule text § __.111 and § __.141,
+  Tables 1-8 to § __.111 (pp. 686-700, 777-779)
+- 12 CFR 217.111: Risk-weighted assets — general risk weights (ERBA)
 - Dodd-Frank Section 939A: No external ratings for corporates
 - CLAUDE.md: Corporate IG = 65%, Retail transactor = 45%, MSA = 250%
 
@@ -46,19 +47,19 @@ SA_CR_RISK_WEIGHTS: dict[CounterpartyType, float] = {
     CounterpartyType.SOVEREIGN: 0.0,            # Placeholder — use sovereign lookup
     CounterpartyType.PSE: 0.20,                 # Per 12 CFR 217.32(c) — US PSE
     CounterpartyType.MDB: 0.0,                  # Qualifying MDB per 12 CFR 217.32(b)
-    CounterpartyType.BANK: 0.20,                # Short-term per 12 CFR 217.32(d)
-    CounterpartyType.COVERED_BOND: 0.10,        # IG covered bonds per ERBA NPR p.125
-    CounterpartyType.CORPORATE: 1.00,           # General corporate per 12 CFR 217.32(e)
-    CounterpartyType.CORPORATE_IG: 0.65,        # IG self-assessment per ERBA NPR p.112
-    CounterpartyType.SME: 0.85,                 # SME corporate per ERBA NPR p.118
-    CounterpartyType.SME_RETAIL: 0.75,          # SME retail per ERBA NPR p.120
-    CounterpartyType.RETAIL: 0.75,              # Other retail per 12 CFR 217.32(g)
+    CounterpartyType.BANK: 0.40,                # Grade A "otherwise", Table 2 to § __.111
+    CounterpartyType.COVERED_BOND: 0.40,        # Bank exposure (Grade A); no covered-bond RW in ERBA NPR
+    CounterpartyType.CORPORATE: 1.00,           # § __.111(h)
+    CounterpartyType.CORPORATE_IG: 0.65,        # § __.111(h)(1), internal IG rating
+    CounterpartyType.SME: 1.00,                 # No SME preferential RW in ERBA NPR § __.111(h)
+    CounterpartyType.SME_RETAIL: 0.75,          # Regulatory retail (≤ $1M aggregate) § __.111(g)(1)
+    CounterpartyType.RETAIL: 0.75,              # Regulatory retail § __.111(g)(1)(i)
     CounterpartyType.RETAIL_MORTGAGE: 0.50,     # Placeholder — LTV-based, see table below
-    CounterpartyType.RETAIL_TRANSACTOR: 0.45,   # Per CLAUDE.md (not 55% from 2023 NPR)
+    CounterpartyType.RETAIL_TRANSACTOR: 0.45,   # § __.111(g)(1)(ii)
     CounterpartyType.CRE: 1.00,                 # Placeholder — LTV-based, see table below
-    CounterpartyType.ADC: 1.50,                 # ADC per ERBA NPR p.145
-    CounterpartyType.SUBORDINATED_DEBT: 1.50,   # Per 12 CFR 217.32(l)
-    CounterpartyType.EQUITY: 2.50,              # Per ERBA NPR p.155 (listed equity)
+    CounterpartyType.ADC: 1.00,                 # ADC non-HVCRE § __.111(f)(4); HVCRE 150%
+    CounterpartyType.SUBORDINATED_DEBT: 1.50,   # § __.111(h)(5)
+    CounterpartyType.EQUITY: 3.00,              # Publicly traded equity § __.141(b)(5)
     CounterpartyType.CCP_QUALIFYING: 0.02,      # 2% per 12 CFR 217.35
     CounterpartyType.CCP_NON_QUALIFYING: 1.00,  # Non-qualifying CCP
     CounterpartyType.DEFAULTED: 1.50,           # Per 12 CFR 217.32(k)
@@ -67,32 +68,45 @@ SA_CR_RISK_WEIGHTS: dict[CounterpartyType, float] = {
 }
 
 # Residential mortgage risk weights by LTV bucket
-# Per ERBA NPR pp. 140-145 — Table 3
-# LTV thresholds and corresponding risk weights
+# Table 5 to § __.111 (ERBA NPR p. 692) — regulatory residential real
+# estate NOT dependent on real estate cash flows
 RESIDENTIAL_MORTGAGE_RW_BY_LTV: list[tuple[float, float]] = [
     (0.50, 0.20),    # LTV <= 50%: 20% RW
     (0.60, 0.25),    # 50% < LTV <= 60%: 25% RW
-    (0.70, 0.30),    # 60% < LTV <= 70%: 30% RW
-    (0.80, 0.40),    # 70% < LTV <= 80%: 40% RW
-    (0.90, 0.50),    # 80% < LTV <= 90%: 50% RW
-    (1.00, 0.70),    # 90% < LTV <= 100%: 70% RW
-    (float("inf"), 1.00),  # LTV > 100%: 100% RW (whole-loan approach)
+    (0.80, 0.30),    # 60% < LTV <= 80%: 30% RW
+    (0.90, 0.40),    # 80% < LTV <= 90%: 40% RW
+    (1.00, 0.50),    # 90% < LTV <= 100%: 50% RW
+    (float("inf"), 0.70),  # LTV > 100%: 70% RW
+]
+
+# Table 6 to § __.111 (p. 693) — regulatory residential real estate
+# dependent on real estate cash flows
+RESIDENTIAL_MORTGAGE_CF_DEPENDENT_RW_BY_LTV: list[tuple[float, float]] = [
+    (0.50, 0.30),
+    (0.60, 0.35),
+    (0.80, 0.45),
+    (0.90, 0.60),
+    (1.00, 0.75),
+    (float("inf"), 1.05),
 ]
 
 # Commercial real estate risk weights by LTV bucket
-# Per ERBA NPR pp. 145-148 — Table 4
+# Table 8 to § __.111 (p. 693) — regulatory CRE dependent on cash flows
 CRE_RW_BY_LTV: list[tuple[float, float]] = [
     (0.60, 0.70),    # LTV <= 60%: 70% RW
     (0.80, 0.90),    # 60% < LTV <= 80%: 90% RW
     (float("inf"), 1.10),  # LTV > 80%: 110% RW
 ]
 
-# Bank risk weights by maturity
-# Per ERBA NPR p.108 and 12 CFR 217.32(d)
-# TODO: VERIFY — exact maturity buckets for bank exposures under 2026 re-proposal
+# Bank risk weights — Table 2 to § __.111 (p. 688).  The ERBA NPR has NO
+# general maturity-based preference; the only short-term row is for foreign
+# bank self-liquidating trade-related contingent items (<= 3 months).
+# Maturity-based lookup retained for API compatibility; both rows carry the
+# Grade A "otherwise" weight.  Use src.credit_risk.sa.risk_weights for the
+# full Grade A/B/C treatment.
 BANK_RW_BY_MATURITY: list[tuple[float, float]] = [
-    (0.25, 0.20),    # <= 3 months (short-term claims)
-    (float("inf"), 0.20),  # > 3 months — 20% base for US banks
+    (0.25, 0.40),
+    (float("inf"), 0.40),
 ]
 
 

@@ -10,14 +10,16 @@ The credit-equivalent amount is computed as:
 
 where undrawn_amount = notional_amount - drawn_amount.
 
-CCF values follow the US Federal Reserve Basel III Endgame 2026 Re-Proposal,
-which adopts 40% (not 50%) for other commitments > 1 year and 10% for
-unconditionally cancellable commitments (UCCs).
+CCF values follow the March 2026 ERBA NPR, § __.112(b) (pp. 701-703):
+10% for unconditionally cancelable commitments, 20% for short-term
+trade-related contingencies, 40% for ALL other commitments regardless of
+maturity, 50% for transaction-related contingencies / NIFs / RUFs and
+100% for guarantees, repos, securities lending/borrowing, financial
+standby letters of credit and forward agreements.
 
 References:
-    - 12 CFR 217.33 — Off-balance sheet exposures
-    - BCBS d424 CRE20.69-20.93 — Credit conversion factors
-    - US Federal Reserve Basel III Endgame 2026 Re-Proposal
+    - ERBA NPR § __.112 (12 CFR 217.112) — Off-balance sheet exposures
+    - BCBS d424 CRE20.94-20.101 — Credit conversion factors (aligned)
 """
 
 from __future__ import annotations
@@ -98,24 +100,21 @@ class OBSCategory(str, Enum):
     """
 
     COMMITMENT_GT_1Y = "COMMITMENT_GT_1Y"
-    """Other commitments with original maturity > 1 year: 40% CCF.
+    """Commitments with original maturity > 1 year: 40% CCF.
 
-    Commitments to extend credit (including revolving credit lines,
-    term loan commitments) with original maturity exceeding one year
-    that do not qualify as UCCs.
-
-    Per US Federal Reserve Basel III Endgame 2026 Re-Proposal.
-    Note: The 2026 re-proposal reduces this from 50% to 40%.
-    BCBS d424 CRE20.75.
+    ERBA NPR § __.112(b)(3) (p. 702): "A banking organization must apply a
+    40 percent CCF to commitments, regardless of the maturity of the
+    facility, unless they qualify for a lower or higher CCF."  Replaces the
+    current rule's 50% (> 1 year) / 20% (<= 1 year) split.
     """
 
     COMMITMENT_LE_1Y = "COMMITMENT_LE_1Y"
-    """Other commitments with original maturity <= 1 year: 20% CCF.
+    """Commitments with original maturity <= 1 year: 40% CCF.
 
-    Short-term commitments to extend credit that do not qualify
-    as unconditionally cancellable.
-
-    Per 12 CFR 217.33(e) and BCBS d424 CRE20.76.
+    The ERBA NPR applies the SAME 40% CCF regardless of maturity
+    (§ __.112(b)(3)).  The category is retained only for reporting
+    granularity; it is NOT a lower CCF (the current rule's 20% for
+    short-term commitments is withdrawn).
     """
 
     DIRECT_CREDIT_SUB = "DIRECT_CREDIT_SUB"
@@ -344,18 +343,24 @@ class OBSCCFCalculator:
         OBSCategory.NIF: 0.50,
         OBSCategory.RUF: 0.50,
         OBSCategory.COMMITMENT_GT_1Y: 0.40,
-        OBSCategory.COMMITMENT_LE_1Y: 0.20,
+        OBSCategory.COMMITMENT_LE_1Y: 0.40,
         OBSCategory.DIRECT_CREDIT_SUB: 1.00,
         OBSCategory.FORWARD_PURCHASE: 1.00,
         OBSCategory.REPO_STYLE: 1.00,
         OBSCategory.SEC_LENDING: 1.00,
         OBSCategory.ACCEPTANCE: 1.00,
     }
-    """CCF values per 12 CFR 217.33 and BCBS d424 CRE20.70.
+    """CCF values per ERBA NPR § __.112(b) (pp. 701-703).
 
-    Key US-specific adjustments in 2026 re-proposal:
-      - COMMITMENT_GT_1Y: 40% (reduced from 50% in prior rules)
-      - UCC: 10% (unconditionally cancellable commitments)
+      - 10%: unconditionally cancelable commitments (§ __.112(b)(1))
+      - 20%: self-liquidating trade-related contingent items, original
+        maturity <= 1 year (§ __.112(b)(2))
+      - 40%: commitments regardless of maturity (§ __.112(b)(3))
+      - 50%: transaction-related contingent items, NIFs, RUFs (§ __.112(b)(4))
+      - 100%: guarantees, repurchase agreements, credit-enhancing
+        representations and warranties, securities lending/borrowing,
+        financial standby letters of credit, forward agreements
+        (§ __.112(b)(5))
     """
 
     def __init__(self) -> None:
@@ -598,9 +603,11 @@ class OBSCCFCalculator:
         Returns:
             The appropriate OBSCategory.
 
+        Under the ERBA NPR both maturity categories carry the same 40% CCF
+        (§ __.112(b)(3)); the split is retained for reporting only.
+
         References:
-            12 CFR 217.33(b)-(e) — Commitment classification
-            BCBS d424 CRE20.71-20.76 — Maturity-based CCFs
+            ERBA NPR § __.112(b)(1), (3) (pp. 701-702)
         """
         if is_unconditionally_cancellable:
             return OBSCategory.UCC

@@ -29,17 +29,30 @@ from typing import Optional
 import numpy as np
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from typing import Callable
+
 from src.counterparty_risk.saccr.saccr_params import (
     ALPHA_FINANCIAL,
     ALPHA_NON_FINANCIAL,
+    CREDIT_ASSET_CLASSES,
     PFE_FLOOR,
     SACCR_ASSET_CLASS_PARAMS,
+    SUPERVISORY_DISCOUNT_RATE,
+    SUPERVISORY_DURATION_FLOOR,
     SACCRAssetClass,
     AssetClassParams,
     IRMaturityBucket,
     ir_maturity_bucket,
     mpor_scaling_factor,
+    unmargined_maturity_factor,
 )
+
+MaturityFactorFn = Callable[["SACCRTrade"], float]
+
+
+def _unit_maturity_factor(trade: "SACCRTrade") -> float:
+    """Maturity factor of 1.0 (used when callers aggregate without context)."""
+    return 1.0
 
 logger = logging.getLogger(__name__)
 
@@ -223,24 +236,32 @@ class SACCRResult(BaseModel):
 
 
 def supervisory_duration(start_years: float, end_years: float) -> float:
-    """Compute supervisory duration SD per CRE52.46.
+    """Compute supervisory duration SD per ERBA NPR § __.114(i)(2)(i)(A).
 
-    SD = (exp(-0.05 * S) - exp(-0.05 * E)) / 0.05
+    .. math::
+
+        SD = \\max\\left(\\frac{e^{-0.05 S} - e^{-0.05 E}}{0.05},\\; 0.04\\right)
+
+    where S and E are measured in years (business days / 250) and the
+    floor of 0.04 corresponds to ten business days.
 
     Parameters
     ----------
     start_years : float
-        Start date in years from today.
+        Start date in years from today (zero if already started).
     end_years : float
         End date in years from today.
 
     Returns
     -------
     float
-        Supervisory duration (always positive).
+        Supervisory duration, floored at 0.04.
     """
-    sd = (math.exp(-0.05 * start_years) - math.exp(-0.05 * end_years)) / 0.05
-    return max(sd, 0.0)
+    sd = (
+        math.exp(-SUPERVISORY_DISCOUNT_RATE * start_years)
+        - math.exp(-SUPERVISORY_DISCOUNT_RATE * end_years)
+    ) / SUPERVISORY_DISCOUNT_RATE
+    return max(sd, SUPERVISORY_DURATION_FLOOR)
 
 
 def adjusted_notional(trade: SACCRTrade) -> float:
@@ -262,11 +283,7 @@ def adjusted_notional(trade: SACCRTrade) -> float:
     """
     ac = trade.saccr_asset_class
 
-    if ac in (
-        SACCRAssetClass.IR,
-        SACCRAssetClass.CREDIT_IG,
-        SACCRAssetClass.CREDIT_SPEC,
-    ):
+    if ac == SACCRAssetClass.IR or ac in CREDIT_ASSET_CLASSES:
         sd = supervisory_duration(trade.start_years, trade.end_years)
         return trade.notional * sd
 
@@ -274,24 +291,31 @@ def adjusted_notional(trade: SACCRTrade) -> float:
     return trade.notional
 
 
-def trade_level_addon(trade: SACCRTrade) -> float:
-    """Compute the trade-level effective notional contribution.
+def trade_level_addon(
+    trade: SACCRTrade,
+    maturity_factor: float = 1.0,
+) -> float:
+    """Compute the trade-level effective notional per ERBA NPR § __.114(i)(1).
 
-    effective_notional_i = delta_i * d_i
+    adjusted derivative contract amount = delta_i * d_i * MF_i
 
-    This is the *signed* contribution.  The absolute add-on is obtained
-    after aggregation within hedging sets.
+    (The supervisory factor is applied at the hedging-set level.)  This is
+    the *signed* contribution; the absolute add-on is obtained after
+    aggregation within hedging sets.
 
     Parameters
     ----------
     trade : SACCRTrade
+    maturity_factor : float
+        MF_i per § __.114(i)(4): sqrt(1.5 * MPOR / 250) for margined
+        contracts, sqrt(min(M, 250) / 250) for unmargined contracts.
 
     Returns
     -------
     float
-        delta_i * d_i (can be negative for short trades).
+        delta_i * d_i * MF_i (can be negative for short trades).
     """
-    return trade.supervisory_delta * adjusted_notional(trade)
+    return trade.supervisory_delta * adjusted_notional(trade) * maturity_factor
 
 
 # ============================================================================
@@ -299,16 +323,22 @@ def trade_level_addon(trade: SACCRTrade) -> float:
 # ============================================================================
 
 
-def _aggregate_ir_addon(trades: list[SACCRTrade]) -> float:
+def _aggregate_ir_addon(
+    trades: list[SACCRTrade],
+    mf_fn: MaturityFactorFn = _unit_maturity_factor,
+) -> float:
     """Aggregate add-on for Interest Rate asset class.
 
-    IR uses three maturity buckets.  Within each bucket, effective notionals
-    are summed.  Across buckets, partial offsetting is allowed per CRE52.49.
+    IR uses three maturity buckets (end date < 1y, 1-5y, > 5y).  Within
+    each bucket, effective notionals are summed.  Across buckets, partial
+    offsetting is allowed per ERBA NPR § __.114(h)(1) Formula 1.
 
     Parameters
     ----------
     trades : list[SACCRTrade]
         All IR trades in the netting set.
+    mf_fn : callable
+        Returns the maturity factor MF_i for a trade.
 
     Returns
     -------
@@ -326,7 +356,7 @@ def _aggregate_ir_addon(trades: list[SACCRTrade]) -> float:
     for t in trades:
         ccy = t.underlying.upper() if t.underlying else "USD"
         bucket = ir_maturity_bucket(t.end_years)
-        by_currency[ccy][bucket] += trade_level_addon(t)
+        by_currency[ccy][bucket] += trade_level_addon(t, mf_fn(t))
 
     total_addon = 0.0
 
@@ -354,20 +384,23 @@ def _aggregate_ir_addon(trades: list[SACCRTrade]) -> float:
 def _aggregate_single_entity_addon(
     trades: list[SACCRTrade],
     asset_class: SACCRAssetClass,
+    mf_fn: MaturityFactorFn = _unit_maturity_factor,
 ) -> float:
-    """Aggregate add-on for asset classes with entity-level hedging sets.
+    """Aggregate add-on for equity and commodity hedging sets.
 
-    Used for Credit, Equity, and Commodity.  Within each hedging set
-    (grouped by ``underlying``), the systematic and idiosyncratic components
-    are separated using the supervisory correlation rho.
+    Per ERBA NPR § __.114(h)(3)-(4), within each hedging set the systematic
+    and idiosyncratic components are separated using the supervisory
+    correlation rho:
 
-    AddOn = SF * sqrt( (rho * sum(EN_i))^2 + (1-rho^2) * sum(EN_i^2) )
+    AddOn = SF * sqrt( (rho * sum(EN_k))^2 + (1-rho^2) * sum(EN_k^2) )
 
     Parameters
     ----------
     trades : list[SACCRTrade]
         Trades of the given asset class.
     asset_class : SACCRAssetClass
+    mf_fn : callable
+        Returns the maturity factor MF_i for a trade.
 
     Returns
     -------
@@ -382,7 +415,7 @@ def _aggregate_single_entity_addon(
     by_entity: dict[str, float] = defaultdict(float)
     for t in trades:
         entity = t.underlying if t.underlying else "__UNKNOWN__"
-        by_entity[entity] += trade_level_addon(t)
+        by_entity[entity] += trade_level_addon(t, mf_fn(t))
 
     entity_notionals = list(by_entity.values())
 
@@ -397,15 +430,63 @@ def _aggregate_single_entity_addon(
     return sf * effective_notional
 
 
-def _aggregate_fx_addon(trades: list[SACCRTrade]) -> float:
-    """Aggregate add-on for FX asset class.
+def _aggregate_credit_addon(
+    trades: list[SACCRTrade],
+    mf_fn: MaturityFactorFn = _unit_maturity_factor,
+) -> float:
+    """Aggregate add-on for the single credit hedging set per § __.114(h)(3).
 
-    FX hedging sets are per currency pair.  rho = 1.0 so the formula
-    simplifies to SF * |sum(EN_i)| per pair, then summed.
+    All credit derivative contracts in a netting set form ONE hedging set
+    (§ __.114(b) hedging set (iii)).  Each reference entity k carries its
+    own supervisory factor SF_k and correlation rho_k from Table 2 to
+    § __.114 (single-name IG/spec/sub-spec rho 50%; index rho 80%):
+
+    AddOn = sqrt( (sum_k rho_k * AddOn_k)^2 + sum_k (1 - rho_k^2) * AddOn_k^2 ),
+    AddOn_k = SF_k * sum_{i in k} delta_i * d_i * MF_i
 
     Parameters
     ----------
     trades : list[SACCRTrade]
+        All credit trades in the netting set.
+    mf_fn : callable
+        Returns the maturity factor MF_i for a trade.
+
+    Returns
+    -------
+    float
+        Credit hedging-set add-on.
+    """
+    by_entity: dict[str, float] = defaultdict(float)
+    rho_by_entity: dict[str, float] = {}
+
+    for t in trades:
+        ac = t.saccr_asset_class
+        params = SACCR_ASSET_CLASS_PARAMS[ac]
+        entity = t.underlying if t.underlying else "__UNKNOWN__"
+        by_entity[entity] += params.supervisory_factor * trade_level_addon(t, mf_fn(t))
+        rho_by_entity[entity] = params.correlation
+
+    systematic = sum(rho_by_entity[k] * v for k, v in by_entity.items()) ** 2
+    idiosyncratic = sum(
+        (1.0 - rho_by_entity[k] ** 2) * v**2 for k, v in by_entity.items()
+    )
+    return math.sqrt(max(systematic + idiosyncratic, 0.0))
+
+
+def _aggregate_fx_addon(
+    trades: list[SACCRTrade],
+    mf_fn: MaturityFactorFn = _unit_maturity_factor,
+) -> float:
+    """Aggregate add-on for FX asset class per ERBA NPR § __.114(h)(2).
+
+    FX hedging sets are per currency pair; the hedging set amount is the
+    absolute value of the sum of adjusted derivative contract amounts.
+
+    Parameters
+    ----------
+    trades : list[SACCRTrade]
+    mf_fn : callable
+        Returns the maturity factor MF_i for a trade.
 
     Returns
     -------
@@ -418,7 +499,7 @@ def _aggregate_fx_addon(trades: list[SACCRTrade]) -> float:
     by_pair: dict[str, float] = defaultdict(float)
     for t in trades:
         pair = t.underlying.upper() if t.underlying else "UNKNOWN"
-        by_pair[pair] += trade_level_addon(t)
+        by_pair[pair] += trade_level_addon(t, mf_fn(t))
 
     total = 0.0
     for pair_en in by_pair.values():
@@ -500,6 +581,18 @@ class SACCRCalculator:
         dict[str, float]
             Mapping of asset-class name to its add-on value.
         """
+        # Maturity factor per § __.114(i)(4): margined sets use the MPOR
+        # based factor; unmargined contracts use remaining maturity.
+        if ns.is_margined:
+            margined_mf = mpor_scaling_factor(ns.mpor)
+
+            def mf_fn(t: SACCRTrade) -> float:
+                return margined_mf
+        else:
+
+            def mf_fn(t: SACCRTrade) -> float:
+                return unmargined_maturity_factor(t.end_years)
+
         # Group trades by asset class
         trades_by_ac: dict[SACCRAssetClass, list[SACCRTrade]] = defaultdict(list)
         for t in ns.trades:
@@ -507,20 +600,28 @@ class SACCRCalculator:
 
         addons: dict[str, float] = {}
 
+        # All credit categories form a single hedging set (§ __.114(b)).
+        credit_trades = [
+            t for ac, ts in trades_by_ac.items() if ac in CREDIT_ASSET_CLASSES for t in ts
+        ]
+        if credit_trades:
+            addons["CREDIT"] = _aggregate_credit_addon(credit_trades, mf_fn)
+            logger.debug("AddOn[CREDIT] = %.2f", addons["CREDIT"])
+
         for ac, ac_trades in trades_by_ac.items():
+            if ac in CREDIT_ASSET_CLASSES:
+                continue
             if ac == SACCRAssetClass.IR:
-                addon = _aggregate_ir_addon(ac_trades)
+                addon = _aggregate_ir_addon(ac_trades, mf_fn)
             elif ac == SACCRAssetClass.FX:
-                addon = _aggregate_fx_addon(ac_trades)
+                addon = _aggregate_fx_addon(ac_trades, mf_fn)
             elif ac in (
-                SACCRAssetClass.CREDIT_IG,
-                SACCRAssetClass.CREDIT_SPEC,
                 SACCRAssetClass.EQUITY_SINGLE,
                 SACCRAssetClass.EQUITY_INDEX,
                 SACCRAssetClass.COMMODITY_ELEC,
                 SACCRAssetClass.COMMODITY_OTHER,
             ):
-                addon = _aggregate_single_entity_addon(ac_trades, ac)
+                addon = _aggregate_single_entity_addon(ac_trades, ac, mf_fn)
             else:
                 logger.warning("Unhandled asset class %s, skipping.", ac)
                 addon = 0.0
@@ -544,20 +645,9 @@ class SACCRCalculator:
         float
         """
         addons = self._addon_by_asset_class(ns)
-        total = sum(addons.values())
-
-        # Apply MPOR scaling for margined netting sets
-        if ns.is_margined:
-            scale = mpor_scaling_factor(ns.mpor)
-            total *= scale
-            logger.debug(
-                "MPOR scaling for %s: factor=%.4f, scaled addon=%.2f",
-                ns.netting_set_id,
-                scale,
-                total,
-            )
-
-        return total
+        # Maturity factors (margined MPOR-based or unmargined) are applied
+        # at trade level inside _addon_by_asset_class per § __.114(i)(4).
+        return sum(addons.values())
 
     # ------------------------------------------------------------------
     #  PFE Multiplier
@@ -674,14 +764,6 @@ class SACCRCalculator:
 
         addons_by_ac = self._addon_by_asset_class(netting_set)
         addon_agg = sum(addons_by_ac.values())
-
-        # MPOR scaling for margined sets
-        if netting_set.is_margined:
-            scale = mpor_scaling_factor(netting_set.mpor)
-            addon_agg *= scale
-            addons_by_ac = {
-                k: v * scale for k, v in addons_by_ac.items()
-            }
 
         mult = self._multiplier(netting_set, addon_agg)
         pfe = mult * addon_agg

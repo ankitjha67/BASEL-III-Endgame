@@ -1,45 +1,55 @@
-"""DRC Non-Securitization Calculator -- FRTB Default Risk Charge.
+"""Default risk capital requirement, non-securitization -- ERBA NPR §__.210(b) (p.901-907).
 
-Implements the Default Risk Charge (DRC) for non-securitization exposures
-per MAR22 of the Basel III Endgame framework (BCBS d457).
+Implements the standardized default risk capital requirement for
+non-securitization debt and equity positions under the March 2026 US ERBA
+NPR (BCBS d457 MAR22.1-22.23 cross-reference).
 
-DRC captures jump-to-default (JTD) risk at a 99.9% confidence level over
-a 1-year capital horizon.  It applies to all instruments subject to
-issuer default risk, including bonds, loans, CDS, and equity.
+Pipeline:
 
-Key steps:
+1. Exclude US sovereign / specified supranational / MDB positions
+   (§__.210(a): not default risk positions).
+2. Gross default exposure (§__.210(b)(1)(i)-(ii)):
+   long = max(LGD x notional + P&L, 0); short = min(LGD x notional + P&L, 0).
+3. Maturity scaling (§__.210(b)(1)(iii)): < 1 year scaled by the fraction
+   of a year, floored at 3 months; cash equity options.
+4. Net default exposure (§__.210(b)(1)(v)): same obligor offsetting where
+   the short's seniority is the same or lower than the long's.
+5. Buckets (§__.210(b)(2)): non-US sovereign, PSE & GSE, corporate, defaulted.
+6. Bucket charge (§__.210(b)(3)):
+   DRC_b = max( sum_long RW x NDE - HBR_b x sum_short RW x |NDE|, 0 ).
+7. Total = simple sum across buckets (no diversification).
 
-1. Compute gross JTD for each position (long and short).
-2. Apply maturity weighting (1-year cap, 3-month floor).
-3. Net same-obligor / same-seniority JTDs.
-4. Compute Hedge Benefit Ratio (HBR) per bucket.
-5. Apply risk weights by rating to produce the bucket-level DRC.
-6. Aggregate across buckets (simple sum -- no diversification).
-
-Reference: BCBS d457 MAR22, US Federal Reserve Basel III Endgame Final Rule.
+Monetary inputs are in USD millions ($M) unless stated otherwise.
 """
 
 from __future__ import annotations
 
 import logging
 from collections import defaultdict
-from typing import Sequence
+from collections.abc import Sequence
+from typing import Any
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from src.core.enums import (
+    DRCCreditQuality,
     DRCExposureType,
     DRCRatingCategory,
     DRCSeniority,
 )
-from src.core.exceptions import CalculationError, ValidationError
+from src.core.exceptions import ValidationError
 from src.market_risk.frtb.drc.drc_params import (
-    DRC_RISK_WEIGHTS,
-    LGD_VALUES,
+    DRC_EXCLUDED_EXPOSURE_TYPES,
+    UNHEDGED_CASH_EQUITY_MATURITY_DEFAULT,
+    UNHEDGED_CASH_EQUITY_MATURITY_OPTIONS,
+    compute_hedge_benefit_ratio,
     compute_maturity_weight,
+    get_bucket,
     get_bucket_label,
     get_lgd,
     get_risk_weight,
+    get_seniority_rank,
+    rating_to_credit_quality,
 )
 
 logger = logging.getLogger(__name__)
@@ -51,36 +61,48 @@ logger = logging.getLogger(__name__)
 
 
 class DRCPosition(BaseModel):
-    """A single position for the DRC non-securitization calculation.
-
-    Represents an instrument subject to issuer default risk.  Each position
-    carries the obligor identity, capital-structure seniority, credit rating,
-    and economic terms (notional, market value, maturity, direction) needed
-    to compute the jump-to-default amount.
+    """A non-securitization default risk position per §__.210(b) (ERBA NPR p.901).
 
     Attributes:
-        issuer: Name or identifier of the obligor / issuer.
-        seniority: Seniority of the instrument in the capital structure.
-        rating: External credit rating category.
-        exposure_type: Sector bucket classification (Corporate, Sovereign, etc.).
-        notional: Face value / par amount of the position.
-        market_value: Current mark-to-market value of the position.
-        maturity_years: Remaining maturity in years (must be >= 0).
-        is_long: ``True`` for a long credit exposure, ``False`` for short.
+        issuer: Obligor identifier.  Positions sharing an obligor (or an
+            explicit ``offset_group``) are eligible for §__.210(b)(1)(v)
+            offsetting.
+        seniority: LGD / seniority class (§__.210(b)(1)(iv)).
+        exposure_type: Bucket classification (§__.210(b)(2)); US_SOVEREIGN_MDB
+            positions are excluded from the charge.
+        credit_quality: Credit quality category (Table 1 to §__.210).  May be
+            omitted when ``rating`` is supplied; it is then derived via
+            ``drc_params.RATING_TO_CREDIT_QUALITY``.
+        rating: Optional rating-style convenience input (not used by the NPR
+            directly).
+        notional: Face value ($M, positive; direction given by ``is_long``).
+        market_value: Current market value ($M, same sign convention).
+        maturity_years: Remaining maturity in years (>= 0).
+        is_long: True for a long credit exposure, False for short.
+        is_us_sovereign_or_mdb: Flag marking US sovereign / supranational /
+            MDB exposure; excluded per §__.210(a).
+        is_cash_equity: Cash equity position (maturity option applies).
+        hedged_derivative_maturity_years: For cash equity hedging a
+            derivative, the derivative's maturity may be used
+            (§__.210(b)(1)(iii)).
+        offset_group: Optional obligor-override key.  GSEs are separate
+            obligors, but UMBS issued by different GSEs may fully offset:
+            give those positions the same ``offset_group``.
     """
 
     issuer: str
     seniority: DRCSeniority
-    rating: DRCRatingCategory
-    exposure_type: DRCExposureType
+    exposure_type: DRCExposureType = DRCExposureType.CORPORATE
+    credit_quality: DRCCreditQuality | None = None
+    rating: DRCRatingCategory | None = None
     notional: float
     market_value: float
     maturity_years: float
     is_long: bool
-
-    # ------------------------------------------------------------------ #
-    #  Validators                                                         #
-    # ------------------------------------------------------------------ #
+    is_us_sovereign_or_mdb: bool = False
+    is_cash_equity: bool = False
+    hedged_derivative_maturity_years: float | None = Field(default=None, ge=0.0)
+    offset_group: str | None = None
 
     @field_validator("notional")
     @classmethod
@@ -101,33 +123,78 @@ class DRCPosition(BaseModel):
     def _no_securitization(cls, v: DRCExposureType) -> DRCExposureType:
         if v == DRCExposureType.SECURITIZATION:
             raise ValueError(
-                "Securitization exposures must use the DRC-Sec calculator, "
+                "Securitization exposures must use the DRC-Sec calculators, "
                 "not the non-securitization DRC."
             )
         return v
 
+    @model_validator(mode="after")
+    def _resolve_credit_quality(self) -> DRCPosition:
+        if self.credit_quality is None:
+            if self.rating is None:
+                raise ValueError(
+                    "Either credit_quality (ERBA NPR Table 1 to §__.210) or the "
+                    "rating convenience input must be supplied."
+                )
+            self.credit_quality = rating_to_credit_quality(self.rating)
+        if self.exposure_type == DRCExposureType.DEFAULTED:
+            self.credit_quality = DRCCreditQuality.DEFAULTED
+        return self
 
-class DRCResult(BaseModel):
-    """Result of a DRC non-securitization calculation.
+    @property
+    def is_excluded(self) -> bool:
+        """True when the position is not a default risk position (§__.210(a))."""
+        return (
+            self.is_us_sovereign_or_mdb
+            or self.exposure_type in DRC_EXCLUDED_EXPOSURE_TYPES
+        )
 
-    Contains the aggregate capital charge, per-bucket breakdown, and
-    diagnostic JTD statistics useful for risk reporting and reconciliation.
+    @property
+    def obligor_key(self) -> str:
+        """Obligor identity used for offsetting (``offset_group`` overrides issuer)."""
+        return self.offset_group if self.offset_group is not None else self.issuer
+
+
+class DRCBucketDetail(BaseModel):
+    """Per-bucket diagnostics for §__.210(b)(3).
 
     Attributes:
-        total_charge: Aggregate DRC capital charge (sum of all buckets).
-        bucket_charges: Capital charge broken down by bucket label.
-        gross_jtd_long: Sum of all positive (long) gross JTDs before netting.
-        gross_jtd_short: Sum of all negative (short) gross JTDs before netting.
-        net_jtd_long: Sum of positive net JTDs after same-obligor netting.
-        net_jtd_short: Sum of negative net JTDs after same-obligor netting.
+        bucket: Bucket label.
+        rw_long: sum_long RW x NDE.
+        rw_short: sum_short RW x |NDE|.
+        hbr: Hedge benefit ratio for the bucket.
+        charge: max(rw_long - hbr x rw_short, 0).
+    """
+
+    bucket: str
+    rw_long: float
+    rw_short: float
+    hbr: float
+    charge: float
+
+
+class DRCResult(BaseModel):
+    """Result of the non-securitization default risk capital requirement.
+
+    Attributes:
+        total_charge: Sum of bucket charges ($M).
+        bucket_charges: Charge by bucket label.
+        bucket_details: Per-bucket HBR and risk-weighted long / short sums.
+        gross_jtd_long: Sum of positive gross default exposures (maturity scaled).
+        gross_jtd_short: Sum of negative gross default exposures (maturity scaled).
+        net_jtd_long: Sum of positive net default exposures.
+        net_jtd_short: Sum of negative net default exposures.
+        excluded_positions: Count of US sovereign / MDB positions excluded.
     """
 
     total_charge: float
     bucket_charges: dict[str, float]
+    bucket_details: list[DRCBucketDetail] = []
     gross_jtd_long: float
     gross_jtd_short: float
     net_jtd_long: float
     net_jtd_short: float
+    excluded_positions: int = 0
 
 
 # =========================================================================
@@ -135,49 +202,28 @@ class DRCResult(BaseModel):
 # =========================================================================
 
 
-class _NettingKey(BaseModel):
-    """Composite key for same-obligor / same-seniority netting.
+class _NetDefaultExposure(BaseModel):
+    """A net default exposure after same-obligor offsetting.
 
-    JTDs are netted across long and short positions that share the
-    same issuer **and** the same seniority per MAR22.15.  The exposure
-    type and rating are carried through for downstream risk-weight lookup.
+    Carries the attributes needed for the Table 1 risk-weight lookup and
+    bucket assignment.
     """
 
-    issuer: str
+    obligor: str
     seniority: DRCSeniority
     exposure_type: DRCExposureType
-    rating: DRCRatingCategory
-
-    model_config = {"frozen": True}
-
-    def __hash__(self) -> int:  # noqa: D105
-        return hash(
-            (self.issuer, self.seniority, self.exposure_type, self.rating)
-        )
-
-    def __eq__(self, other: object) -> bool:  # noqa: D105
-        if not isinstance(other, _NettingKey):
-            return NotImplemented
-        return (
-            self.issuer == other.issuer
-            and self.seniority == other.seniority
-            and self.exposure_type == other.exposure_type
-            and self.rating == other.rating
-        )
-
-
-class _NettedJTD(BaseModel):
-    """Result of netting JTDs for a single obligor/seniority group.
-
-    After same-obligor netting, each group collapses to a single net JTD
-    that is either long (positive) or short (negative).
-    """
-
-    issuer: str
-    seniority: DRCSeniority
-    exposure_type: DRCExposureType
-    rating: DRCRatingCategory
+    credit_quality: DRCCreditQuality
     net_jtd: float  # positive = net long, negative = net short
+
+    @property
+    def bucket(self) -> DRCExposureType:
+        """§__.210(b)(2) bucket (defaulted positions -> DEFAULTED)."""
+        return get_bucket(self.exposure_type, self.credit_quality)
+
+    @property
+    def risk_weight(self) -> float:
+        """Table 1 to §__.210 risk weight."""
+        return get_risk_weight(self.credit_quality, self.bucket)
 
 
 # =========================================================================
@@ -186,23 +232,12 @@ class _NettedJTD(BaseModel):
 
 
 class DRCCalculator:
-    """Default Risk Charge calculator for non-securitization exposures.
+    """Non-securitization default risk capital calculator per §__.210(b).
 
-    Implements the full DRC pipeline per MAR22:
-
-    1. **JTD computation** -- Translate each position into a gross
-       jump-to-default amount using LGD, notional, and cumulative P&L.
-    2. **Maturity weighting** -- Scale each JTD by a maturity factor
-       (linear in maturity, 1-year cap, 3-month floor).
-    3. **Same-obligor netting** -- Net long and short JTDs that share
-       the same issuer and seniority.
-    4. **Bucket aggregation** -- Group net JTDs by exposure type
-       (Corporate, Sovereign, Local Government).
-    5. **Hedge Benefit Ratio (HBR)** -- Compute the per-bucket ratio
-       that limits the offset of shorts against longs.
-    6. **Risk-weighted DRC** -- Apply risk weights by rating and
-       compute the final charge per bucket.
-    7. **Total DRC** -- Simple sum across buckets (no diversification).
+    Args:
+        unhedged_cash_equity_maturity_years: Maturity assigned to unhedged
+            cash equity positions; §__.210(b)(1)(iii) permits 3 months
+            (0.25) or 1 year (1.0).  Default 1 year.
 
     Usage::
 
@@ -211,36 +246,33 @@ class DRCCalculator:
         print(result.total_charge)
     """
 
-    # ------------------------------------------------------------------ #
-    #  Initialization                                                     #
-    # ------------------------------------------------------------------ #
-
-    def __init__(self) -> None:
-        """Initialize the DRC calculator.
-
-        No mutable configuration state is kept; all regulatory parameters
-        are sourced from :mod:`drc_params`.
-        """
+    def __init__(
+        self,
+        unhedged_cash_equity_maturity_years: float = UNHEDGED_CASH_EQUITY_MATURITY_DEFAULT,
+    ) -> None:
+        """Initialise the calculator and validate the cash equity option."""
+        if unhedged_cash_equity_maturity_years not in UNHEDGED_CASH_EQUITY_MATURITY_OPTIONS:
+            raise ValidationError(
+                "unhedged_cash_equity_maturity_years must be one of "
+                f"{UNHEDGED_CASH_EQUITY_MATURITY_OPTIONS} per §__.210(b)(1)(iii); "
+                f"got {unhedged_cash_equity_maturity_years}"
+            )
+        self._cash_equity_maturity = unhedged_cash_equity_maturity_years
         self._positions: list[DRCPosition] = []
 
     # ------------------------------------------------------------------ #
     #  Public API                                                         #
     # ------------------------------------------------------------------ #
 
-    def calculate(self, positions: list[DRCPosition]) -> DRCResult:
-        """Calculate the DRC non-securitization capital charge.
-
-        This is the main entry point.  Caches the positions internally
-        so that the netting step can look up position attributes by
-        index.
+    def calculate(self, positions: Sequence[Any]) -> DRCResult:
+        """Calculate the non-securitization default risk capital requirement.
 
         Args:
-            positions: List of :class:`DRCPosition` objects representing
-                the portfolio of instruments subject to default risk.
+            positions: :class:`DRCPosition` objects (or duck-typed models
+                such as ``src.core.models.DRCPosition``; they are coerced).
 
         Returns:
-            :class:`DRCResult` containing the total charge, per-bucket
-            charges, and gross/net JTD statistics.
+            :class:`DRCResult` with total, per-bucket charges and diagnostics.
 
         Raises:
             ValidationError: If the position list contains invalid data.
@@ -248,350 +280,278 @@ class DRCCalculator:
         if not positions:
             return self._empty_result()
 
-        self._validate_positions(positions)
+        coerced = self._coerce_positions(positions)
+        self._validate_positions(coerced)
 
-        # Cache positions for use in netting step -------------------------
-        self._positions = positions
+        included = [p for p in coerced if not p.is_excluded]
+        excluded_count = len(coerced) - len(included)
+        self._positions = included
 
-        # Step 1-2: Compute gross JTDs with maturity weighting ------------
-        gross_jtds = self._compute_all_jtds(positions)
+        if not included:
+            result = self._empty_result()
+            result.excluded_positions = excluded_count
+            return result
 
-        # Gross JTD statistics --------------------------------------------
-        gross_jtd_long = sum(j for j in gross_jtds.values() if j > 0)
-        gross_jtd_short = sum(j for j in gross_jtds.values() if j < 0)
+        # Steps 2-3: gross default exposure with maturity scaling ---------
+        gross = [self._maturity_scaled_jtd(p) for p in included]
+        gross_long = sum(j for j in gross if j > 0)
+        gross_short = sum(j for j in gross if j < 0)
 
-        # Step 3: Same-obligor netting ------------------------------------
-        netted = self._net_same_obligor(gross_jtds)
+        # Step 4: same-obligor offsetting ---------------------------------
+        netted = self._net_same_obligor(included, gross)
+        net_long = sum(n.net_jtd for n in netted if n.net_jtd > 0)
+        net_short = sum(n.net_jtd for n in netted if n.net_jtd < 0)
 
-        # Net JTD statistics ----------------------------------------------
-        net_jtd_long = sum(n.net_jtd for n in netted if n.net_jtd > 0)
-        net_jtd_short = sum(n.net_jtd for n in netted if n.net_jtd < 0)
+        # Steps 5-6: bucket charges ---------------------------------------
+        details = self._compute_bucket_charges(netted)
+        bucket_charges = {d.bucket: d.charge for d in details}
 
-        # Step 4-6: Bucket-level charges ----------------------------------
-        bucket_charges = self._compute_bucket_charges(netted)
-
-        # Step 7: Total DRC (simple sum, no diversification) --------------
-        total_charge = sum(bucket_charges.values())
+        # Step 7: total -----------------------------------------------------
+        total = sum(bucket_charges.values())
 
         logger.info(
-            "DRC non-sec: total_charge=%.2f, buckets=%d, "
-            "gross_long=%.2f, gross_short=%.2f, "
-            "net_long=%.2f, net_short=%.2f",
-            total_charge,
-            len(bucket_charges),
-            gross_jtd_long,
-            gross_jtd_short,
-            net_jtd_long,
-            net_jtd_short,
+            "DRC non-sec: total=%.4f buckets=%d gross_long=%.4f gross_short=%.4f "
+            "net_long=%.4f net_short=%.4f excluded=%d",
+            total, len(bucket_charges), gross_long, gross_short,
+            net_long, net_short, excluded_count,
         )
 
         return DRCResult(
-            total_charge=total_charge,
+            total_charge=total,
             bucket_charges=bucket_charges,
-            gross_jtd_long=gross_jtd_long,
-            gross_jtd_short=gross_jtd_short,
-            net_jtd_long=net_jtd_long,
-            net_jtd_short=net_jtd_short,
+            bucket_details=details,
+            gross_jtd_long=gross_long,
+            gross_jtd_short=gross_short,
+            net_jtd_long=net_long,
+            net_jtd_short=net_short,
+            excluded_positions=excluded_count,
         )
 
     # ------------------------------------------------------------------ #
-    #  Step 1-2: JTD computation & maturity weighting                    #
+    #  Gross default exposure -- §__.210(b)(1)(i)-(iii)                   #
     # ------------------------------------------------------------------ #
 
-    def _compute_all_jtds(
-        self, positions: list[DRCPosition]
-    ) -> dict[int, float]:
-        """Compute maturity-weighted gross JTD for every position.
-
-        Iterates over all positions, computes the raw JTD via
-        :meth:`_compute_jtd`, then scales by the maturity weight.
-
-        Args:
-            positions: Input position list.
-
-        Returns:
-            Dictionary mapping position index to its gross JTD (scaled
-            by maturity weight).
-        """
-        result: dict[int, float] = {}
-        for idx, pos in enumerate(positions):
-            raw_jtd = self._compute_jtd(pos)
-            scaled = self._apply_maturity_weight(raw_jtd, pos.maturity_years)
-            result[idx] = scaled
-        return result
-
     @staticmethod
-    def _compute_jtd(position: DRCPosition) -> float:
-        """Compute the raw jump-to-default amount for a single position.
-
-        Per MAR22.11-22.12:
+    def compute_gross_jtd(position: DRCPosition) -> float:
+        """Compute the gross default exposure per §__.210(b)(1)(i)-(ii) (p.902).
 
         .. math::
 
-            \\mathrm{JTD}_{\\mathrm{long}}
-                = \\max(\\mathrm{LGD} \\times \\mathrm{notional}
-                        + \\mathrm{P\\&L},\\; 0)
+            GDE_{long} = \\max(LGD \\times notional + P\\&L, 0), \\quad
+            GDE_{short} = \\min(LGD \\times notional + P\\&L, 0)
 
-            \\mathrm{JTD}_{\\mathrm{short}}
-                = \\min(\\mathrm{LGD} \\times \\mathrm{notional}
-                        + \\mathrm{P\\&L},\\; 0)
-
-        where ``P&L = market_value - notional`` is the cumulative
-        profit-or-loss on the position.
-
-        For **long** positions the JTD is floored at zero (you cannot
-        gain from your own default).  For **short** positions the JTD
-        is capped at zero (the loss in case of default is a gain for
-        the short).
+        with ``P&L = market_value - notional`` on the signed position.  For a
+        short the signed notional and market value are negative, so the
+        amount is the negative of the long-side expression.  Credit
+        derivatives use the LGD of the reference exposure (the position's
+        ``seniority`` must be that of the reference obligation).
 
         Args:
-            position: A single :class:`DRCPosition`.
+            position: Non-securitization position.
 
         Returns:
-            Gross JTD amount (positive for longs, negative for shorts).
+            Gross default exposure (positive long, negative short), unscaled.
         """
-        lgd = get_lgd(position.seniority)
+        lgd = get_lgd(position.seniority, position.credit_quality)
         pnl = position.market_value - position.notional
-
         raw = lgd * position.notional + pnl
-
         if position.is_long:
-            # Long: exposure to default -- JTD is the loss upon default
             return max(raw, 0.0)
-        else:
-            # Short: benefit from default -- JTD is negative
-            return min(-abs(raw), 0.0) if raw != 0.0 else 0.0
+        return min(-raw, 0.0)
+
+    def effective_maturity(self, position: DRCPosition) -> float:
+        """Return the maturity used for scaling per §__.210(b)(1)(iii) (p.903).
+
+        - Cash equity hedging a derivative may take the derivative's maturity.
+        - Unhedged cash equity takes the calculator option (3 months or 1 year).
+        - Otherwise the instrument's own remaining maturity.
+
+        Args:
+            position: Non-securitization position.
+
+        Returns:
+            Maturity in years.
+        """
+        if position.is_cash_equity:
+            if position.hedged_derivative_maturity_years is not None:
+                return position.hedged_derivative_maturity_years
+            return self._cash_equity_maturity
+        return position.maturity_years
+
+    def _maturity_scaled_jtd(self, position: DRCPosition) -> float:
+        """Gross default exposure after §__.210(b)(1)(iii) maturity scaling."""
+        weight = compute_maturity_weight(self.effective_maturity(position))
+        return self.compute_gross_jtd(position) * weight
+
+    # ------------------------------------------------------------------ #
+    #  Net default exposure -- §__.210(b)(1)(v)                           #
+    # ------------------------------------------------------------------ #
 
     @staticmethod
-    def _apply_maturity_weight(jtd: float, maturity_years: float) -> float:
-        """Scale a JTD amount by the regulatory maturity weight.
-
-        Per MAR22.13 the maturity weight is:
-
-        .. math::
-
-            w = \\min\\!\\left(\\frac{M}{1},\\; 1\\right)
-
-        with a floor of 0.25 for maturities shorter than 3 months.
-
-        Args:
-            jtd: Raw JTD amount (positive or negative).
-            maturity_years: Remaining maturity in years.
-
-        Returns:
-            Maturity-weighted JTD.
-        """
-        weight = compute_maturity_weight(maturity_years)
-        return jtd * weight
-
-    # ------------------------------------------------------------------ #
-    #  Step 3: Same-obligor netting -- MAR22.15                          #
-    # ------------------------------------------------------------------ #
-
     def _net_same_obligor(
-        self, gross_jtds: dict[int, float]
-    ) -> list[_NettedJTD]:
-        """Net JTDs across positions with the same issuer and seniority.
+        positions: list[DRCPosition], gross: list[float]
+    ) -> list[_NetDefaultExposure]:
+        """Offset long and short gross default exposures of the same obligor.
 
-        Per MAR22.15, long and short JTDs for the same obligor **and**
-        same seniority can be fully offset against each other.  Positions
-        with different seniority levels are not netted here; the HBR
-        mechanism in the bucket aggregation step provides partial offset.
+        §__.210(b)(1)(v) (ERBA NPR p.904): a short position may offset a
+        long position in the same obligor only if the short has the same or
+        lower seniority than the long (a short in subordinated debt may
+        offset a long in senior debt; a short in senior debt may NOT offset
+        a long in subordinated debt).  Different obligors never offset here
+        (the HBR provides the partial cross-obligor benefit).  GSEs are
+        separate obligors unless the caller sets a shared ``offset_group``
+        (UMBS).
 
-        This method groups positions by ``(issuer, seniority, exposure_type,
-        rating)`` and sums JTDs within each group to produce a single net
-        JTD per group.
+        Algorithm per obligor: aggregate exposures by (seniority,
+        exposure_type, credit_quality); process shorts from most to least
+        senior, each consuming eligible longs (rank >= short rank) from most
+        senior downward.  Residuals are returned as net default exposures.
 
         Args:
-            gross_jtds: Mapping of position index to gross JTD.
+            positions: Included positions.
+            gross: Maturity-scaled gross default exposures, aligned.
 
         Returns:
-            List of :class:`_NettedJTD` objects, one per netting group.
+            Net default exposures (positive or negative), one per residual
+            (obligor, seniority, exposure_type, credit_quality) cell.
         """
-        netting_groups: dict[_NettingKey, float] = defaultdict(float)
+        by_obligor: dict[str, dict[tuple, float]] = defaultdict(lambda: defaultdict(float))
+        for pos, jtd in zip(positions, gross, strict=True):
+            if jtd == 0.0:
+                continue
+            cell = (pos.seniority, pos.exposure_type, pos.credit_quality)
+            by_obligor[pos.obligor_key][cell] += jtd
 
-        for idx, jtd in gross_jtds.items():
-            pos = self._positions[idx]
-            key = _NettingKey(
-                issuer=pos.issuer,
-                seniority=pos.seniority,
-                exposure_type=pos.exposure_type,
-                rating=pos.rating,
-            )
-            netting_groups[key] += jtd
+        result: list[_NetDefaultExposure] = []
+        for obligor, cells in by_obligor.items():
+            longs = {c: v for c, v in cells.items() if v > 0}
+            shorts = {c: v for c, v in cells.items() if v < 0}
 
-        result: list[_NettedJTD] = []
-        for key, net_jtd in netting_groups.items():
-            result.append(
-                _NettedJTD(
-                    issuer=key.issuer,
-                    seniority=key.seniority,
-                    exposure_type=key.exposure_type,
-                    rating=key.rating,
-                    net_jtd=net_jtd,
+            short_order = sorted(shorts, key=lambda c: get_seniority_rank(c[0]), reverse=True)
+            for s_cell in short_order:
+                remaining_short = -shorts[s_cell]  # positive magnitude
+                s_rank = get_seniority_rank(s_cell[0])
+                eligible = sorted(
+                    (c for c in longs if longs[c] > 0 and get_seniority_rank(c[0]) >= s_rank),
+                    key=lambda c: get_seniority_rank(c[0]),
+                    reverse=True,
                 )
-            )
+                for l_cell in eligible:
+                    if remaining_short <= 0.0:
+                        break
+                    used = min(longs[l_cell], remaining_short)
+                    longs[l_cell] -= used
+                    remaining_short -= used
+                shorts[s_cell] = -remaining_short
 
+            for cell, v in list(longs.items()) + list(shorts.items()):
+                if abs(v) > 0.0:
+                    result.append(
+                        _NetDefaultExposure(
+                            obligor=obligor,
+                            seniority=cell[0],
+                            exposure_type=cell[1],
+                            credit_quality=cell[2],
+                            net_jtd=v,
+                        )
+                    )
         return result
 
     # ------------------------------------------------------------------ #
-    #  Step 4-6: Bucket aggregation, HBR, risk-weighted DRC              #
+    #  Bucket charges -- §__.210(b)(2)-(3)                                #
     # ------------------------------------------------------------------ #
-
-    def _compute_bucket_charges(
-        self, netted: list[_NettedJTD]
-    ) -> dict[str, float]:
-        """Compute the DRC capital charge for each bucket.
-
-        Steps per MAR22.16-22.17:
-
-        1. Group net JTDs by bucket (exposure type).
-        2. Separate net longs and net shorts within each bucket.
-        3. Compute the Hedge Benefit Ratio (HBR).
-        4. Apply risk weights and compute the bucket charge:
-
-        .. math::
-
-            \\mathrm{DRC}_b = \\max\\!\\Bigl(
-                \\sum_i \\mathrm{RW}_i \\times \\mathrm{netJTD}^{+}_i
-                \\;-\\; \\mathrm{HBR}_b \\times
-                \\sum_j \\mathrm{RW}_j \\times |\\mathrm{netJTD}^{-}_j|
-            ,\\;0\\Bigr)
-
-        Args:
-            netted: List of netted JTDs from step 3.
-
-        Returns:
-            Dictionary mapping bucket label to its DRC charge.
-        """
-        # Group by bucket (exposure type) ---------------------------------
-        buckets: dict[str, list[_NettedJTD]] = defaultdict(list)
-        for n in netted:
-            label = get_bucket_label(n.exposure_type)
-            buckets[label].append(n)
-
-        charges: dict[str, float] = {}
-
-        for bucket_label, bucket_positions in buckets.items():
-            # Separate longs and shorts -----------------------------------
-            longs = [n for n in bucket_positions if n.net_jtd > 0]
-            shorts = [n for n in bucket_positions if n.net_jtd < 0]
-
-            # Risk-weighted long charge -----------------------------------
-            rw_long = sum(
-                get_risk_weight(n.rating, n.exposure_type) * n.net_jtd
-                for n in longs
-            )
-
-            # Risk-weighted short charge (absolute values) ----------------
-            rw_short = sum(
-                get_risk_weight(n.rating, n.exposure_type) * abs(n.net_jtd)
-                for n in shorts
-            )
-
-            # Sum of long and short JTDs in this bucket -------------------
-            sum_long_jtd = sum(n.net_jtd for n in longs)
-            sum_short_jtd = sum(n.net_jtd for n in shorts)  # negative
-
-            # HBR per MAR22.17 -------------------------------------------
-            hbr = self._compute_hbr(sum_long_jtd, sum_short_jtd)
-
-            # Bucket charge per MAR22.16 ----------------------------------
-            bucket_charge = max(rw_long - hbr * rw_short, 0.0)
-
-            logger.debug(
-                "DRC bucket=%s: rw_long=%.2f, rw_short=%.2f, "
-                "hbr=%.4f, charge=%.2f",
-                bucket_label,
-                rw_long,
-                rw_short,
-                hbr,
-                bucket_charge,
-            )
-
-            charges[bucket_label] = bucket_charge
-
-        return charges
 
     @staticmethod
-    def _compute_hbr(sum_long_jtd: float, sum_short_jtd: float) -> float:
-        """Compute the Hedge Benefit Ratio (HBR) for a single bucket.
-
-        Per MAR22.17:
+    def _compute_bucket_charges(
+        netted: list[_NetDefaultExposure],
+    ) -> list[DRCBucketDetail]:
+        """Compute the bucket-level default risk capital per §__.210(b)(3) (p.906).
 
         .. math::
 
-            \\mathrm{HBR}_b = \\frac{\\sum \\mathrm{netJTD}_{\\mathrm{long}}}
-                                   {\\sum \\mathrm{netJTD}_{\\mathrm{long}}
-                                    + \\sum |\\mathrm{netJTD}_{\\mathrm{short}}|}
+            HBR_b = \\frac{\\sum NDE_{long}}{\\sum NDE_{long} + \\sum |NDE_{short}|}
 
-        The ratio is bounded in [0, 1]:
-
-        - HBR = 1 when there are no shorts (shorts give full benefit ... but
-          there are none to benefit from).
-        - HBR -> 0 as shorts dominate longs (shorts increasingly recognised).
+            DRC_b = \\max\\Big( \\sum_{long} RW_i NDE_i
+                                - HBR_b \\sum_{short} RW_j |NDE_j|,\\; 0 \\Big)
 
         Args:
-            sum_long_jtd: Sum of positive (net long) JTDs in the bucket.
-            sum_short_jtd: Sum of negative (net short) JTDs in the bucket.
+            netted: Net default exposures.
 
         Returns:
-            HBR as a decimal in [0, 1].
+            Per-bucket details including HBR and the floored charge.
         """
-        if sum_long_jtd <= 0.0:
-            # No long exposure -- no charge possible
-            return 0.0
+        buckets: dict[str, list[_NetDefaultExposure]] = defaultdict(list)
+        for n in netted:
+            buckets[get_bucket_label(n.exposure_type, n.credit_quality)].append(n)
 
-        denominator = sum_long_jtd + abs(sum_short_jtd)
-        return sum_long_jtd / denominator if denominator > 0.0 else 0.0
+        details: list[DRCBucketDetail] = []
+        for label, items in buckets.items():
+            longs = [n for n in items if n.net_jtd > 0]
+            shorts = [n for n in items if n.net_jtd < 0]
+            rw_long = sum(n.risk_weight * n.net_jtd for n in longs)
+            rw_short = sum(n.risk_weight * abs(n.net_jtd) for n in shorts)
+            hbr = compute_hedge_benefit_ratio(
+                sum(n.net_jtd for n in longs), sum(n.net_jtd for n in shorts)
+            )
+            charge = max(rw_long - hbr * rw_short, 0.0)
+            logger.debug(
+                "DRC bucket=%s rw_long=%.4f rw_short=%.4f hbr=%.4f charge=%.4f",
+                label, rw_long, rw_short, hbr, charge,
+            )
+            details.append(
+                DRCBucketDetail(bucket=label, rw_long=rw_long, rw_short=rw_short,
+                                hbr=hbr, charge=charge)
+            )
+        return details
 
     # ------------------------------------------------------------------ #
-    #  Validation                                                         #
+    #  Validation / coercion                                              #
     # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _coerce_positions(positions: Sequence[Any]) -> list[DRCPosition]:
+        """Coerce duck-typed position models into :class:`DRCPosition`.
+
+        Accepts :class:`DRCPosition` instances directly and any pydantic
+        model exposing the same field names (e.g. the lightweight
+        ``src.core.models.DRCPosition``).
+        """
+        out: list[DRCPosition] = []
+        for idx, p in enumerate(positions):
+            if isinstance(p, DRCPosition):
+                out.append(p)
+                continue
+            try:
+                data = p.model_dump() if hasattr(p, "model_dump") else dict(p)
+                out.append(DRCPosition.model_validate(data))
+            except Exception as exc:  # noqa: BLE001
+                raise ValidationError(
+                    f"Position {idx} could not be interpreted as a DRCPosition: {exc}"
+                ) from exc
+        return out
 
     @staticmethod
     def _validate_positions(positions: list[DRCPosition]) -> None:
-        """Validate the input position list.
-
-        Checks:
-
-        - The list is non-empty.
-        - No securitization exposures (those are handled by DRC-Sec).
-
-        Args:
-            positions: Input positions.
-
-        Raises:
-            ValidationError: If any position fails validation.
-        """
+        """Portfolio-level validation (securitization routed elsewhere)."""
         if not positions:
-            raise ValidationError(
-                "No positions provided for DRC non-sec calculation."
-            )
-
+            raise ValidationError("No positions provided for DRC non-sec calculation.")
         for idx, pos in enumerate(positions):
             if pos.exposure_type == DRCExposureType.SECURITIZATION:
                 raise ValidationError(
                     f"Position {idx} (issuer={pos.issuer!r}) has exposure_type "
-                    f"SECURITIZATION.  Use the DRC-Sec calculator instead."
+                    "SECURITIZATION.  Use the DRC-Sec calculators instead."
                 )
-
-    # ------------------------------------------------------------------ #
-    #  Helper: empty result                                               #
-    # ------------------------------------------------------------------ #
 
     @staticmethod
     def _empty_result() -> DRCResult:
-        """Return a zero-charge result for an empty portfolio.
-
-        Returns:
-            :class:`DRCResult` with all fields set to zero / empty.
-        """
+        """Zero result for an empty (or fully excluded) portfolio."""
         return DRCResult(
             total_charge=0.0,
             bucket_charges={},
+            bucket_details=[],
             gross_jtd_long=0.0,
             gross_jtd_short=0.0,
             net_jtd_long=0.0,
             net_jtd_short=0.0,
+            excluded_positions=0,
         )

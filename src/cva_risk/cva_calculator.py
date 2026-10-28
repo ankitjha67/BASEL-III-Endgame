@@ -1,665 +1,598 @@
-"""CVA Risk Calculator — main entry point for CVA capital computation.
+"""CVA risk calculator — entry point for ERBA NPR §__.220–§__.225.
 
-Orchestrates both SA-CVA and BA-CVA calculations, determines approach
-eligibility, converts capital charges to RWA, and produces reporting
-breakdowns by counterparty.
+Orchestrates the basic measure (BA-CVA, §__.222) and the standardized
+measure (SA-CVA, §__.224–§__.225, plus BA-CVA for carved-out netting
+sets), determines scope and approach eligibility, converts the capital
+requirement to RWA (12.5 ×, §__.221) and produces reporting breakdowns.
+
+Scope (§__.201(b)(2), §__.202):
+    - The CVA risk capital requirement applies to a Category I or II
+      depository institution holding company, to a subsidiary depository
+      institution of such an organization that is subject to market risk
+      capital requirements, and to any banking organization subject to
+      market risk capital requirements whose average aggregate OTC
+      derivative gross notional over the prior four quarters is ≥ $1
+      trillion (CPI-W indexed).
+    - A CVA risk covered position is a derivative contract that is not a
+      cleared transaction and not a client-facing derivative transaction.
+      SFTs are not covered positions. An eligible credit derivative for
+      which the banking organization recognizes credit risk mitigation may
+      be excluded.
+
+Approach (§__.221): the basic measure (BA-CVA) is the default; the
+standardized measure requires prior written supervisory approval, SA-CCR
+for counterparty credit risk, a CVA desk or similar function and the
+ability to compute regulatory CVA and its sensitivities at least monthly.
 
 All monetary amounts in USD millions ($M).
-
-References:
-    - BCBS d424, Section 5: CVA risk capital charge
-    - BCBS d457 MAR50/MAR51: BA-CVA and SA-CVA specifications
-    - ERBA NPR pp. 280-295: US implementation of CVA risk framework
-    - ERBA NPR p. 280: Approach eligibility criteria
-    - ERBA NPR p. 280: RWA conversion (K * 12.5)
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from src.cva_risk.ba_cva import (
     BACVACalculator,
     BACVACounterparty,
     BACVAHedge,
+    BACVAIndexConstituent,
+    BACVANettingSet,
     BACVAResult,
 )
 from src.cva_risk.cva_params import (
-    CVAApproach,
+    CVA_SCOPE_AVERAGING_QUARTERS,
+    CVA_SCOPE_OTC_NOTIONAL_THRESHOLD,
     RWA_MULTIPLIER,
-    SACCR_ALPHA_COMMERCIAL,
-    SACCR_ALPHA_FINANCIAL,
-    get_saccr_alpha,
+    BACVAHedgeRelationship,
+    CVAApproach,
+    CVACreditQuality,
+    CVAHedgeType,
+    CVASector,
+    credit_quality_from_grade,
+    normalize_sector,
 )
-from src.cva_risk.sa_cva import (
-    SACVACalculator,
-    SACVACounterparty,
-    SACVAHedge,
-    SACVAResult,
-)
+from src.cva_risk.sa_cva import SACVACalculator, SACVAResult, SACVASensitivity
 
 logger = logging.getLogger(__name__)
 
 
 # =========================================================================
-#  Unified Counterparty Model
+#  Scope
+# =========================================================================
+
+class CVAScopeDetermination(BaseModel):
+    """Whether the CVA risk capital requirement applies (ERBA NPR §__.201(b)(2))."""
+    in_scope: bool
+    reason: str
+    average_otc_gross_notional: float = Field(
+        default=0.0, description="Four-quarter average OTC gross notional in $M"
+    )
+
+
+def determine_cva_scope(
+    is_category_i_or_ii_holding_company: bool = False,
+    is_subsidiary_di_of_category_i_or_ii: bool = False,
+    subject_to_market_risk_rule: bool = False,
+    quarterly_otc_gross_notional: list[float] | None = None,
+    supervisory_override: bool | None = None,
+) -> CVAScopeDetermination:
+    """Determine whether CVA risk capital requirements apply per ERBA NPR §__.201(b)(2).
+
+    Args:
+        is_category_i_or_ii_holding_company: Category I or II depository
+            institution holding company.
+        is_subsidiary_di_of_category_i_or_ii: Subsidiary depository
+            institution of a Category I or II banking organization (in
+            scope only if also subject to market risk capital requirements).
+        subject_to_market_risk_rule: Subject to the market risk capital
+            requirements (subpart F).
+        quarterly_otc_gross_notional: Aggregate OTC derivative gross notional
+            ($M) for the prior four quarters; the average is compared with
+            the $1 trillion threshold.
+        supervisory_override: The primary Federal supervisor may require or
+            exclude application (reservation of authority); True forces in
+            scope, False forces out of scope.
+
+    Returns:
+        CVAScopeDetermination.
+    """
+    avg = 0.0
+    if quarterly_otc_gross_notional:
+        recent = quarterly_otc_gross_notional[-CVA_SCOPE_AVERAGING_QUARTERS:]
+        avg = sum(recent) / len(recent)
+
+    if supervisory_override is not None:
+        return CVAScopeDetermination(
+            in_scope=supervisory_override,
+            reason="Supervisory reservation of authority (§__.201(b)(2))",
+            average_otc_gross_notional=avg,
+        )
+    if is_category_i_or_ii_holding_company:
+        return CVAScopeDetermination(
+            in_scope=True,
+            reason="Category I or II depository institution holding company",
+            average_otc_gross_notional=avg,
+        )
+    if is_subsidiary_di_of_category_i_or_ii and subject_to_market_risk_rule:
+        return CVAScopeDetermination(
+            in_scope=True,
+            reason="Market-risk subsidiary DI of a Category I or II banking organization",
+            average_otc_gross_notional=avg,
+        )
+    if subject_to_market_risk_rule and avg >= CVA_SCOPE_OTC_NOTIONAL_THRESHOLD:
+        return CVAScopeDetermination(
+            in_scope=True,
+            reason="Market-risk banking organization with four-quarter average OTC "
+                   "gross notional at or above $1 trillion",
+            average_otc_gross_notional=avg,
+        )
+    return CVAScopeDetermination(
+        in_scope=False,
+        reason="Not a Category I/II HC, market-risk Category I/II DI subsidiary, "
+               "or market-risk bank at or above the $1 trillion OTC notional threshold",
+        average_otc_gross_notional=avg,
+    )
+
+
+def is_cva_risk_covered_position(
+    is_derivative: bool,
+    is_cleared_transaction: bool = False,
+    is_client_facing_derivative: bool = False,
+    is_sft: bool = False,
+    is_crm_recognized_credit_derivative: bool = False,
+    exclude_crm_credit_derivatives: bool = True,
+) -> bool:
+    """CVA risk covered position test per ERBA NPR §__.202.
+
+    A CVA risk covered position is a derivative contract that is not a
+    cleared transaction or a client-facing derivative transaction. SFTs
+    are not covered positions. An eligible credit derivative recognized as
+    a credit risk mitigant may, at the banking organization's election, be
+    excluded.
+
+    Args:
+        is_derivative: Position is a derivative contract.
+        is_cleared_transaction: Cleared transaction (excluded).
+        is_client_facing_derivative: Client-facing derivative transaction
+            of a clearing member (excluded).
+        is_sft: Securities financing transaction (excluded).
+        is_crm_recognized_credit_derivative: Eligible credit derivative for
+            which CRM benefit is recognized under §__.120.
+        exclude_crm_credit_derivatives: Election to exclude such credit
+            derivatives.
+
+    Returns:
+        True if the position is a CVA risk covered position.
+    """
+    if not is_derivative or is_sft:
+        return False
+    if is_cleared_transaction or is_client_facing_derivative:
+        return False
+    if is_crm_recognized_credit_derivative and exclude_crm_credit_derivatives:
+        return False
+    return True
+
+
+# =========================================================================
+#  Unified input models
 # =========================================================================
 
 class CVACounterparty(BaseModel):
-    """Unified counterparty model for CVA risk calculation.
+    """Unified counterparty model (converted to ``BACVACounterparty``).
 
-    This model is used by the main CVA calculator and automatically
-    converts to the approach-specific models (BACVACounterparty or
-    SACVACounterparty) as needed.
-
-    Per ERBA NPR p. 281: Each counterparty requires identification,
-    credit quality, exposure, and maturity information.
+    Per ERBA NPR §__.222(b): sector and bank-internal credit quality
+    (Table 1 to §__.222), commercial end-user status (alpha), and netting
+    sets with EAD_NS and M_NS.
     """
     counterparty_id: str = Field(description="Unique counterparty identifier")
     name: str = Field(default="", description="Counterparty name")
-    rating: str = Field(
-        default="BBB",
-        description="Credit rating or internal grade equivalent"
+    sector: CVASector = Field(default=CVASector.OTHER_SECTOR)
+    credit_quality: CVACreditQuality | None = Field(default=None)
+    rating: str | None = Field(
+        default=None, description="Convenience internal grade label (e.g. 'BBB')"
     )
-    sector: str = Field(
-        default="CORPORATE",
-        description="SOVEREIGN, FINANCIAL, CORPORATE, PUBLIC_SECTOR, OTHER"
-    )
-    ead: float = Field(
-        description="Exposure at Default in $M (SA-CCR or other method)"
-    )
-    effective_maturity: float = Field(
-        default=2.5,
-        description="Effective maturity in years"
-    )
-    is_financial: bool = Field(
-        default=False,
-        description="True if financial institution"
-    )
-    netting_set_id: str = Field(default="", description="Netting set identifier")
-    margin_agreement: bool = Field(
-        default=False,
-        description="True if a margin agreement is in place"
-    )
+    is_commercial_end_user: bool = Field(default=False)
+    region: str = Field(default="")
+    netting_sets: list[BACVANettingSet] = Field(default_factory=list)
+    ead: float | None = Field(default=None, description="Shorthand single-netting-set EAD in $M")
+    effective_maturity: float | None = Field(default=None, description="Shorthand M in years")
+
+    @field_validator("sector", mode="before")
+    @classmethod
+    def _coerce_sector(cls, v: object) -> CVASector:
+        return v if isinstance(v, CVASector) else normalize_sector(str(v))
+
+    @field_validator("credit_quality", mode="before")
+    @classmethod
+    def _coerce_quality(cls, v: object) -> CVACreditQuality | None:
+        if v is None or isinstance(v, CVACreditQuality):
+            return v
+        return credit_quality_from_grade(str(v))
 
     def to_ba_cva(self) -> BACVACounterparty:
-        """Convert to BA-CVA counterparty model.
-
-        Per ERBA NPR p. 281: BA-CVA uses rating-based risk weights.
-
-        Returns:
-            BACVACounterparty instance.
-        """
+        """Convert to the BA-CVA counterparty model (ERBA NPR §__.222(b))."""
         return BACVACounterparty(
             counterparty_id=self.counterparty_id,
-            rating=self.rating,
             sector=self.sector,
+            credit_quality=self.credit_quality,
+            rating=self.rating,
+            is_commercial_end_user=self.is_commercial_end_user,
+            region=self.region,
+            netting_sets=list(self.netting_sets),
             ead=self.ead,
             effective_maturity=self.effective_maturity,
-            is_financial=self.is_financial,
-            netting_set_id=self.netting_set_id,
-            margin_agreement=self.margin_agreement,
         )
 
-    def to_sa_cva(self) -> SACVACounterparty:
-        """Convert to SA-CVA counterparty model.
-
-        Per ERBA NPR p. 284: SA-CVA uses sector/quality-based risk weights.
-
-        Returns:
-            SACVACounterparty instance.
-        """
-        return SACVACounterparty(
-            counterparty_id=self.counterparty_id,
-            sector=self.sector,
-            rating=self.rating,
-            ead=self.ead,
-            effective_maturity=self.effective_maturity,
-            is_financial=self.is_financial,
-            netting_set_id=self.netting_set_id,
-        )
+    @property
+    def total_ead(self) -> float:
+        """Σ_NS EAD_NS in $M."""
+        if self.netting_sets:
+            return sum(ns.ead for ns in self.netting_sets)
+        return self.ead or 0.0
 
 
 class CVAHedge(BaseModel):
-    """Unified hedge model for CVA risk calculation.
+    """Unified BA-CVA hedge model (converted to ``BACVAHedge``).
 
-    Per ERBA NPR p. 288: Only CDS and contingent CDS are eligible
-    as CVA hedges.
+    Per ERBA NPR §__.222(c): single-name CDS, single-name contingent CDS or
+    index CDS, with the Table 2 relationship to the hedged counterparty.
     """
-    hedge_id: str = Field(description="Unique hedge identifier")
-    hedge_type: str = Field(
-        description="SINGLE_NAME_CDS, INDEX_CDS, or CONTINGENT_CDS"
-    )
-    counterparty_id: str = Field(
-        default="",
-        description="Counterparty being hedged (for single-name CDS)"
-    )
-    notional: float = Field(description="Hedge notional in $M")
-    maturity: float = Field(description="Remaining maturity in years")
-    rating: str = Field(default="BBB", description="Reference entity rating")
-    sector: str = Field(default="CORPORATE", description="Reference entity sector")
+    hedge_id: str
+    hedge_type: CVAHedgeType
+    notional: float = Field(description="B_h in $M (market value of reference portfolio for contingent CDS)")
+    maturity: float = Field(description="M_h in years")
+    counterparty_id: str = Field(default="")
+    relationship: BACVAHedgeRelationship = Field(default=BACVAHedgeRelationship.DIRECT)
+    reference_sector: CVASector | None = Field(default=None)
+    reference_credit_quality: CVACreditQuality | None = Field(default=None)
+    rating: str | None = Field(default=None)
+    constituents: list[BACVAIndexConstituent] = Field(default_factory=list)
+
+    @field_validator("hedge_type", mode="before")
+    @classmethod
+    def _coerce_type(cls, v: object) -> CVAHedgeType:
+        return v if isinstance(v, CVAHedgeType) else CVAHedgeType(str(v))
+
+    @field_validator("relationship", mode="before")
+    @classmethod
+    def _coerce_relationship(cls, v: object) -> BACVAHedgeRelationship:
+        return v if isinstance(v, BACVAHedgeRelationship) else BACVAHedgeRelationship(str(v))
+
+    @field_validator("reference_sector", mode="before")
+    @classmethod
+    def _coerce_sector(cls, v: object) -> CVASector | None:
+        if v is None or isinstance(v, CVASector):
+            return v
+        return normalize_sector(str(v))
+
+    @field_validator("reference_credit_quality", mode="before")
+    @classmethod
+    def _coerce_quality(cls, v: object) -> CVACreditQuality | None:
+        if v is None or isinstance(v, CVACreditQuality):
+            return v
+        return credit_quality_from_grade(str(v))
 
     def to_ba_cva(self) -> BACVAHedge:
-        """Convert to BA-CVA hedge model.
-
-        Returns:
-            BACVAHedge instance.
-        """
+        """Convert to the BA-CVA hedge model (ERBA NPR §__.222(c))."""
         return BACVAHedge(
             hedge_id=self.hedge_id,
             hedge_type=self.hedge_type,
-            counterparty_id=self.counterparty_id,
             notional=self.notional,
             maturity=self.maturity,
-            rating=self.rating,
-        )
-
-    def to_sa_cva(self) -> SACVAHedge:
-        """Convert to SA-CVA hedge model.
-
-        Returns:
-            SACVAHedge instance.
-        """
-        return SACVAHedge(
-            hedge_id=self.hedge_id,
             counterparty_id=self.counterparty_id,
-            hedge_type=self.hedge_type,
-            notional=self.notional,
-            maturity=self.maturity,
+            relationship=self.relationship,
+            reference_sector=self.reference_sector,
+            reference_credit_quality=self.reference_credit_quality,
             rating=self.rating,
-            sector=self.sector,
+            constituents=list(self.constituents),
         )
 
 
 # =========================================================================
-#  CVA Eligibility
+#  Eligibility
 # =========================================================================
 
 class CVAEligibility(BaseModel):
-    """CVA approach eligibility determination.
-
-    Per ERBA NPR p. 280: Banks must meet specific criteria to use SA-CVA.
-    Banks that do not meet criteria must use BA-CVA.
-    """
-    sa_cva_eligible: bool = Field(
-        default=False,
-        description="True if bank is eligible for SA-CVA"
-    )
+    """Approach eligibility per ERBA NPR §__.221 / §__.223."""
+    sa_cva_eligible: bool = Field(default=False)
     ba_cva_full_eligible: bool = Field(
-        default=True,
-        description="True if bank is eligible for BA-CVA Full (always True)"
+        default=False, description="Eligible hedges exist, so the full BA-CVA applies"
     )
-    ba_cva_reduced_eligible: bool = Field(
-        default=False,
-        description="True if bank has eligible hedges for BA-CVA Reduced"
-    )
-    recommended_approach: CVAApproach = Field(
-        default=CVAApproach.BA_CVA_FULL,
-        description="Recommended approach based on eligibility"
-    )
-    reason: str = Field(
-        default="",
-        description="Reason for the recommendation"
-    )
+    ba_cva_reduced_eligible: bool = Field(default=True, description="Always available")
+    recommended_approach: CVAApproach = Field(default=CVAApproach.BA_CVA_REDUCED)
+    reason: str = Field(default="")
 
 
 def determine_eligibility(
+    uses_saccr: bool = True,
     has_cva_desk: bool = False,
     has_cva_sensitivities: bool = False,
     has_eligible_hedges: bool = False,
     supervisory_approval: bool = False,
 ) -> CVAEligibility:
-    """Determine CVA approach eligibility per ERBA NPR p. 280.
+    """Determine the CVA approach per ERBA NPR §__.221 and §__.223.
 
-    Per ERBA NPR p. 280:
-    - SA-CVA requires: CVA desk, ability to compute CVA sensitivities,
-      and supervisory approval.
-    - BA-CVA Reduced requires: eligible CVA hedges.
-    - BA-CVA Full: available to all banks (default).
+    The standardized measure requires (i) SA-CCR for counterparty credit
+    risk, (ii) a CVA desk or similar dedicated function, (iii) the ability
+    to calculate regulatory CVA and its sensitivities at least monthly and
+    (iv) prior written approval of the primary Federal supervisor.
+    Otherwise the basic measure applies: the full BA-CVA when eligible
+    hedges are recognized, the reduced BA-CVA when they are not.
 
     Args:
-        has_cva_desk: True if bank has a dedicated CVA desk.
-        has_cva_sensitivities: True if bank can compute CVA sensitivities.
-        has_eligible_hedges: True if bank holds eligible CVA hedges.
-        supervisory_approval: True if bank has supervisory approval for SA-CVA.
+        uses_saccr: Uses SA-CCR for counterparty credit risk exposure.
+        has_cva_desk: Has a CVA desk or similar dedicated function.
+        has_cva_sensitivities: Can compute regulatory CVA sensitivities monthly.
+        has_eligible_hedges: Holds eligible BA-CVA hedges.
+        supervisory_approval: Written approval for the standardized measure.
 
     Returns:
-        CVAEligibility with recommended approach.
+        CVAEligibility with the recommended approach.
     """
-    sa_eligible = (
-        has_cva_desk
-        and has_cva_sensitivities
-        and supervisory_approval
-    )
-
-    ba_reduced = has_eligible_hedges
-
+    sa_eligible = uses_saccr and has_cva_desk and has_cva_sensitivities and supervisory_approval
     if sa_eligible:
         return CVAEligibility(
             sa_cva_eligible=True,
-            ba_cva_reduced_eligible=ba_reduced,
+            ba_cva_full_eligible=has_eligible_hedges,
             recommended_approach=CVAApproach.SA_CVA,
-            reason="Bank meets all SA-CVA criteria: CVA desk, sensitivities, approval",
+            reason="Standardized measure: SA-CCR, CVA function, monthly sensitivities "
+                   "and supervisory approval (§__.223)",
         )
-    elif ba_reduced:
+    if has_eligible_hedges:
         return CVAEligibility(
-            sa_cva_eligible=False,
-            ba_cva_reduced_eligible=True,
-            recommended_approach=CVAApproach.BA_CVA_REDUCED,
-            reason="Bank has eligible hedges; using BA-CVA Reduced",
-        )
-    else:
-        return CVAEligibility(
-            sa_cva_eligible=False,
-            ba_cva_reduced_eligible=False,
+            ba_cva_full_eligible=True,
             recommended_approach=CVAApproach.BA_CVA_FULL,
-            reason="Default: BA-CVA Full (no hedges or SA-CVA capability)",
+            reason="Basic measure with eligible hedges recognized (§__.222(c))",
         )
+    return CVAEligibility(
+        recommended_approach=CVAApproach.BA_CVA_REDUCED,
+        reason="Basic measure without eligible hedges: K_basic = 0.65·K_unhedged (§__.222)",
+    )
 
 
 # =========================================================================
-#  Unified CVA Result
+#  Unified result
 # =========================================================================
 
 class CVACapitalResult(BaseModel):
-    """Complete CVA capital charge result with reporting breakdown.
-
-    Per ERBA NPR p. 280: The CVA capital charge converts to RWA via
-    K_CVA * 12.5 for inclusion in total risk-weighted assets.
-    """
-    approach: CVAApproach = Field(
-        description="CVA approach used for calculation"
-    )
-    k_cva: float = Field(
-        description="Total CVA capital charge in $M"
-    )
-    rwa: float = Field(
-        description="CVA RWA = K_CVA * 12.5 in $M"
-    )
-
-    # Component breakdown
-    k_spread: float = Field(
-        default=0.0,
-        description="Credit spread component (SA-CVA) or full charge (BA-CVA) in $M"
-    )
-    k_ir: float = Field(
-        default=0.0,
-        description="Interest rate component (SA-CVA only) in $M"
-    )
-    k_full: float = Field(
-        default=0.0,
-        description="Unhedged charge (BA-CVA) in $M"
-    )
-    k_hedged: float = Field(
-        default=0.0,
-        description="Hedged charge (BA-CVA Reduced) in $M"
-    )
-
-    # Reporting
+    """CVA capital requirement and RWA per ERBA NPR §__.221."""
+    approach: CVAApproach
+    k_cva: float = Field(description="Total CVA capital requirement in $M")
+    rwa: float = Field(description="RWA_CVA = 12.5 · K_CVA in $M")
+    k_sa_cva: float = Field(default=0.0, description="SA-CVA component in $M")
+    k_ba_cva: float = Field(default=0.0, description="BA-CVA component (K_basic) in $M")
+    k_unhedged: float = Field(default=0.0, description="BA-CVA K_unhedged in $M")
+    k_hedged: float = Field(default=0.0, description="BA-CVA K_hedged in $M")
     counterparty_rwa: dict[str, float] = Field(
-        default_factory=dict,
-        description="RWA contribution by counterparty in $M"
+        default_factory=dict, description="BA-CVA RWA allocated by SCVA_c share, $M"
     )
-    sector_rwa: dict[str, float] = Field(
-        default_factory=dict,
-        description="RWA contribution by sector in $M"
+    sector_rwa: dict[str, float] = Field(default_factory=dict)
+    risk_class_rwa: dict[str, float] = Field(
+        default_factory=dict, description="SA-CVA RWA by risk class / delta-vega, $M"
     )
-    total_ead: float = Field(
-        default=0.0,
-        description="Total EAD across all counterparties in $M"
-    )
-    counterparty_count: int = Field(
-        default=0,
-        description="Number of counterparties"
-    )
-    hedge_count: int = Field(
-        default=0,
-        description="Number of eligible hedges"
-    )
+    total_ead: float = Field(default=0.0)
+    counterparty_count: int = Field(default=0)
+    hedge_count: int = Field(default=0)
     hedge_benefit_pct: float = Field(
-        default=0.0,
-        description="Percentage reduction from hedging"
+        default=0.0, description="BA-CVA: (0.65·K_unhedged − K_basic) / (0.65·K_unhedged) × 100"
     )
-
-    # Eligibility
-    eligibility: Optional[CVAEligibility] = Field(
-        default=None,
-        description="Approach eligibility determination"
-    )
-
-    # Raw results
-    ba_cva_result: Optional[BACVAResult] = Field(
-        default=None,
-        description="Detailed BA-CVA result (if BA-CVA was used)"
-    )
-    sa_cva_result: Optional[SACVAResult] = Field(
-        default=None,
-        description="Detailed SA-CVA result (if SA-CVA was used)"
-    )
+    eligibility: CVAEligibility | None = Field(default=None)
+    ba_cva_result: BACVAResult | None = Field(default=None)
+    sa_cva_result: SACVAResult | None = Field(default=None)
 
 
 # =========================================================================
-#  Main CVA Calculator
+#  Calculator
 # =========================================================================
 
 class CVACalculator:
-    """Main CVA Risk calculator — orchestrates SA-CVA and BA-CVA.
-
-    This is the primary entry point for CVA capital computation.
-    It determines approach eligibility, runs the appropriate calculation,
-    converts to RWA, and produces reporting breakdowns.
-
-    Per ERBA NPR p. 280: Banks must calculate CVA capital for all
-    OTC derivatives (except those cleared through a qualifying CCP)
-    and securities financing transactions.
+    """Main CVA risk calculator (ERBA NPR §__.220–§__.225).
 
     Usage::
 
-        calculator = CVACalculator()
-
-        # Auto-select approach
-        result = calculator.calculate(
-            counterparties=counterparties,
-            hedges=hedges,
-        )
-        print(f"CVA RWA: ${result.rwa:,.0f}M")
-        print(f"Approach: {result.approach.value}")
-
-        # Force specific approach
-        result = calculator.calculate(
-            counterparties=counterparties,
+        calc = CVACalculator()
+        # Basic measure (default)
+        result = calc.calculate(counterparties, hedges)
+        # Standardized measure: SA-CVA on sensitivities, BA-CVA on carve-outs
+        result = calc.calculate(
+            counterparties=carved_out_counterparties,
+            sensitivities=sa_cva_sensitivities,
             approach=CVAApproach.SA_CVA,
         )
-
-    Attributes:
-        ba_cva_calculator: BA-CVA calculation engine.
-        sa_cva_calculator: SA-CVA calculation engine.
     """
 
-    def __init__(self) -> None:
-        """Initialize CVA calculators."""
+    def __init__(self, m_cva: float = 1.0) -> None:
+        """Initialize engines; ``m_cva`` is the SA-CVA multiplier (§__.225(a))."""
         self.ba_cva_calculator = BACVACalculator()
-        self.sa_cva_calculator = SACVACalculator()
+        self.sa_cva_calculator = SACVACalculator(m_cva=m_cva)
 
     def calculate(
         self,
-        counterparties: list[CVACounterparty],
-        hedges: Optional[list[CVAHedge]] = None,
-        approach: Optional[CVAApproach] = None,
+        counterparties: list[CVACounterparty] | None = None,
+        hedges: list[CVAHedge] | None = None,
+        sensitivities: list[SACVASensitivity] | None = None,
+        approach: CVAApproach | None = None,
+        uses_saccr: bool = True,
         has_cva_desk: bool = False,
         has_cva_sensitivities: bool = False,
         supervisory_approval: bool = False,
     ) -> CVACapitalResult:
-        """Calculate CVA capital charge using the appropriate approach.
+        """Compute the CVA capital requirement and RWA.
 
-        Per ERBA NPR p. 280: The CVA capital charge is computed based
-        on the bank's eligibility for SA-CVA or BA-CVA. If no approach
-        is specified, the calculator auto-selects based on eligibility.
-
-        Args:
-            counterparties: List of counterparties with EAD and maturity.
-            hedges: Optional list of eligible CVA hedges.
-            approach: Force a specific approach (overrides auto-selection).
-            has_cva_desk: True if bank has a CVA desk (for SA-CVA eligibility).
-            has_cva_sensitivities: True if bank can compute CVA sensitivities.
-            supervisory_approval: True if bank has SA-CVA approval.
-
-        Returns:
-            CVACapitalResult with charge, RWA, and reporting breakdown.
-        """
-        if not counterparties:
-            return CVACapitalResult(
-                approach=approach or CVAApproach.BA_CVA_FULL,
-                k_cva=0.0,
-                rwa=0.0,
-            )
-
-        has_hedges = bool(hedges and len(hedges) > 0)
-
-        # Determine eligibility
-        eligibility = determine_eligibility(
-            has_cva_desk=has_cva_desk,
-            has_cva_sensitivities=has_cva_sensitivities,
-            has_eligible_hedges=has_hedges,
-            supervisory_approval=supervisory_approval,
-        )
-
-        # Select approach
-        selected_approach = approach or eligibility.recommended_approach
-
-        logger.info(
-            "CVA calculation: approach=%s, counterparties=%d, hedges=%d",
-            selected_approach.value,
-            len(counterparties),
-            len(hedges) if hedges else 0,
-        )
-
-        # Execute calculation
-        if selected_approach == CVAApproach.SA_CVA:
-            return self._run_sa_cva(
-                counterparties, hedges, eligibility,
-            )
-        elif selected_approach == CVAApproach.BA_CVA_REDUCED:
-            return self._run_ba_cva_reduced(
-                counterparties, hedges or [], eligibility,
-            )
-        else:
-            return self._run_ba_cva_full(
-                counterparties, eligibility,
-            )
-
-    def _run_ba_cva_full(
-        self,
-        counterparties: list[CVACounterparty],
-        eligibility: CVAEligibility,
-    ) -> CVACapitalResult:
-        """Execute BA-CVA Full calculation per ERBA NPR p. 281.
+        Under the basic measure all ``counterparties`` (and ``hedges``) are
+        processed with the BA-CVA. Under the standardized measure the
+        ``sensitivities`` are processed with the SA-CVA and any
+        ``counterparties`` passed are treated as carved-out netting sets
+        processed with the BA-CVA; the two capital requirements are summed
+        (§__.221, §__.223).
 
         Args:
-            counterparties: Counterparties.
-            eligibility: Eligibility determination.
+            counterparties: BA-CVA counterparties (all, or carve-outs under SA-CVA).
+            hedges: Eligible BA-CVA hedges.
+            sensitivities: SA-CVA sensitivities (required for SA_CVA).
+            approach: Force an approach; otherwise selected by eligibility.
+            uses_saccr: SA-CCR used for counterparty credit risk.
+            has_cva_desk: CVA desk or similar function exists.
+            has_cva_sensitivities: Monthly regulatory CVA sensitivities available.
+            supervisory_approval: Written approval for the standardized measure.
 
         Returns:
             CVACapitalResult.
+
+        Raises:
+            ValueError: If SA_CVA is selected without sensitivities.
         """
-        ba_cps = [cp.to_ba_cva() for cp in counterparties]
-        result = self.ba_cva_calculator.calculate_full(ba_cps)
+        counterparties = counterparties or []
+        hedges = hedges or []
+        sensitivities = sensitivities or []
 
-        # Build reporting breakdown
-        cp_rwa, sector_rwa = self._build_reporting_breakdown(
-            counterparties, result.counterparty_results,
+        eligibility = determine_eligibility(
+            uses_saccr=uses_saccr,
+            has_cva_desk=has_cva_desk,
+            has_cva_sensitivities=has_cva_sensitivities,
+            has_eligible_hedges=bool(hedges),
+            supervisory_approval=supervisory_approval,
+        )
+        selected = approach or eligibility.recommended_approach
+        if selected is CVAApproach.BA_CVA_FULL and not hedges:
+            selected = CVAApproach.BA_CVA_REDUCED
+        if selected is CVAApproach.BA_CVA_REDUCED and hedges:
+            selected = CVAApproach.BA_CVA_FULL
+
+        logger.info(
+            "CVA calculation: approach=%s counterparties=%d hedges=%d sensitivities=%d",
+            selected.value, len(counterparties), len(hedges), len(sensitivities),
         )
 
-        return CVACapitalResult(
-            approach=CVAApproach.BA_CVA_FULL,
-            k_cva=result.k_ba_cva,
-            rwa=result.rwa,
-            k_spread=result.k_full,
-            k_full=result.k_full,
-            k_hedged=result.k_hedged,
-            counterparty_rwa=cp_rwa,
-            sector_rwa=sector_rwa,
-            total_ead=sum(cp.ead for cp in counterparties),
-            counterparty_count=len(counterparties),
-            eligibility=eligibility,
-            ba_cva_result=result,
-        )
+        if selected is CVAApproach.SA_CVA:
+            if not sensitivities:
+                raise ValueError(
+                    "SA-CVA requires regulatory CVA sensitivities (ERBA NPR §__.224)"
+                )
+            return self._run_standardized_measure(
+                counterparties, hedges, sensitivities, eligibility,
+            )
+        return self._run_basic_measure(counterparties, hedges, eligibility)
 
-    def _run_ba_cva_reduced(
+    # ---- basic measure ----------------------------------------------------
+
+    def _run_basic_measure(
         self,
         counterparties: list[CVACounterparty],
         hedges: list[CVAHedge],
         eligibility: CVAEligibility,
     ) -> CVACapitalResult:
-        """Execute BA-CVA Reduced calculation per ERBA NPR pp. 281-284.
-
-        Args:
-            counterparties: Counterparties.
-            hedges: Eligible hedges.
-            eligibility: Eligibility determination.
-
-        Returns:
-            CVACapitalResult.
-        """
-        ba_cps = [cp.to_ba_cva() for cp in counterparties]
-        ba_hedges = [h.to_ba_cva() for h in hedges]
-        result = self.ba_cva_calculator.calculate_reduced(ba_cps, ba_hedges)
-
-        cp_rwa, sector_rwa = self._build_reporting_breakdown(
-            counterparties, result.counterparty_results,
+        """BA-CVA per ERBA NPR §__.222 with reporting breakdown."""
+        ba_result = self.ba_cva_calculator.calculate(
+            [cp.to_ba_cva() for cp in counterparties],
+            [h.to_ba_cva() for h in hedges],
         )
-
-        # Compute hedge benefit percentage
-        hedge_benefit_pct = 0.0
-        if result.k_full > 0:
-            hedge_benefit_pct = (
-                (result.k_full - result.k_ba_cva) / result.k_full * 100.0
-            )
-
+        cp_rwa, sector_rwa = self._allocate_ba_cva_rwa(ba_result)
         return CVACapitalResult(
-            approach=CVAApproach.BA_CVA_REDUCED,
-            k_cva=result.k_ba_cva,
-            rwa=result.rwa,
-            k_spread=result.k_full,
-            k_full=result.k_full,
-            k_hedged=result.k_hedged,
+            approach=ba_result.approach,
+            k_cva=ba_result.k_basic,
+            rwa=ba_result.rwa,
+            k_ba_cva=ba_result.k_basic,
+            k_unhedged=ba_result.k_unhedged,
+            k_hedged=ba_result.k_hedged,
             counterparty_rwa=cp_rwa,
             sector_rwa=sector_rwa,
-            total_ead=sum(cp.ead for cp in counterparties),
+            total_ead=sum(cp.total_ead for cp in counterparties),
             counterparty_count=len(counterparties),
             hedge_count=len(hedges),
-            hedge_benefit_pct=hedge_benefit_pct,
+            hedge_benefit_pct=self._hedge_benefit_pct(ba_result),
             eligibility=eligibility,
-            ba_cva_result=result,
+            ba_cva_result=ba_result,
         )
 
-    def _run_sa_cva(
+    # ---- standardized measure --------------------------------------------
+
+    def _run_standardized_measure(
         self,
-        counterparties: list[CVACounterparty],
-        hedges: Optional[list[CVAHedge]],
+        carve_out_counterparties: list[CVACounterparty],
+        hedges: list[CVAHedge],
+        sensitivities: list[SACVASensitivity],
         eligibility: CVAEligibility,
     ) -> CVACapitalResult:
-        """Execute SA-CVA calculation per ERBA NPR pp. 284-295.
-
-        Args:
-            counterparties: Counterparties.
-            hedges: Optional hedges.
-            eligibility: Eligibility determination.
-
-        Returns:
-            CVACapitalResult.
-        """
-        sa_cps = [cp.to_sa_cva() for cp in counterparties]
-        sa_hedges = [h.to_sa_cva() for h in hedges] if hedges else None
-
-        result = self.sa_cva_calculator.calculate(
-            sa_cps, hedges=sa_hedges,
-        )
-
-        # Build reporting from SA-CVA counterparty breakdown
+        """SA-CVA (§__.224–§__.225) plus BA-CVA for carved-out netting sets (§__.223)."""
+        sa_result = self.sa_cva_calculator.calculate(sensitivities)
+        ba_result: BACVAResult | None = None
+        k_ba = 0.0
         cp_rwa: dict[str, float] = {}
-        total_charge = result.k_cva if result.k_cva > 0 else 1.0
-        for cp_id, contribution in result.counterparty_breakdown.items():
-            # Allocate RWA proportionally to sensitivity contribution
-            share = abs(contribution) / max(
-                sum(abs(v) for v in result.counterparty_breakdown.values()), 1.0
-            )
-            cp_rwa[cp_id] = result.rwa * share
-
-        # Build sector RWA
         sector_rwa: dict[str, float] = {}
-        for cp in counterparties:
-            sector = cp.sector
-            cp_contribution = cp_rwa.get(cp.counterparty_id, 0.0)
-            sector_rwa[sector] = sector_rwa.get(sector, 0.0) + cp_contribution
-
-        hedge_benefit_pct = 0.0
-        if result.hedge_benefit_total > 0 and result.k_spread > 0:
-            # Rough estimate of hedge benefit
-            hedge_benefit_pct = min(
-                result.hedge_benefit_total / (result.k_spread + result.hedge_benefit_total) * 100.0,
-                100.0,
+        if carve_out_counterparties:
+            ba_result = self.ba_cva_calculator.calculate(
+                [cp.to_ba_cva() for cp in carve_out_counterparties],
+                [h.to_ba_cva() for h in hedges],
             )
+            k_ba = ba_result.k_basic
+            cp_rwa, sector_rwa = self._allocate_ba_cva_rwa(ba_result)
 
+        k_total = sa_result.k_cva + k_ba
         return CVACapitalResult(
             approach=CVAApproach.SA_CVA,
-            k_cva=result.k_cva,
-            rwa=result.rwa,
-            k_spread=result.k_spread,
-            k_ir=result.k_ir,
+            k_cva=k_total,
+            rwa=k_total * RWA_MULTIPLIER,
+            k_sa_cva=sa_result.k_cva,
+            k_ba_cva=k_ba,
+            k_unhedged=ba_result.k_unhedged if ba_result else 0.0,
+            k_hedged=ba_result.k_hedged if ba_result else 0.0,
             counterparty_rwa=cp_rwa,
             sector_rwa=sector_rwa,
-            total_ead=sum(cp.ead for cp in counterparties),
-            counterparty_count=len(counterparties),
-            hedge_count=len(hedges) if hedges else 0,
-            hedge_benefit_pct=hedge_benefit_pct,
+            risk_class_rwa={
+                k: v * RWA_MULTIPLIER for k, v in sa_result.k_by_risk_class.items()
+            },
+            total_ead=sum(cp.total_ead for cp in carve_out_counterparties),
+            counterparty_count=len(carve_out_counterparties),
+            hedge_count=len(hedges),
+            hedge_benefit_pct=self._hedge_benefit_pct(ba_result) if ba_result else 0.0,
             eligibility=eligibility,
-            sa_cva_result=result,
+            ba_cva_result=ba_result,
+            sa_cva_result=sa_result,
         )
 
-    def _build_reporting_breakdown(
-        self,
-        counterparties: list[CVACounterparty],
-        cp_results: list,
+    # ---- reporting helpers ------------------------------------------------
+
+    @staticmethod
+    def _allocate_ba_cva_rwa(
+        result: BACVAResult,
     ) -> tuple[dict[str, float], dict[str, float]]:
-        """Build counterparty and sector RWA breakdowns for reporting.
+        """Allocate BA-CVA RWA to counterparties and sectors pro rata to SCVA_c.
 
-        Per FR Y-9C Schedule HC-R / FFIEC 101: RWA must be reportable
-        by counterparty and sector.
-
-        Args:
-            counterparties: Original counterparty list.
-            cp_results: Per-counterparty results from BA-CVA.
-
-        Returns:
-            Tuple of (counterparty_rwa, sector_rwa) dicts.
+        Reporting convenience only (FR Y-9C HC-R / FFIEC 101 do not require
+        a counterparty split); the rule defines K_basic at portfolio level.
         """
-        # Build a map from cp_id to sector
-        cp_sector_map = {cp.counterparty_id: cp.sector for cp in counterparties}
-
+        total_scva = sum(r.scva for r in result.counterparty_results)
         cp_rwa: dict[str, float] = {}
         sector_rwa: dict[str, float] = {}
-
-        total_scr = sum(getattr(r, "scr", 0.0) for r in cp_results)
-        if total_scr <= 0:
+        if total_scva <= 0.0:
             return cp_rwa, sector_rwa
-
-        # Compute total RWA from the sum of results
-        # Each counterparty's RWA is proportional to its SCR
-        total_rwa = total_scr * RWA_MULTIPLIER  # Approximate
-
-        for r in cp_results:
-            cp_id = r.counterparty_id
-            share = r.scr / total_scr if total_scr > 0 else 0.0
-            allocated_rwa = total_rwa * share
-
-            cp_rwa[cp_id] = allocated_rwa
-
-            sector = cp_sector_map.get(cp_id, "OTHER")
-            sector_rwa[sector] = sector_rwa.get(sector, 0.0) + allocated_rwa
-
+        for r in result.counterparty_results:
+            share = r.scva / total_scva
+            cp_rwa[r.counterparty_id] = result.rwa * share
+            sector_rwa[r.sector.value] = sector_rwa.get(r.sector.value, 0.0) + result.rwa * share
         return cp_rwa, sector_rwa
+
+    @staticmethod
+    def _hedge_benefit_pct(result: BACVAResult) -> float:
+        """Reduction of K_basic relative to the reduced BA-CVA (0.65·K_unhedged)."""
+        from src.cva_risk.cva_params import BA_CVA_DISCOUNT_SCALAR
+
+        base = BA_CVA_DISCOUNT_SCALAR * result.k_unhedged
+        if base <= 0.0:
+            return 0.0
+        return (base - result.k_basic) / base * 100.0
 
     def compute_rwa(
         self,
-        counterparties: list[CVACounterparty],
-        hedges: Optional[list[CVAHedge]] = None,
-        approach: Optional[CVAApproach] = None,
+        counterparties: list[CVACounterparty] | None = None,
+        hedges: list[CVAHedge] | None = None,
+        sensitivities: list[SACVASensitivity] | None = None,
+        approach: CVAApproach | None = None,
     ) -> float:
-        """Convenience method to compute CVA RWA directly.
-
-        Per ERBA NPR p. 280: RWA_CVA = K_CVA * 12.5
-
-        Args:
-            counterparties: Counterparties.
-            hedges: Optional hedges.
-            approach: Force a specific approach.
-
-        Returns:
-            CVA RWA in $M.
-        """
-        result = self.calculate(counterparties, hedges, approach=approach)
-        return result.rwa
+        """Convenience: RWA_CVA = 12.5 · K_CVA per ERBA NPR §__.221."""
+        return self.calculate(
+            counterparties, hedges, sensitivities, approach=approach,
+        ).rwa

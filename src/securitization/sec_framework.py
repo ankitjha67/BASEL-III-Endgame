@@ -1,22 +1,31 @@
-"""Securitization Framework — SEC-SA, SEC-ERBA, and STC per CRE40 / BCBS d424.
+"""Securitization Framework — SEC-SA per ERBA NPR § __.130-§ __.134.
 
-Implements risk weight calculations for securitization exposures using:
-- SEC-SA: Simplified Supervisory Formula Approach (SSFA)
-- SEC-ERBA: External Ratings-Based Approach (with maturity interpolation)
-- STC: Simple, Transparent, Comparable criteria checking
+Under the March 2026 US ERBA NPR the ONLY risk-weight approach for
+securitization exposures is the securitization standardized approach
+(SEC-SA, § __.133), supplemented by the look-through treatment for senior
+exposures (§ __.132(k)), the NPL securitization treatment (§ __.132(l)) and
+a 1,250% risk weight where SEC-SA cannot be applied or due diligence fails
+(§ __.130(c), § __.132(a)(3)).  The US framework contains NO external
+ratings-based approach (Dodd-Frank § 939A) and NO STC preferential
+treatment.  Note that "ERBA" in the NPR's title means *expanded risk-based
+approach*, not the BCBS "external ratings-based approach".
 
-The hierarchy is: SEC-IRBA > SEC-ERBA > SEC-SA.
-US Basel III Endgame primarily uses SEC-SA with limited ERBA
-(Dodd-Frank §939A constrains use of external ratings).
+For international comparison only, this module also retains the BCBS
+CRE42 SEC-ERBA lookup and CRE40 STC criteria; they are disabled by default
+(``SecuritizationCalculator(use_bcbs_external_ratings_approach=False)``)
+and are never part of the US capital calculation.
 
-Key formulas:
-- SSFA: K_SSFA(A, D) = (e^(alpha*u) - e^(alpha*l)) / (alpha * (u - l))
-- K_A = K_g + W * (1 - K_g)  [delinquency-adjusted pool capital ratio]
-- SEC-SA floor = 15% for non-resecuritization, 100% for resecuritization
-- RWA cap = 1250% (full deduction equivalent)
+Key formulas (§ __.133):
+- K_SSFA(A, D) = (e^(a*u) - e^(a*l)) / (a * (u - l)), a = -1/(p*K_A),
+  p = 0.5 (1.5 for resecuritizations)
+- K_A = (1 - W) * K_G + W * 0.5  [delinquency-adjusted pool capital]
+- RW = 12.5 * K_SSFA (A >= K_A); thickness-weighted blend of 1,250% and
+  12.5 * K_SSFA(K_A, D) when A < K_A < D; 1,250% when D <= K_A
+- Floor 15% (100% for resecuritizations and NPL securitizations); cap 1,250%
 
 Reference:
-    BCBS d424 CRE40, US Federal Reserve Basel III Endgame March 2026 Re-Proposal.
+    ERBA NPR common rule text § __.130-§ __.134 (pp. 757-775);
+    BCBS d424 CRE40-CRE42 (international comparison only).
 """
 
 from __future__ import annotations
@@ -27,8 +36,6 @@ from typing import Optional
 from pydantic import BaseModel, Field, field_validator
 
 from src.securitization.sec_params import (
-    CONCENTRATION_N_THRESHOLD,
-    CONCENTRATION_RW_ADDON,
     CTP_LONG_FLOOR,
     CTP_SHORT_FLOOR,
     DEFAULT_POOL_CAPITAL_RATIO,
@@ -358,16 +365,16 @@ def check_stc_criteria(criteria: STCCriteria) -> STCResult:
 # =========================================================================
 
 class SecuritizationCalculator:
-    """Securitization risk weight calculator using SEC-SA (SSFA) and SEC-ERBA.
+    """Securitization risk weight calculator per ERBA NPR § __.132-§ __.133.
 
-    Implements the full securitization framework per CRE40:
-    - SEC-SA with SSFA formula
-    - SEC-ERBA with maturity interpolation
-    - STC preferential treatment
-    - Resecuritization multipliers
-    - CTP handling
-    - Concentration add-on
+    - SEC-SA with the SSFA formula, p = 0.5 / 1.5, straddle blend, floors
+    - Resecuritization treatment (p = 1.5, 100% floor)
     - Risk weight bands for SEC4 reporting
+
+    The BCBS SEC-ERBA (external ratings) path and STC multipliers are
+    retained for international comparison only and are OFF by default,
+    because the US NPR does not permit external ratings (Dodd-Frank § 939A)
+    and has no STC framework.
 
     Usage::
 
@@ -376,8 +383,18 @@ class SecuritizationCalculator:
         print(f"Sec RWA: {result.total_rwa:,.0f}")
 
     Reference:
-        BCBS d424 CRE40; US Fed Basel III Endgame March 2026 Re-Proposal.
+        ERBA NPR § __.132-§ __.133 (pp. 762-774).
     """
+
+    def __init__(self, use_bcbs_external_ratings_approach: bool = False) -> None:
+        """Create a calculator.
+
+        Args:
+            use_bcbs_external_ratings_approach: If True, also evaluate the
+                BCBS CRE42 SEC-ERBA lookup and take the lower of ERBA and
+                SEC-SA (international comparison only; NOT the US rule).
+        """
+        self.use_bcbs_external_ratings_approach = use_bcbs_external_ratings_approach
 
     def calculate(
         self,
@@ -481,11 +498,11 @@ class SecuritizationCalculator:
         Reference:
             CRE40.3-40.5; ERBA NPR Section IV.
         """
-        # Always compute SEC-SA as fallback
+        # SEC-SA is the US approach (§ __.133)
         sa_rw = self._ssfa_risk_weight(tranche, k_a, pool)
 
-        # Try SEC-ERBA if external rating is available
-        if tranche.external_rating:
+        # BCBS SEC-ERBA (external ratings) -- comparison mode only
+        if self.use_bcbs_external_ratings_approach and tranche.external_rating:
             erba_rw = get_erba_risk_weight(
                 tranche.external_rating,
                 tranche.is_senior,
@@ -592,15 +609,8 @@ class SecuritizationCalculator:
             above = (d - k_a) / thickness
             rw = RW_PER_UNIT_CAPITAL * (below + above * k_ssfa)
 
-        # TODO: VERIFY -- "concentration add-on" below is not part of CRE40
-        # (CRE40.56 addresses resecuritisation / N calculation, not an RW
-        # add-on).  Retained for backward compatibility pending source check.
-        if pool.effective_number_of_obligors < CONCENTRATION_N_THRESHOLD:
-            concentration_addon = CONCENTRATION_RW_ADDON * (
-                CONCENTRATION_N_THRESHOLD - pool.effective_number_of_obligors
-            )
-            rw += concentration_addon
-
+        # No concentration add-on: ERBA NPR § __.133 specifies the SEC-SA
+        # risk weight completely (K_SSFA, K_A, straddle blend, floors).
         return min(max(rw, 0.0), MAX_RW)
 
     @staticmethod

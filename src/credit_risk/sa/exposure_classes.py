@@ -6,8 +6,9 @@ from the Basel Committee framework due to Dodd-Frank Act Section 939A
 (prohibition on use of external credit ratings in federal regulations).
 
 References:
-    - Federal Reserve Basel III Endgame NPR (July 2023, re-proposed Sept 2025)
-    - 12 CFR Part 217, Subpart E - Risk-Weighted Assets: Standardized Approach
+    - ERBA NPR (OCC/Board/FDIC, March 2026) common rule text § __.101,
+      § __.111, § __.141 (pp. 675-700, 775-783)
+    - 12 CFR Part 217, Subpart E - Risk-Weighted Assets: Expanded Risk-Based Approach
     - Dodd-Frank Act Section 939A (no external ratings for risk weighting)
     - Basel Committee CRE20-CRE22 (international standard, adapted for US)
 """
@@ -37,45 +38,64 @@ class ExposureClass(Enum):
 
     # Sovereign and government exposures
     SOVEREIGN = "SOVEREIGN"
-    """US government: 0% RW. Other sovereigns: 0-150% based on CRC."""
+    """US government: 0% RW. Other sovereigns: 0-150% by CRC (Table 1 to § __.111)."""
 
     PUBLIC_SECTOR_ENTITY = "PSE"
-    """General obligation: 20%. Revenue obligation: 50%. US PSEs."""
+    """US PSE general obligation 20%, revenue obligation 50%; foreign PSEs
+    by home-country CRC (Tables 3-4 to § __.111)."""
 
     MULTILATERAL_DEV_BANK = "MDB"
-    """Qualifying MDBs (e.g., IBRD, IFC, ADB): 0%. Non-qualifying: 100%."""
+    """Specified supranational entities and MDBs: 0% (§ __.111(b))."""
+
+    GSE = "GSE"
+    """Government-sponsored enterprise debt: 20%; subordinated 150%
+    (FHLB / Farmer Mac subordinated 20%) (§ __.111(c))."""
 
     # Financial institutions
     BANK = "BANK"
-    """Depository institutions and foreign banks: 20-150% based on CRC."""
+    """Depository institutions, foreign banks and credit unions: Grade A 30%/40%,
+    Grade B 75%, Grade C 150% (Table 2 to § __.111)."""
 
     # Corporate exposures
     CORPORATE = "CORPORATE"
-    """Investment grade: 65%. All other corporates: 100%."""
+    """Investment grade (internal rating) 65%; project finance 130%/100%;
+    all other corporates 100% (§ __.111(h))."""
 
     CORPORATE_SME = "CORPORATE_SME"
-    """SME corporates (annual revenue <= EUR 50M / ~USD 50M): 85%."""
+    """SME corporates: 100% -- the ERBA NPR has NO SME preferential weight.
+    Retained for backwards compatibility; SMEs may instead qualify as
+    regulatory retail (≤ $1 million aggregate)."""
 
     # Retail exposures
     RETAIL = "RETAIL"
-    """Regulatory retail portfolio: 75%. Granularity and size criteria."""
+    """Regulatory retail exposure (≤ $1 million aggregate, revolving / term
+    loan / lease) that is not a transactor: 75% (§ __.111(g)(1)(i))."""
 
     RETAIL_TRANSACTOR = "RETAIL_TRANSACTOR"
-    """Credit card transactors (balance paid in full): 45% per 2026 proposal."""
+    """Transactor exposure (balance repaid in full for 12 months): 45%
+    (§ __.111(g)(1)(ii))."""
+
+    RETAIL_OTHER = "RETAIL_OTHER"
+    """Retail exposure that is not a regulatory retail exposure: 100%
+    (§ __.111(g)(2))."""
 
     # Real estate exposures
     RESIDENTIAL_MORTGAGE = "RESIDENTIAL_MORTGAGE"
-    """First-lien residential mortgages: 40-90% based on LTV ratio."""
+    """Regulatory residential real estate: 20-70% (not dependent on cash
+    flows, Table 5) or 30-105% (dependent, Table 6) by LTV."""
 
     COMMERCIAL_REAL_ESTATE = "CRE"
-    """Income-producing CRE: 100%. ADC loans: 150%."""
+    """Regulatory CRE: Table 7 (not dependent) / Table 8 70-110% (dependent);
+    ADC 100%; pre-sold construction 50%; statutory multifamily 50%;
+    other real estate 150%."""
 
     HIGH_VOLATILITY_CRE = "HVCRE"
-    """High-volatility commercial real estate (ADC): 150%."""
+    """High-volatility commercial real estate: 150% (§ __.111(f)(3))."""
 
     # Equity and subordinated instruments
     EQUITY = "EQUITY"
-    """Equity exposures: 100-400% depending on type (public/VC/speculative)."""
+    """Equity exposures: 0% / 20% / 100% / 250% / 300% / 400% / 600%
+    by sub-type (§ __.141(b))."""
 
     SUBORDINATED_DEBT = "SUBORDINATED_DEBT"
     """Subordinated debt and other capital instruments: 150%."""
@@ -99,28 +119,49 @@ class ExposureClass(Enum):
 # =========================================================================
 
 class EquitySubType(Enum):
-    """Sub-classification for equity exposures to determine risk weight.
-
-    Per the US proposal, equity risk weights vary significantly by type.
+    """Sub-classification for equity exposures under the simple risk-weight
+    approach, ERBA NPR § __.141(b) (pp. 777-779).
     """
 
-    PUBLIC_TRADED = "PUBLIC_TRADED"
-    """Publicly traded equity on a recognized exchange: 250%."""
-
-    SPECULATIVE = "SPECULATIVE"
-    """Speculative unlisted equity (not venture capital): 400%."""
-
-    VENTURE_CAPITAL = "VENTURE_CAPITAL"
-    """Venture capital and private equity fund investments: 400%."""
-
-    COMMUNITY_DEVELOPMENT = "COMMUNITY_DEVELOPMENT"
-    """Community development equity exposures: 100%."""
+    SOVEREIGN_MDB = "SOVEREIGN_MDB"
+    """Equity exposure to a sovereign, supranational, MDB or other 0%
+    entity: 0% (§ __.141(b)(1))."""
 
     FEDERAL_RESERVE_STOCK = "FEDERAL_RESERVE_STOCK"
-    """Federal Reserve Bank stock and FHLB stock: 100%."""
+    """Federal Reserve Bank stock (US central bank): 0% (§ __.141(b)(1))."""
+
+    PSE_FHLB_FARMER_MAC = "PSE_FHLB_FARMER_MAC"
+    """Equity exposure to a PSE, Federal Home Loan Bank or Farmer Mac: 20%
+    (§ __.141(b)(2))."""
+
+    COMMUNITY_DEVELOPMENT = "COMMUNITY_DEVELOPMENT"
+    """Community development investment (12 U.S.C. 24 (Eleventh)): 100%
+    (§ __.141(b)(3)(i))."""
+
+    NON_SIGNIFICANT = "NON_SIGNIFICANT"
+    """Non-significant equity exposures within the aggregate 10%-of-total-
+    capital allowance: 100% (§ __.141(b)(3)(iii))."""
+
+    SIGNIFICANT_FI_NOT_DEDUCTED = "SIGNIFICANT_FI_NOT_DEDUCTED"
+    """Significant investment in an unconsolidated financial institution's
+    common stock not deducted under § __.22(d)(2): 250% (§ __.141(b)(4))."""
+
+    PUBLIC_TRADED = "PUBLIC_TRADED"
+    """Publicly traded equity exposure: 300% (§ __.141(b)(5))."""
+
+    SPECULATIVE = "SPECULATIVE"
+    """Non-publicly-traded equity (not venture capital): 400% (§ __.141(b)(6))."""
+
+    VENTURE_CAPITAL = "VENTURE_CAPITAL"
+    """Venture capital and private equity (not publicly traded): 400%."""
+
+    INVESTMENT_FIRM_LEVERAGED = "INVESTMENT_FIRM_LEVERAGED"
+    """Equity in an investment firm with greater than immaterial leverage
+    that would otherwise be a traditional securitization: 600%
+    (§ __.141(b)(7))."""
 
     OTHER = "OTHER"
-    """Other equity holdings not classified above: 100%."""
+    """Residual equity holdings (treated as not publicly traded): 400%."""
 
 
 # =========================================================================
@@ -128,20 +169,38 @@ class EquitySubType(Enum):
 # =========================================================================
 
 class CRESubType(Enum):
-    """Sub-classification for commercial real estate exposures.
-
-    Risk weight depends on whether the exposure is income-producing,
-    acquisition/development/construction (ADC), or land.
+    """Sub-classification for commercial real estate exposures per
+    ERBA NPR § __.101 definitions and § __.111(f).
     """
 
     INCOME_PRODUCING = "INCOME_PRODUCING"
-    """Income-producing real estate, LTV-dependent: 70-110%."""
+    """Regulatory CRE dependent on the cash flows generated by the real
+    estate: 70% / 90% / 110% by LTV (Table 8 to § __.111)."""
+
+    REGULATORY_CRE = "REGULATORY_CRE"
+    """Regulatory CRE whose cash-flow dependence is given explicitly via
+    ``is_dependent_on_cash_flows``; if not dependent, Table 7 applies
+    (LTV ≤ 60%: min(60%, borrower RW); otherwise borrower RW)."""
 
     ADC = "ADC"
-    """Acquisition, development, and construction loans: 150%."""
+    """Acquisition, development, or construction exposure that is not
+    HVCRE: 100% (§ __.111(f)(4))."""
 
     LAND = "LAND"
-    """Land loans (not ADC): 150%."""
+    """Land development and other land loans (ADC by definition): 100%."""
+
+    HVCRE = "HVCRE"
+    """High-volatility commercial real estate: 150% (§ __.111(f)(3))."""
+
+    PRESOLD_CONSTRUCTION = "PRESOLD_CONSTRUCTION"
+    """Pre-sold construction loan: 50% (100% if contract cancelled)."""
+
+    STATUTORY_MULTIFAMILY = "STATUTORY_MULTIFAMILY"
+    """Statutory multifamily mortgage: 50% (§ __.111(f)(1))."""
+
+    OTHER_REAL_ESTATE = "OTHER_REAL_ESTATE"
+    """Real estate exposure that is not regulatory RRE/CRE, ADC, pre-sold
+    construction, statutory multifamily or HVCRE: 150% (§ __.111(f)(7))."""
 
 
 # =========================================================================
@@ -361,9 +420,11 @@ def classify_exposure(criteria: ExposureClassificationCriteria) -> ExposureClass
     if criteria.is_residential_mortgage:
         return ExposureClass.RESIDENTIAL_MORTGAGE
 
-    # Commercial real estate
+    # Commercial real estate.  Only HVCRE exposures are classified as
+    # HIGH_VOLATILITY_CRE (150%); other ADC loans are CRE at 100%
+    # (ERBA NPR § __.111(f)(3)-(4)).
     if criteria.is_cre:
-        if criteria.cre_sub_type == CRESubType.ADC:
+        if criteria.cre_sub_type == CRESubType.HVCRE:
             return ExposureClass.HIGH_VOLATILITY_CRE
         return ExposureClass.COMMERCIAL_REAL_ESTATE
 
@@ -405,24 +466,22 @@ def is_qualifying_mdb(mdb_code: str | None) -> bool:
 # =========================================================================
 
 def get_resi_mortgage_ltv_bucket(ltv_ratio: float) -> str:
-    """Determine the LTV bucket for a residential mortgage exposure.
+    """Determine the LTV bucket for a regulatory residential real estate exposure.
 
-    The US Basel III Endgame proposal assigns risk weights to residential
-    mortgages based on the current loan-to-value ratio, using the
-    following buckets.
+    Tables 5 and 6 to § __.111 (ERBA NPR pp. 692-693) use six LTV bands:
+    ≤ 50%, 50-60%, 60-80%, 80-90%, 90-100%, > 100%.
 
     Args:
         ltv_ratio: LTV as a decimal (e.g., 0.75 for 75%).
 
     Returns:
-        String key for the LTV bucket (e.g., '70-80').
+        String key for the LTV bucket (e.g., '60-80').
 
     Raises:
         ValueError: If ltv_ratio is negative.
 
     References:
-        12 CFR 217, Subpart E, Table: Risk weights for residential
-        mortgage exposures
+        ERBA NPR § __.111(f)(5), Tables 5-6 to § __.111.
     """
     if ltv_ratio < 0:
         raise ValueError(f"LTV ratio cannot be negative: {ltv_ratio}")
@@ -431,10 +490,8 @@ def get_resi_mortgage_ltv_bucket(ltv_ratio: float) -> str:
         return "0-50"
     elif ltv_ratio <= 0.60:
         return "50-60"
-    elif ltv_ratio <= 0.70:
-        return "60-70"
     elif ltv_ratio <= 0.80:
-        return "70-80"
+        return "60-80"
     elif ltv_ratio <= 0.90:
         return "80-90"
     elif ltv_ratio <= 1.00:
@@ -448,7 +505,8 @@ def get_resi_mortgage_ltv_bucket(ltv_ratio: float) -> str:
 # =========================================================================
 
 def get_cre_ltv_bucket(ltv_ratio: float) -> str:
-    """Determine the LTV bucket for an income-producing CRE exposure.
+    """Determine the LTV bucket for regulatory CRE dependent on real estate
+    cash flows (Table 8 to § __.111: ≤ 60%, 60-80%, > 80%).
 
     Args:
         ltv_ratio: LTV as a decimal (e.g., 0.60 for 60%).

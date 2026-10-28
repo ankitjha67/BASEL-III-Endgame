@@ -141,7 +141,7 @@ RW = OrderedDict([
     ("Bank Grade A Other",              {"Rw":40,  "Cat":"Bank",           "FfiecLine":"5b", "BcbsRef":"§111(d)"}),
     ("Bank Grade B",                    {"Rw":75,  "Cat":"Bank",           "FfiecLine":"5c", "BcbsRef":"§111(d)"}),
     ("Bank Grade C",                    {"Rw":150, "Cat":"Bank",           "FfiecLine":"5d", "BcbsRef":"§111(d)"}),
-    ("Bank Short-Term Grade A",         {"Rw":20,  "Cat":"Bank",           "FfiecLine":"5e", "BcbsRef":"§111(d)"}),
+    ("Bank Short-Term Grade A",         {"Rw":20,  "Cat":"Bank",           "FfiecLine":"5e", "BcbsRef":"§111(d) Table 2 row 2"}),  # foreign-bank trade-related contingent items <= 3 months only
     # ── Resi RE Non-CF-Dependent (Table 2, ERBA P72) ──
     ("Resi RE Non-CF LTV ≤50%",         {"Rw":20,  "Cat":"Residential RE", "FfiecLine":"6a", "BcbsRef":"Table 2"}),
     ("Resi RE Non-CF LTV 50-60%",       {"Rw":25,  "Cat":"Residential RE", "FfiecLine":"6b", "BcbsRef":"Table 2"}),
@@ -173,7 +173,7 @@ RW = OrderedDict([
     # ── Corporate ──
     ("Corporate Investment Grade",      {"Rw":65,  "Cat":"Corporate",      "FfiecLine":"12a","BcbsRef":"§111(g)"}),
     ("Corporate General",               {"Rw":100, "Cat":"Corporate",      "FfiecLine":"12b","BcbsRef":"§111(g)"}),
-    ("Corporate SME",                   {"Rw":85,  "Cat":"Corporate",      "FfiecLine":"12c","BcbsRef":"§111(g)"}),
+    ("Corporate SME",                   {"Rw":100, "Cat":"Corporate",      "FfiecLine":"12c","BcbsRef":"§111(h)"}),  # no SME preferential RW in ERBA NPR
     ("Project Finance Pre-Operational", {"Rw":130, "Cat":"Corporate",      "FfiecLine":"12d","BcbsRef":"§111(g)"}),
     ("Project Finance Operational",     {"Rw":100, "Cat":"Corporate",      "FfiecLine":"12e","BcbsRef":"§111(g)"}),
     ("Subordinated Debt",               {"Rw":150, "Cat":"Corporate",      "FfiecLine":"12f","BcbsRef":"§111(g)"}),
@@ -182,7 +182,7 @@ RW = OrderedDict([
     ("Past Due RE Secured",             {"Rw":100, "Cat":"Past Due",       "FfiecLine":"13b","BcbsRef":"§111(h)"}),
     # ── Equity ──
     ("Equity Non-Significant",          {"Rw":100, "Cat":"Equity",         "FfiecLine":"14a","BcbsRef":"§111(j)"}),
-    ("Equity Publicly Traded",          {"Rw":250, "Cat":"Equity",         "FfiecLine":"14b","BcbsRef":"§111(j)"}),
+    ("Equity Publicly Traded",          {"Rw":300, "Cat":"Equity",         "FfiecLine":"14b","BcbsRef":"§141(b)(5)"}),
     ("Equity Private",                  {"Rw":400, "Cat":"Equity",         "FfiecLine":"14c","BcbsRef":"§111(j)"}),
     ("Equity FRB Stock",                {"Rw":0,   "Cat":"Equity",         "FfiecLine":"14d","BcbsRef":"§111(j)"}),
     ("Equity FHLB / Farmer Mac",        {"Rw":20,  "Cat":"Equity",         "FfiecLine":"14e","BcbsRef":"§111(j)"}),

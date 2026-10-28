@@ -1,29 +1,30 @@
-"""DRC Securitization CTP Calculator -- FRTB Default Risk Charge.
+"""Default risk capital requirement, CTP -- ERBA NPR §__.210(d) (p.910-913).
 
-Implements the Default Risk Charge (DRC) for Correlation Trading Portfolio
-(CTP) exposures per MAR22.35-22.46 of the Basel III Endgame framework
-(BCBS d457).
+Implements the standardized default risk capital requirement for the
+correlation trading portfolio (CTP) under the March 2026 US ERBA NPR
+(BCBS d457 MAR22.35-22.46 cross-reference).
 
-DRC Securitization CTP applies to nth-to-default credit derivatives,
-tranched index products (e.g. CDX/iTraxx tranches), and bespoke CDO
-tranches.
+Pipeline:
 
-Key characteristics:
-1. LGD = 100% for all securitization positions (no recovery assumption).
-2. Risk weights depend on rating AND tranche seniority (same table as
-   Non-CTP securitization per MAR22.37).
-3. Hedging recognition within same tranche/index (MAR22.38-22.40):
-   - Can offset long/short positions in SAME tranche of SAME index.
-   - Net JTD = JTD_long + JTD_short within same tranche/index.
-4. Bucket charge with hedge benefit (MAR22.41-22.42):
-   - WtS = sum of RW * net_JTD for net long positions in bucket.
-   - WtB = sum of RW * |net_JTD| for net short positions in bucket.
-   - DRC_b = max(WtS - hedge_benefit * WtB, 0).
-   - hedge_benefit = 0.5 (50% recognition).
-5. Total charge = sum across buckets (no diversification).
+1. Gross default exposure = market value for tranched positions
+   (§__.210(d)(1)); nth-to-default products are treated as tranches with
+   attachment (N-1)/total names and detachment N/total names.  Non-
+   securitization hedges inside the CTP use the non-securitization LGD /
+   risk weight (§__.210(d)(2)).
+2. Maturity scaling as for non-securitization.
+3. Offsetting for the same index AND same tranche (§__.210(d)(2)).
+4. Buckets (§__.210(d)(3)): each index is its own bucket; a bespoke
+   tranche substantially similar to an index goes into that index's
+   bucket; non-securitization hedges go into the bucket of the CTP
+   position they hedge.
+5. Risk weight for tranched positions = banking-book securitization risk
+   weight x 8% (§__.210(d)(3)); Table 1 to §__.210 for non-sec hedges.
+6. HBR_CTP computed ONCE across all CTP net default exposures
+   (§__.210(d)(4)); per bucket (NOT floored):
+   DRC_b = sum_long RW x NDE - HBR_CTP x sum_short RW x |NDE|.
+7. Total: DRC_CTP = max( sum_b [ max(DRC_b, 0) + 0.5 x min(DRC_b, 0) ], 0 ).
 
-Reference: BCBS d457 MAR22.35-22.46, US Federal Reserve Basel III Endgame
-Final Rule.
+Monetary inputs are in USD millions ($M) unless stated otherwise.
 """
 
 from __future__ import annotations
@@ -31,20 +32,28 @@ from __future__ import annotations
 import logging
 from collections import defaultdict
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from src.core.enums import (
+    DRCCreditQuality,
+    DRCExposureType,
+    DRCRatingCategory,
     DRCSecCTPBucket,
     DRCSecRating,
     DRCSecSeniority,
+    DRCSeniority,
 )
-from src.core.exceptions import CalculationError, ValidationError
+from src.core.exceptions import ValidationError
 from src.market_risk.frtb.drc.drc_params import (
-    CTP_HEDGE_BENEFIT_RATIO,
-    DRC_SEC_LGD,
+    CTP_NEGATIVE_BUCKET_FACTOR,
+    compute_hedge_benefit_ratio,
     compute_maturity_weight,
-    get_sec_risk_weight,
+    get_bucket,
+    get_lgd,
+    get_risk_weight,
+    rating_to_credit_quality,
 )
+from src.market_risk.frtb.drc.drc_sec_nonctp import resolve_sec_drc_risk_weight
 
 logger = logging.getLogger(__name__)
 
@@ -55,48 +64,73 @@ logger = logging.getLogger(__name__)
 
 
 class DRCSecCTPPosition(BaseModel):
-    """A single CTP position for DRC securitization calculation.
-
-    Represents a tranched credit product that is part of the Correlation
-    Trading Portfolio, including nth-to-default credit derivatives,
-    tranched index products, and bespoke CDO tranches.
-
-    Per MAR22.35, CTP positions are those where the underlying names are
-    single-name credit instruments and the product references a specific
-    tranche of the capital structure of the securitization.
+    """A CTP default risk position per §__.210(d) (ERBA NPR p.910).
 
     Attributes:
-        tranche_id: Unique identifier for the tranche.
-        index_name: Name of the underlying index or reference portfolio
-            (e.g. "CDX.NA.IG.42", "iTraxx Europe 41").
-        bucket: CTP bucket classification.
-        rating: External credit rating category of the tranche.
-        seniority: Whether the tranche is senior or non-senior.
-        notional: Face value / tranche notional amount.
-        market_value: Current mark-to-market value of the position.
-        maturity_years: Remaining maturity in years (must be >= 0).
-        is_long: ``True`` for a long credit exposure, ``False`` for short.
+        tranche_id: Tranche identifier (offsetting key with ``index_name``).
+            For a non-securitization hedge use the obligor identifier.
+        index_name: Index (bucket) the position belongs to.  Bespoke
+            tranches carry the name of the substantially similar index;
+            non-securitization hedges carry the index of the CTP position
+            they hedge.
+        position_type: INDEX_TRANCHE, BESPOKE, NTD or NON_SEC_HEDGE
+            (``bucket`` accepted as an input alias).
+        market_value: Fair value ($M, positive magnitude) -- the gross
+            default exposure for tranched positions.
+        maturity_years: Remaining maturity in years (>= 0).
+        is_long: True for a long credit exposure, False for short.
+        banking_book_risk_weight: §__.132 / §__.133 risk weight (decimal).
+        attachment_point / detachment_point / k_g / w: SSFA inputs for the
+            §__.133 fallback.  For NTD positions attachment and detachment
+            are derived from ``nth`` and ``total_names`` when absent.
+        nth / total_names: nth-to-default parameters: A = (N-1)/total,
+            D = N/total.
+        is_resecuritization: SSFA p = 1.5 / 100% floor.
+        rating / seniority: Legacy inputs for ``legacy_rating_table=True``.
+        notional / nonsec_seniority / nonsec_exposure_type /
+        nonsec_credit_quality / nonsec_rating: Required for NON_SEC_HEDGE
+            positions (§__.210(d)(2): non-securitization LGD and Table 1 RW).
     """
 
     tranche_id: str
     index_name: str
-    bucket: DRCSecCTPBucket
-    rating: DRCSecRating
-    seniority: DRCSecSeniority
-    notional: float
+    position_type: DRCSecCTPBucket = DRCSecCTPBucket.INDEX_TRANCHE
     market_value: float
     maturity_years: float
     is_long: bool
+    banking_book_risk_weight: float | None = Field(default=None, ge=0.0)
+    attachment_point: float | None = Field(default=None, ge=0.0, le=1.0)
+    detachment_point: float | None = Field(default=None, ge=0.0, le=1.0)
+    k_g: float | None = Field(default=None, gt=0.0, le=1.0)
+    w: float | None = Field(default=None, ge=0.0, le=1.0)
+    nth: int | None = Field(default=None, ge=1)
+    total_names: int | None = Field(default=None, ge=1)
+    is_resecuritization: bool = False
+    rating: DRCSecRating | None = None
+    seniority: DRCSecSeniority | None = None
+    # Non-securitization hedge attributes -----------------------------------
+    notional: float | None = Field(default=None, gt=0.0)
+    nonsec_seniority: DRCSeniority | None = None
+    nonsec_exposure_type: DRCExposureType | None = None
+    nonsec_credit_quality: DRCCreditQuality | None = None
+    nonsec_rating: DRCRatingCategory | None = None
 
-    # ------------------------------------------------------------------ #
-    #  Validators                                                         #
-    # ------------------------------------------------------------------ #
-
-    @field_validator("notional")
+    @model_validator(mode="before")
     @classmethod
-    def _notional_positive(cls, v: float) -> float:
-        if v <= 0:
-            raise ValueError("notional must be positive")
+    def _accept_aliases(cls, data: object) -> object:
+        if isinstance(data, dict):
+            data = dict(data)
+            if "position_type" not in data and "bucket" in data:
+                data["position_type"] = data.pop("bucket")
+        return data
+
+    @field_validator("market_value")
+    @classmethod
+    def _market_value_non_negative(cls, v: float) -> float:
+        if v < 0:
+            raise ValueError(
+                "market_value must be a non-negative magnitude; use is_long for direction"
+            )
         return v
 
     @field_validator("maturity_years")
@@ -106,25 +140,67 @@ class DRCSecCTPPosition(BaseModel):
             raise ValueError("maturity_years must be non-negative")
         return v
 
+    @model_validator(mode="after")
+    def _derive_ntd_and_check_hedge(self) -> DRCSecCTPPosition:
+        if self.position_type == DRCSecCTPBucket.NTD and self.nth is not None:
+            if self.total_names is None or self.nth > self.total_names:
+                raise ValueError("NTD requires total_names >= nth")
+            if self.attachment_point is None:
+                self.attachment_point = (self.nth - 1) / self.total_names
+            if self.detachment_point is None:
+                self.detachment_point = self.nth / self.total_names
+        if self.position_type == DRCSecCTPBucket.NON_SEC_HEDGE:
+            if self.notional is None or self.nonsec_seniority is None:
+                raise ValueError(
+                    "NON_SEC_HEDGE positions require notional and nonsec_seniority "
+                    "(§__.210(d)(2))"
+                )
+            if self.nonsec_exposure_type is None:
+                self.nonsec_exposure_type = DRCExposureType.CORPORATE
+            if self.nonsec_credit_quality is None:
+                if self.nonsec_rating is None:
+                    raise ValueError(
+                        "NON_SEC_HEDGE positions require nonsec_credit_quality or nonsec_rating"
+                    )
+                self.nonsec_credit_quality = rating_to_credit_quality(self.nonsec_rating)
+        return self
+
+    @property
+    def is_nonsec_hedge(self) -> bool:
+        """True for a non-securitization hedge inside the CTP."""
+        return self.position_type == DRCSecCTPBucket.NON_SEC_HEDGE
+
+
+class DRCSecCTPBucketDetail(BaseModel):
+    """Per-index diagnostics for §__.210(d)(4).
+
+    ``charge`` is the UNFLOORED bucket amount; negative amounts enter the
+    total with the 0.5 factor.
+    """
+
+    bucket: str
+    rw_long: float
+    rw_short: float
+    charge: float
+
 
 class DRCSecCTPResult(BaseModel):
-    """Result of a DRC securitization CTP calculation.
-
-    Contains the aggregate capital charge, per-bucket breakdown, and
-    diagnostic JTD statistics useful for risk reporting and reconciliation.
+    """Result of the CTP default risk capital requirement.
 
     Attributes:
-        total_charge: Aggregate DRC CTP capital charge (sum of all buckets).
-        bucket_charges: Capital charge broken down by bucket label.
-        gross_jtd_long: Sum of all positive (long) gross JTDs before netting.
-        gross_jtd_short: Sum of all negative (short) gross JTDs before netting.
-        net_jtd_long: Sum of positive net JTDs after same-tranche netting.
-        net_jtd_short: Sum of negative net JTDs after same-tranche netting.
+        total_charge: DRC_CTP per §__.210(d)(4) ($M).
+        bucket_charges: Unfloored DRC_b by index.
+        bucket_details: Per-index risk-weighted sums.
+        hbr_ctp: Single hedge benefit ratio across all CTP positions.
+        gross_jtd_long / gross_jtd_short: Maturity-scaled gross exposures.
+        net_jtd_long / net_jtd_short: Net exposures after same-tranche offsetting.
         position_count: Number of positions processed.
     """
 
     total_charge: float
     bucket_charges: dict[str, float]
+    bucket_details: list[DRCSecCTPBucketDetail] = []
+    hbr_ctp: float = 0.0
     gross_jtd_long: float
     gross_jtd_short: float
     net_jtd_long: float
@@ -133,412 +209,255 @@ class DRCSecCTPResult(BaseModel):
 
 
 # =========================================================================
-#  Internal intermediate types
-# =========================================================================
-
-
-class _CTPNettingKey(BaseModel):
-    """Composite key for same-tranche / same-index netting in CTP.
-
-    Per MAR22.38, JTDs can be offset for positions in the SAME tranche
-    of the SAME index.  The netting key combines index_name and tranche_id
-    to identify positions eligible for netting.
-    """
-
-    index_name: str
-    tranche_id: str
-    bucket: DRCSecCTPBucket
-    rating: DRCSecRating
-    seniority: DRCSecSeniority
-
-    model_config = {"frozen": True}
-
-    def __hash__(self) -> int:  # noqa: D105
-        return hash(
-            (self.index_name, self.tranche_id, self.bucket,
-             self.rating, self.seniority)
-        )
-
-    def __eq__(self, other: object) -> bool:  # noqa: D105
-        if not isinstance(other, _CTPNettingKey):
-            return NotImplemented
-        return (
-            self.index_name == other.index_name
-            and self.tranche_id == other.tranche_id
-            and self.bucket == other.bucket
-            and self.rating == other.rating
-            and self.seniority == other.seniority
-        )
-
-
-class _CTPNettedJTD(BaseModel):
-    """Result of netting JTDs for a single tranche/index group in CTP.
-
-    After same-tranche netting, each group collapses to a single net JTD
-    that is either long (positive) or short (negative).
-    """
-
-    index_name: str
-    tranche_id: str
-    bucket: DRCSecCTPBucket
-    rating: DRCSecRating
-    seniority: DRCSecSeniority
-    net_jtd: float  # positive = net long, negative = net short
-
-
-# =========================================================================
 #  Calculator
 # =========================================================================
 
 
 class DRCSecCTPCalculator:
-    """Default Risk Charge calculator for CTP securitization exposures.
+    """CTP default risk capital calculator per §__.210(d).
 
-    Implements the DRC pipeline for CTP per MAR22.35-22.46:
-
-    1. **JTD computation** -- Translate each position into a gross JTD
-       using LGD=100%, tranche notional, and P&L.
-    2. **Maturity weighting** -- Scale each JTD by a maturity factor.
-    3. **Same-tranche netting** -- Net long and short JTDs that share
-       the same index AND same tranche (MAR22.38).
-    4. **Bucket aggregation** -- Group net JTDs by CTP bucket.
-    5. **Hedge benefit** -- Apply 50% hedge benefit ratio to shorts
-       within each bucket (MAR22.41).
-    6. **Total DRC** -- Simple sum across buckets (no diversification).
+    Args:
+        legacy_rating_table: Explicit opt-in to the pre-NPR rating x
+            seniority table for tranched positions lacking banking-book /
+            SSFA inputs (``# TODO: VERIFY`` -- never a silent default).
 
     Usage::
 
         calculator = DRCSecCTPCalculator()
         result = calculator.calculate(positions)
-        print(result.total_charge)
     """
 
-    # ------------------------------------------------------------------ #
-    #  Initialization                                                     #
-    # ------------------------------------------------------------------ #
-
-    def __init__(self) -> None:
-        """Initialize the DRC Sec CTP calculator.
-
-        No mutable configuration state is kept; all regulatory parameters
-        are sourced from :mod:`drc_params`.
-        """
-        self._positions: list[DRCSecCTPPosition] = []
+    def __init__(self, legacy_rating_table: bool = False) -> None:
+        """Initialise the calculator."""
+        self._legacy = legacy_rating_table
 
     # ------------------------------------------------------------------ #
     #  Public API                                                         #
     # ------------------------------------------------------------------ #
 
-    def calculate(
-        self, positions: list[DRCSecCTPPosition]
-    ) -> DRCSecCTPResult:
-        """Calculate the DRC securitization CTP capital charge.
-
-        This is the main entry point.  Processes all positions through
-        the JTD computation, maturity weighting, same-tranche netting,
-        and bucket aggregation pipeline with hedge benefit recognition.
+    def calculate(self, positions: list[DRCSecCTPPosition]) -> DRCSecCTPResult:
+        """Calculate the CTP default risk capital requirement.
 
         Args:
-            positions: List of :class:`DRCSecCTPPosition` objects
-                representing the CTP portfolio.
+            positions: CTP positions (tranches, NTDs, bespokes, non-sec hedges).
 
         Returns:
-            :class:`DRCSecCTPResult` containing the total charge,
-            per-bucket charges, and JTD statistics.
+            :class:`DRCSecCTPResult`.
+
+        Raises:
+            ValidationError: If a tranched position has no admissible risk weight.
         """
         if not positions:
             return self._empty_result()
-
         self._validate_positions(positions)
 
-        # Cache positions for netting step ----------------------------------
-        self._positions = positions
+        # Steps 1-2 -----------------------------------------------------------
+        gross = [self._maturity_scaled_jtd(p) for p in positions]
+        gross_long = sum(j for j in gross if j > 0)
+        gross_short = sum(j for j in gross if j < 0)
 
-        # Step 1-2: Compute gross JTDs with maturity weighting --------------
-        gross_jtds = self._compute_all_jtds(positions)
+        # Step 3: same index + same tranche offsetting ------------------------
+        netted = self._net_same_tranche(positions, gross)
+        net_long = sum(v for _, v in netted if v > 0)
+        net_short = sum(v for _, v in netted if v < 0)
 
-        # Gross JTD statistics ----------------------------------------------
-        gross_jtd_long = sum(j for j in gross_jtds.values() if j > 0)
-        gross_jtd_short = sum(j for j in gross_jtds.values() if j < 0)
+        # Step 6: single HBR across the whole CTP -----------------------------
+        hbr_ctp = compute_hedge_benefit_ratio(net_long, net_short)
 
-        # Step 3: Same-tranche netting per MAR22.38 -------------------------
-        netted = self._net_same_tranche(gross_jtds)
+        # Per-index unfloored amounts -----------------------------------------
+        details = self._compute_bucket_amounts(netted, hbr_ctp)
+        bucket_charges = {d.bucket: d.charge for d in details}
 
-        # Net JTD statistics ------------------------------------------------
-        net_jtd_long = sum(n.net_jtd for n in netted if n.net_jtd > 0)
-        net_jtd_short = sum(n.net_jtd for n in netted if n.net_jtd < 0)
-
-        # Step 4-6: Bucket-level charges with hedge benefit -----------------
-        bucket_charges = self._compute_bucket_charges(netted)
-
-        # Total DRC (simple sum, no diversification) ------------------------
-        total_charge = sum(bucket_charges.values())
+        # Step 7: cross-bucket aggregation -------------------------------------
+        total = self.aggregate_buckets(bucket_charges)
 
         logger.info(
-            "DRC sec CTP: total_charge=%.2f, buckets=%d, "
-            "gross_long=%.2f, gross_short=%.2f, "
-            "net_long=%.2f, net_short=%.2f, positions=%d",
-            total_charge,
-            len(bucket_charges),
-            gross_jtd_long,
-            gross_jtd_short,
-            net_jtd_long,
-            net_jtd_short,
-            len(positions),
+            "DRC sec CTP: total=%.4f buckets=%d hbr=%.4f gross_long=%.4f gross_short=%.4f "
+            "positions=%d",
+            total, len(bucket_charges), hbr_ctp, gross_long, gross_short, len(positions),
         )
 
         return DRCSecCTPResult(
-            total_charge=total_charge,
+            total_charge=total,
             bucket_charges=bucket_charges,
-            gross_jtd_long=gross_jtd_long,
-            gross_jtd_short=gross_jtd_short,
-            net_jtd_long=net_jtd_long,
-            net_jtd_short=net_jtd_short,
+            bucket_details=details,
+            hbr_ctp=hbr_ctp,
+            gross_jtd_long=gross_long,
+            gross_jtd_short=gross_short,
+            net_jtd_long=net_long,
+            net_jtd_short=net_short,
             position_count=len(positions),
         )
 
     # ------------------------------------------------------------------ #
-    #  Step 1-2: JTD computation & maturity weighting                    #
+    #  Steps 1-2: gross default exposure                                  #
     # ------------------------------------------------------------------ #
-
-    def _compute_all_jtds(
-        self, positions: list[DRCSecCTPPosition]
-    ) -> dict[int, float]:
-        """Compute maturity-weighted gross JTD for every CTP position.
-
-        Per MAR22.37, the JTD calculation for CTP uses the same formula
-        as securitization non-CTP with LGD = 100%.
-
-        Args:
-            positions: Input position list.
-
-        Returns:
-            Dictionary mapping position index to its gross JTD (scaled
-            by maturity weight).
-        """
-        result: dict[int, float] = {}
-        for idx, pos in enumerate(positions):
-            raw_jtd = self._compute_jtd(pos)
-            scaled = self._apply_maturity_weight(raw_jtd, pos.maturity_years)
-            result[idx] = scaled
-        return result
 
     @staticmethod
-    def _compute_jtd(position: DRCSecCTPPosition) -> float:
-        """Compute the raw jump-to-default amount for a CTP position.
+    def compute_gross_jtd(position: DRCSecCTPPosition) -> float:
+        """Gross default exposure per §__.210(d)(1)-(2) (ERBA NPR p.911).
 
-        Per MAR22.37, same JTD formula as securitization non-CTP:
-
-        .. math::
-
-            \\mathrm{JTD}_{\\mathrm{long}}
-                = \\max(\\mathrm{LGD} \\times \\mathrm{notional}
-                        + \\mathrm{P\\&L},\\; 0)
-
-            \\mathrm{JTD}_{\\mathrm{short}}
-                = \\min(\\mathrm{LGD} \\times \\mathrm{notional}
-                        + \\mathrm{P\\&L},\\; 0)
-
-        where LGD = 100%.
+        Tranched products: the market value (signed by direction).
+        Non-securitization hedges: ``max/min(LGD x notional + P&L, 0)`` with
+        the non-securitization LGD of §__.210(b)(1)(iv).
 
         Args:
-            position: A single :class:`DRCSecCTPPosition`.
+            position: CTP position.
 
         Returns:
-            Gross JTD amount (positive for longs, negative for shorts).
+            Signed gross default exposure, unscaled.
         """
-        lgd = DRC_SEC_LGD  # 100% per MAR22.37
-        pnl = position.market_value - position.notional
+        if position.is_nonsec_hedge:
+            assert position.notional is not None and position.nonsec_seniority is not None
+            lgd = get_lgd(position.nonsec_seniority, position.nonsec_credit_quality)
+            pnl = position.market_value - position.notional
+            raw = lgd * position.notional + pnl
+            return max(raw, 0.0) if position.is_long else min(-raw, 0.0)
+        return position.market_value if position.is_long else -position.market_value
 
-        raw = lgd * position.notional + pnl
+    def _maturity_scaled_jtd(self, position: DRCSecCTPPosition) -> float:
+        """Apply the §__.210(b)(1)(iii) maturity scaling."""
+        return self.compute_gross_jtd(position) * compute_maturity_weight(position.maturity_years)
 
-        if position.is_long:
-            return max(raw, 0.0)
-        else:
-            return min(-abs(raw), 0.0) if raw != 0.0 else 0.0
+    # ------------------------------------------------------------------ #
+    #  Step 3: offsetting -- §__.210(d)(2)                                #
+    # ------------------------------------------------------------------ #
 
     @staticmethod
-    def _apply_maturity_weight(jtd: float, maturity_years: float) -> float:
-        """Scale a JTD amount by the regulatory maturity weight.
-
-        Per MAR22.28 (applicable to CTP as well), the maturity weight
-        scales linearly with a 1-year cap and 3-month floor.
-
-        Args:
-            jtd: Raw JTD amount (positive or negative).
-            maturity_years: Remaining maturity in years.
-
-        Returns:
-            Maturity-weighted JTD.
-        """
-        weight = compute_maturity_weight(maturity_years)
-        return jtd * weight
-
-    # ------------------------------------------------------------------ #
-    #  Step 3: Same-tranche netting -- MAR22.38                          #
-    # ------------------------------------------------------------------ #
-
     def _net_same_tranche(
-        self, gross_jtds: dict[int, float]
-    ) -> list[_CTPNettedJTD]:
-        """Net JTDs across positions in the same tranche of the same index.
+        positions: list[DRCSecCTPPosition], gross: list[float]
+    ) -> list[tuple[DRCSecCTPPosition, float]]:
+        """Offset exposures in the same tranche of the same index.
 
-        Per MAR22.38, long and short JTDs can be offset for positions
-        that share the same index name AND the same tranche identifier.
-        This is a more restrictive netting set than the non-sec DRC
-        (which nets by issuer/seniority).
+        §__.210(d)(2) (ERBA NPR p.911): long and short positions in the same
+        index AND the same tranche (same attachment / detachment) may be
+        offset.  Non-securitization hedges offset only with the same obligor
+        key within the same index bucket.
 
         Args:
-            gross_jtds: Mapping of position index to gross JTD.
+            positions: Positions.
+            gross: Aligned maturity-scaled gross default exposures.
 
         Returns:
-            List of :class:`_CTPNettedJTD` objects, one per netting group.
+            ``(representative_position, net_jtd)`` per group.
         """
-        netting_groups: dict[_CTPNettingKey, float] = defaultdict(float)
-
-        for idx, jtd in gross_jtds.items():
-            pos = self._positions[idx]
-            key = _CTPNettingKey(
-                index_name=pos.index_name,
-                tranche_id=pos.tranche_id,
-                bucket=pos.bucket,
-                rating=pos.rating,
-                seniority=pos.seniority,
-            )
-            netting_groups[key] += jtd
-
-        result: list[_CTPNettedJTD] = []
-        for key, net_jtd in netting_groups.items():
-            result.append(
-                _CTPNettedJTD(
-                    index_name=key.index_name,
-                    tranche_id=key.tranche_id,
-                    bucket=key.bucket,
-                    rating=key.rating,
-                    seniority=key.seniority,
-                    net_jtd=net_jtd,
-                )
-            )
-
-        return result
+        groups: dict[tuple[str, str, bool], float] = defaultdict(float)
+        rep: dict[tuple[str, str, bool], DRCSecCTPPosition] = {}
+        for pos, jtd in zip(positions, gross, strict=True):
+            key = (pos.index_name, pos.tranche_id, pos.is_nonsec_hedge)
+            groups[key] += jtd
+            rep.setdefault(key, pos)
+        return [(rep[k], v) for k, v in groups.items() if abs(v) > 0.0]
 
     # ------------------------------------------------------------------ #
-    #  Step 4-6: Bucket aggregation with hedge benefit -- MAR22.41-22.42 #
+    #  Steps 5-6: risk weights and per-index amounts                      #
     # ------------------------------------------------------------------ #
 
-    def _compute_bucket_charges(
-        self, netted: list[_CTPNettedJTD]
-    ) -> dict[str, float]:
-        """Compute the DRC CTP capital charge for each bucket.
+    def _risk_weight(self, position: DRCSecCTPPosition) -> float:
+        """Risk weight per §__.210(d)(3): SEC RW x 8%, or Table 1 for non-sec hedges."""
+        if position.is_nonsec_hedge:
+            assert position.nonsec_exposure_type is not None
+            assert position.nonsec_credit_quality is not None
+            bucket = get_bucket(position.nonsec_exposure_type, position.nonsec_credit_quality)
+            return get_risk_weight(position.nonsec_credit_quality, bucket)
+        return resolve_sec_drc_risk_weight(
+            banking_book_risk_weight=position.banking_book_risk_weight,
+            attachment_point=position.attachment_point,
+            detachment_point=position.detachment_point,
+            k_g=position.k_g,
+            w=position.w,
+            is_resecuritization=position.is_resecuritization,
+            legacy_rating_table=self._legacy,
+            rating=position.rating,
+            seniority=position.seniority,
+            label=f"{position.index_name}/{position.tranche_id}",
+        )
 
-        Per MAR22.41-22.42:
-
-        1. Group net JTDs by CTP bucket.
-        2. Separate net longs and net shorts within each bucket.
-        3. Compute weighted long (WtS) and weighted short (WtB).
-        4. Apply hedge benefit ratio (50%) to shorts:
+    def _compute_bucket_amounts(
+        self, netted: list[tuple[DRCSecCTPPosition, float]], hbr_ctp: float
+    ) -> list[DRCSecCTPBucketDetail]:
+        """Unfloored per-index amounts per §__.210(d)(4) (ERBA NPR p.912).
 
         .. math::
 
-            \\mathrm{DRC}_b = \\max\\!\\Bigl(
-                \\mathrm{WtS} - 0.5 \\times \\mathrm{WtB}
-            ,\\;0\\Bigr)
+            DRC_b = \\sum_{long} RW_i NDE_i - HBR_{CTP} \\sum_{short} RW_j |NDE_j|
+
+        where HBR_CTP is the single ratio computed across all CTP net
+        default exposures.  DRC_b is NOT floored at zero here.
 
         Args:
-            netted: List of netted JTDs from step 3.
+            netted: ``(position, net_jtd)`` pairs.
+            hbr_ctp: Portfolio-wide hedge benefit ratio.
 
         Returns:
-            Dictionary mapping bucket label to its DRC charge.
+            Per-index details with the unfloored amount.
         """
-        # Group by bucket ---------------------------------------------------
-        buckets: dict[str, list[_CTPNettedJTD]] = defaultdict(list)
-        for n in netted:
-            label = n.bucket.value
-            buckets[label].append(n)
+        buckets: dict[str, list[tuple[DRCSecCTPPosition, float]]] = defaultdict(list)
+        for pos, v in netted:
+            buckets[pos.index_name].append((pos, v))
 
-        charges: dict[str, float] = {}
-
-        for bucket_label, bucket_positions in buckets.items():
-            # Separate longs and shorts -------------------------------------
-            longs = [n for n in bucket_positions if n.net_jtd > 0]
-            shorts = [n for n in bucket_positions if n.net_jtd < 0]
-
-            # WtS: risk-weighted long charge per MAR22.41 -------------------
-            wts = sum(
-                get_sec_risk_weight(n.rating, n.seniority) * n.net_jtd
-                for n in longs
-            )
-
-            # WtB: risk-weighted short charge (absolute) per MAR22.41 ------
-            wtb = sum(
-                get_sec_risk_weight(n.rating, n.seniority) * abs(n.net_jtd)
-                for n in shorts
-            )
-
-            # Bucket charge with 50% hedge benefit per MAR22.42 ------------
-            bucket_charge = max(wts - CTP_HEDGE_BENEFIT_RATIO * wtb, 0.0)
-
+        details: list[DRCSecCTPBucketDetail] = []
+        for label, items in buckets.items():
+            rw_long = sum(self._risk_weight(p) * v for p, v in items if v > 0)
+            rw_short = sum(self._risk_weight(p) * abs(v) for p, v in items if v < 0)
+            amount = rw_long - hbr_ctp * rw_short
             logger.debug(
-                "DRC sec CTP bucket=%s: wts=%.2f, wtb=%.2f, "
-                "hedge_benefit=%.2f, charge=%.2f",
-                bucket_label,
-                wts,
-                wtb,
-                CTP_HEDGE_BENEFIT_RATIO,
-                bucket_charge,
+                "DRC CTP bucket=%s rw_long=%.4f rw_short=%.4f hbr=%.4f amount=%.4f",
+                label, rw_long, rw_short, hbr_ctp, amount,
             )
-
-            charges[bucket_label] = bucket_charge
-
-        return charges
+            details.append(
+                DRCSecCTPBucketDetail(bucket=label, rw_long=rw_long, rw_short=rw_short,
+                                      charge=amount)
+            )
+        return details
 
     # ------------------------------------------------------------------ #
-    #  Validation                                                         #
+    #  Step 7: cross-bucket aggregation -- §__.210(d)(4)                  #
     # ------------------------------------------------------------------ #
 
     @staticmethod
-    def _validate_positions(positions: list[DRCSecCTPPosition]) -> None:
-        """Validate the input CTP position list.
+    def aggregate_buckets(bucket_amounts: dict[str, float]) -> float:
+        """Aggregate unfloored per-index amounts per §__.210(d)(4) (ERBA NPR p.912).
 
-        Checks that all positions have valid data.  Pydantic field
-        validators handle individual field validation; this method
-        performs cross-field and portfolio-level checks.
+        .. math::
+
+            DRC_{CTP} = \\max\\Big( \\sum_b \\big[ \\max(DRC_b, 0)
+                        + 0.5 \\cdot \\min(DRC_b, 0) \\big],\\; 0 \\Big)
+
+        Negative index-level amounts receive 50% recognition against positive
+        ones; the total is floored at zero.
 
         Args:
-            positions: Input positions.
+            bucket_amounts: Unfloored DRC_b by index.
 
-        Raises:
-            ValidationError: If any position fails validation.
+        Returns:
+            DRC_CTP.
         """
+        total = sum(
+            max(v, 0.0) + CTP_NEGATIVE_BUCKET_FACTOR * min(v, 0.0)
+            for v in bucket_amounts.values()
+        )
+        return max(total, 0.0)
+
+    # ------------------------------------------------------------------ #
+    #  Validation / empty                                                 #
+    # ------------------------------------------------------------------ #
+
+    def _validate_positions(self, positions: list[DRCSecCTPPosition]) -> None:
+        """Portfolio-level validation: every position must have a resolvable RW."""
         if not positions:
-            raise ValidationError(
-                "No positions provided for DRC sec CTP calculation."
-            )
-
-        for idx, pos in enumerate(positions):
-            if pos.market_value < 0 and pos.is_long:
-                logger.warning(
-                    "CTP position %d (tranche=%s) is long with negative "
-                    "market value (%.2f) -- verify data quality.",
-                    idx,
-                    pos.tranche_id,
-                    pos.market_value,
-                )
-
-    # ------------------------------------------------------------------ #
-    #  Helper: empty result                                               #
-    # ------------------------------------------------------------------ #
+            raise ValidationError("No positions provided for DRC sec CTP calculation.")
+        for pos in positions:
+            self._risk_weight(pos)
 
     @staticmethod
     def _empty_result() -> DRCSecCTPResult:
-        """Return a zero-charge result for an empty portfolio.
-
-        Returns:
-            :class:`DRCSecCTPResult` with all fields set to zero / empty.
-        """
+        """Zero result for an empty portfolio."""
         return DRCSecCTPResult(
             total_charge=0.0,
             bucket_charges={},
+            bucket_details=[],
+            hbr_ctp=0.0,
             gross_jtd_long=0.0,
             gross_jtd_short=0.0,
             net_jtd_long=0.0,

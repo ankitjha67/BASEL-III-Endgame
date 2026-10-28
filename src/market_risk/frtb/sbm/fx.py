@@ -1,25 +1,27 @@
 """FX Risk Charge Calculator -- FRTB Sensitivities-Based Method.
 
-Implements the FX risk capital charge calculation per MAR21.21-21.22
-of the Basel III Endgame framework.
+Implements the FX risk capital charge calculation per the US ERBA NPR
+(March 2026), 12 CFR 217 Subpart F §__.206-§__.209 (BCBS d457
+MAR21.21-21.22 cross-reference).
 
 FX covers:
-- Delta risk: Linear sensitivities to FX spot rates
-- Vega risk: Sensitivities to implied volatilities of FX options
-- Curvature risk: Non-linear risk from FX options
+- Delta risk: Linear sensitivities to FX spot rates; RW 15%, or 15%/sqrt(2)
+  for pairs of specified currencies (§__.209(b)(7)).
+- Vega risk: Sensitivities to implied volatilities of FX options; RW 100%
+  (§__.209 Table 11).
+- Curvature risk: Non-linear risk from FX options; curvature RW = delta RW,
+  with an optional division of the curvature risk position by 1.5 for
+  options not referencing the reporting currency (§__.209 curvature).
 
-FX is the simplest risk class -- no bucket structure. All currency pair
-sensitivities are aggregated in a single correlation matrix with
-uniform rho = 0.60 between all pairs.
-
-Reference: BCBS d457 MAR21, US Federal Reserve Basel III Endgame Final Rule.
+FX has no bucket structure.  All currency-pair sensitivities are
+aggregated in a single correlation matrix with uniform rho = 60%.  The
+``bucket`` field of each sensitivity carries the currency pair (e.g.
+``"EURUSD"`` or ``"EUR/USD"``).
 """
 
 from __future__ import annotations
 
 import math
-from collections import defaultdict
-from typing import Sequence
 
 import numpy as np
 
@@ -28,7 +30,7 @@ from src.core.enums import (
     RiskClass,
     RiskMeasure,
 )
-from src.core.exceptions import CalculationError, ValidationError
+from src.core.exceptions import ValidationError
 from src.core.models import (
     BucketResult,
     RiskChargeResult,
@@ -36,13 +38,16 @@ from src.core.models import (
     WeightedSensitivity,
 )
 from src.market_risk.frtb.sbm.fx_params import (
-    FX_DELTA_RW,
+    APPLY_FX_CURVATURE_NON_REPORTING_CCY_DIVISOR,
+    FX_CURVATURE_NON_REPORTING_CCY_DIVISOR,
     FX_INTRA_CORR,
     FX_VEGA_ALPHA,
     FX_VEGA_RW,
     apply_correlation_scenario,
     build_fx_correlation_matrix,
+    get_fx_curvature_rw,
     get_fx_delta_rw,
+    references_reporting_currency,
 )
 from src.utils.aggregation import intra_bucket_aggregation
 
@@ -88,11 +93,12 @@ class FXCalculator:
     """Main FX risk charge calculator.
 
     Orchestrates delta, vega, and curvature risk charge calculations across
-    all three correlation scenarios (Low, Medium, High) per MAR21.21-21.22.
+    all three correlation scenarios (Low, Medium, High) per ERBA NPR
+    §__.206(c) and §__.209(b)(7).
 
     FX is simpler than other risk classes because it has no bucket structure.
     All sensitivities are aggregated in a single pool with uniform
-    correlation rho = 0.60 between all currency pairs.
+    correlation rho = 60% between all currency pairs.
 
     Usage::
 
@@ -103,6 +109,31 @@ class FXCalculator:
 
     # Single bucket name for FX (no bucket structure)
     FX_BUCKET = "FX"
+
+    def __init__(
+        self,
+        reporting_currency: str = "USD",
+        apply_curvature_divisor: bool | None = None,
+    ) -> None:
+        """Initialise the FX calculator.
+
+        Args:
+            reporting_currency: ISO 4217 reporting currency of the banking
+                organization (ERBA NPR §__.208(b)(7): FX risk factors are
+                measured against the reporting currency).
+            apply_curvature_divisor: Whether to divide the curvature risk
+                position of options that do not reference the reporting
+                currency by 1.5 (ERBA NPR §__.209, curvature paragraph:
+                an optional election).  ``None`` uses the module default
+                :data:`fx_params.APPLY_FX_CURVATURE_NON_REPORTING_CCY_DIVISOR`
+                (off).
+        """
+        self.reporting_currency = reporting_currency.upper()
+        self.apply_curvature_divisor = (
+            APPLY_FX_CURVATURE_NON_REPORTING_CCY_DIVISOR
+            if apply_curvature_divisor is None
+            else apply_curvature_divisor
+        )
 
     # --------------------------------------------------------------------- #
     #  Public API                                                            #
@@ -176,11 +207,12 @@ class FXCalculator:
         """Calculate FX delta risk charge for one correlation scenario.
 
         FX has no bucket structure. All sensitivities are aggregated in
-        a single pool with uniform correlation rho = 0.60.
+        a single pool with uniform correlation rho = 60%.
 
-        Steps per MAR21.4:
-        1. Apply risk weight (15%) to all sensitivities.
-        2. Build uniform correlation matrix with rho = 0.60.
+        Steps per ERBA NPR §__.206(b) and §__.209(b)(7):
+        1. Apply risk weight (15%, or 15%/sqrt(2) for specified-currency
+           pairs) to each sensitivity.
+        2. Build uniform correlation matrix with rho = 60%.
         3. Single-pool aggregation: K = sqrt(WS^T * rho * WS).
 
         Args:
@@ -233,9 +265,10 @@ class FXCalculator:
     ) -> RiskChargeResult:
         """Calculate FX vega risk charge for one correlation scenario.
 
-        Vega uses:
-        - Risk weight: 100% for FX (LH = 40 days, capped).
-        - 2-D correlation: rho_base * rho_opt(k,l) * rho_tenor(k,l).
+        Vega per ERBA NPR §__.209 (Table 11 and vega paragraph):
+        - Risk weight: 100% for FX.
+        - Correlation: min(rho_delta * rho_option_maturity, 1) with
+          rho_delta = 60% and alpha = 1%.
         - Single-pool aggregation (no buckets).
 
         Args:
@@ -286,10 +319,14 @@ class FXCalculator:
     ) -> RiskChargeResult:
         """Calculate FX curvature risk charge for one correlation scenario.
 
-        Curvature per MAR21.5:
-        - CVR_k values are the sensitivity values themselves.
-        - Single-pool aggregation with squared correlations.
-        - K = sqrt(max(0, sum(CVR) + sum_{k!=l} rho_kl^2 * psi(CVR_k, CVR_l)))
+        Curvature per ERBA NPR §__.206(b)(3) and §__.209 (curvature):
+        - CVR_k values are the sensitivity values themselves, computed with
+          a relative spot shock equal to the delta risk weight
+          (:func:`fx_params.get_fx_curvature_rw`).
+        - If elected, CVR_k of an option that does not reference the
+          reporting currency is divided by 1.5.
+        - Single-pool aggregation with squared delta correlations.
+        - K = sqrt(max(0, sum max(CVR,0)^2 + sum_{k!=l} rho_kl^2 * psi(CVR_k, CVR_l)))
 
         Args:
             sensitivities: FX curvature sensitivities only.
@@ -302,7 +339,7 @@ class FXCalculator:
             return self._empty_result(RiskMeasure.CURVATURE, scenario)
 
         cvr_values = np.array(
-            [s.value for s in sensitivities], dtype=np.float64
+            [self._scaled_cvr(s) for s in sensitivities], dtype=np.float64
         )
 
         # Build correlation matrix, then square it
@@ -326,14 +363,16 @@ class FXCalculator:
 
         total_charge = math.sqrt(max(0.0, diag_term + cross_term))
 
-        # Build WeightedSensitivity wrappers for reporting
+        # Build WeightedSensitivity wrappers for reporting; the recorded risk
+        # weight is the curvature shock size, the weighted value the (scaled)
+        # CVR actually aggregated.
         ws_curvature = [
             WeightedSensitivity(
                 sensitivity=s,
-                risk_weight=1.0,
-                weighted_value=s.value,
+                risk_weight=get_fx_curvature_rw(s.bucket),
+                weighted_value=float(cvr),
             )
-            for s in sensitivities
+            for s, cvr in zip(sensitivities, cvr_values, strict=True)
         ]
 
         bucket_result = BucketResult(
@@ -355,19 +394,42 @@ class FXCalculator:
     #  Helper: delta risk weight                                             #
     # --------------------------------------------------------------------- #
 
+    def _scaled_cvr(self, sensitivity: Sensitivity) -> float:
+        """Return CVR_k after the optional non-reporting-currency division.
+
+        ERBA NPR §__.209 (curvature): the curvature risk position of an FX
+        option whose currency pair does not include the reporting currency
+        may be divided by 1.5.  Applied only when
+        :attr:`apply_curvature_divisor` is set.
+
+        Args:
+            sensitivity: A single FX curvature sensitivity whose ``bucket``
+                is the currency pair.
+
+        Returns:
+            Scaled curvature risk position.
+        """
+        if self.apply_curvature_divisor and not references_reporting_currency(
+            sensitivity.bucket, self.reporting_currency
+        ):
+            return sensitivity.value / FX_CURVATURE_NON_REPORTING_CCY_DIVISOR
+        return sensitivity.value
+
     @staticmethod
     def _apply_delta_risk_weight(sensitivity: Sensitivity) -> WeightedSensitivity:
         """Apply risk weight to a single delta sensitivity.
 
-        All FX pairs receive a 15% risk weight.
+        ERBA NPR §__.209(b)(7): 15%, or 15%/sqrt(2) when both currencies
+        of the pair (taken from ``sensitivity.bucket``) are specified
+        currencies and the reduction is elected.
 
         Args:
             sensitivity: A single delta sensitivity.
 
         Returns:
-            WeightedSensitivity with WS_k = 0.15 * s_k.
+            WeightedSensitivity with WS_k = RW * s_k.
         """
-        rw = get_fx_delta_rw()
+        rw = get_fx_delta_rw(sensitivity.bucket)
         weighted_value = rw * sensitivity.value
         return WeightedSensitivity(
             sensitivity=sensitivity,
@@ -383,7 +445,7 @@ class FXCalculator:
     def _apply_vega_risk_weight(sensitivity: Sensitivity) -> WeightedSensitivity:
         """Apply vega risk weight to a single vega sensitivity.
 
-        For FX, the vega risk weight is 100% (LH = 40 days, capped).
+        For FX, the vega risk weight is 100% per ERBA NPR §__.209 Table 11.
 
         Args:
             sensitivity: A single vega sensitivity.
@@ -409,15 +471,15 @@ class FXCalculator:
     ) -> np.ndarray:
         """Build correlation matrix for FX vega risk.
 
-        Vega correlations combine option-maturity and underlying-tenor
-        dimensions with the base FX correlation:
+        ERBA NPR §__.209 (vega paragraph): for risk classes other than
+        GIRR the vega correlation is
 
-        rho_kl = rho_fx * rho_opt(k,l) * rho_tenor(k,l)
+            rho_kl = min(rho_delta * rho_opt(k,l), 1)
 
         where:
-        - rho_fx = 0.60 (base FX correlation)
-        - rho_opt(k,l) = exp(-alpha * |Tk_opt - Tl_opt| / min(Tk_opt, Tl_opt))
-        - rho_tenor(k,l) = exp(-alpha * |Tk_und - Tl_und| / min(Tk_und, Tl_und))
+        - rho_delta = 60% (the FX delta correlation; 100% for the same pair)
+        - rho_opt(k,l) = exp(-alpha * |Tk_opt - Tl_opt| / min(Tk_opt, Tl_opt)),
+          alpha = 1%.
 
         Args:
             sensitivities: Vega sensitivities for FX.
@@ -446,19 +508,10 @@ class FXCalculator:
                         / min(opt_i, opt_j)
                     )
 
-                # Underlying tenor correlation
-                und_i = si.tenor.value if si.tenor is not None else 0.5
-                und_j = sj.tenor.value if sj.tenor is not None else 0.5
-                if und_i == und_j:
-                    rho_tenor = 1.0
-                else:
-                    rho_tenor = math.exp(
-                        -FX_VEGA_ALPHA
-                        * abs(und_i - und_j)
-                        / min(und_i, und_j)
-                    )
+                # Delta correlation between the underlying currency pairs
+                rho_delta = 1.0 if si.bucket == sj.bucket else FX_INTRA_CORR
 
-                rho = FX_INTRA_CORR * rho_opt * rho_tenor
+                rho = min(rho_delta * rho_opt, 1.0)
                 rho = apply_correlation_scenario(rho, scenario)
                 corr[i, j] = rho
                 corr[j, i] = rho
@@ -471,7 +524,7 @@ class FXCalculator:
 
     @staticmethod
     def _psi(cvr_k: float, cvr_l: float) -> float:
-        """Curvature psi function per MAR21.5(3).
+        """Curvature psi function per ERBA NPR §__.206(b)(3) (BCBS MAR21.5(3)).
 
         Returns the product |CVR_k| * |CVR_l| scaled by a sign factor:
         - Both positive: +|CVR_k| * |CVR_l|

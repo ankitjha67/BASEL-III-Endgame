@@ -36,22 +36,55 @@ config/                 # Regulatory parameters (JSON/YAML)
 
 ### Regulatory Accuracy
 - NEVER fabricate regulatory parameters. If unsure of a specific risk weight, correlation value, or threshold, flag it with `# TODO: VERIFY — [description]` and use a conservative placeholder
-- ILM = 1.0 (Internal Loss Multiplier NOT applied per 2026 proposal)
-- Output Floor (72.5%) NOT included in US proposal
-- MSA deduction REMOVED — 250% risk weight instead
-- SA-CCR alpha = 1.4 for financial counterparties, 1.0 for commercial end-users
-- Retail transactor = 45% (not 55% from 2023 NPR)
-- Corporate IG = 65% (self-assessment, no external ratings per Dodd-Frank §939A)
-- G-SIB Method 2 coefficients adjusted by 1.2x downward factor
+- The authority for every US parameter is the regulatory TEXT of the March 2026 ERBA NPR
+  (OCC NR 2026-16a, 1,241 pp.; common rule text pp. 674-988). A verbatim transcription of
+  every table and formula in that text is kept in `docs/ERBA_NPR_2026_parameter_reference.md`;
+  cite the section (e.g. "ERBA NPR § __.111 Table 5") in docstrings. "ERBA" in the US rule means
+  *expanded risk-based approach* (NOT the BCBS external-ratings-based securitization approach).
+- ILM = 1.0 — more precisely, operational risk RWA = 12.5 × BIC with NO loss multiplier term (§ __.150(a))
+- Output Floor (72.5%) NOT included in US proposal; no IRB/IMM for credit or counterparty risk
+- MSA deduction REMOVED — 250% risk weight instead; MSAs are excluded from the 10%/15% threshold tests
+- SA-CCR alpha = 1.4; 1.0 for commercial end-user netting sets (§ __.114(e)(4)). Credit SFs by credit
+  quality: single-name IG 0.46% / spec 1.3% / sub-spec 6.0% (ρ 50%), index IG 0.38% / spec 1.06% (ρ 80%);
+  margined MF = √(1.5·MPOR/250); unmargined MF = √(min(M,1y)/1y); SD floor 0.04
+- Retail transactor = 45% (not 55% from 2023 NPR); regulatory retail 75% (≤ $1M aggregate); other retail 100%
+- Corporate IG = 65% (internal rating system, no external ratings per Dodd-Frank §939A); project finance
+  130% pre-operational / 100% operational; subordinated 150%; NO SME 85% weight in the US proposal
+- Residential mortgages (Table 5 to § __.111): 20/25/30/40/50/70% for LTV ≤50/≤60/≤80/≤90/≤100/>100
+  (six bands); 30/35/45/60/75/105% if dependent on real-estate cash flows (Table 6). The 2023 NPR's
+  40-90% schedule is withdrawn.
+- Bank exposures (Table 2 to § __.111): Grade A 30% (CET1 ≥ 14% & leverage ≥ 5%, or CBLR) else 40%;
+  Grade B 75%; Grade C 150%; no general short-term preference (20/50% only for foreign-bank
+  trade-related contingent items ≤ 3 months)
+- CCFs (§ __.112): 10% unconditionally cancelable; 40% ALL other commitments regardless of maturity;
+  20% short-term trade; 50% transaction-related / NIF / RUF; 100% guarantees, repos, forwards
+- Equity SRWA (§ __.141): 0% sovereign/FRB stock; 20% PSE/FHLB/Farmer Mac; 100% non-significant ≤ 10%
+  of total capital; 250% significant FI; 300% publicly traded; 400% non-public; 600% leveraged funds
+- Securitization: SEC-SA ONLY (p = 0.5, 1.5 resec; floors 15% / 100%; 1,250% cap; straddle blend);
+  no SEC-ERBA, no STC; DRC-sec RW = banking-book SEC RW × 8%
+- CVA: BA-CVA K = 0.65·(0.25·K_unhedged + 0.75·K_hedged), SCVA = (1/α)·RW·M·EAD·DF with the sector ×
+  IG/spec/sub-spec Table 1 to § __.222; SA-CVA m_CVA = 1, R = 0.01; scope = Cat I/II HCs, their
+  market-risk DI subs, and market-risk banks with ≥ $1T OTC notional
+- FRTB SBM: GIRR 10 vertices (no 7Y/25Y), RW ÷ √2 for USD/AUD/CAD/EUR/JPY/SEK/GBP; CSR non-sec 20
+  US buckets by IG/spec/sub-spec; equity Table 8 with index-vs-sector γ 45%; commodity 12 buckets;
+  FX 15% (÷ √2 liquid pairs); vega RW 100% except equity large-cap/indices 77.78%
+- FRTB DRC (§ __.210): four buckets (non-US sovereign 0.6%, PSE/GSE 2.1%, corporate 4.1% IG; 22%
+  speculative; 50% sub-speculative; 100% defaulted); LGD 100/75/50 (US PSE)/25 (covered, GSE-guaranteed);
+  HBR = long/(long+|short|); CTP total = max(Σ[max(DRC_b,0) + 0.5·min(DRC_b,0)], 0)
+- FRTB IMA: m_c 1.5 (ladder to 2.0), ES 97.5%, ω 0.5, SES ρ_b 0.36, PLA KS 0.09/0.12 (3-year transition)
+- G-SIB Method 2 coefficients adjusted by 1.2x downward factor (separate G-SIB NPR — not covered by the ERBA NPR text)
 - G-SIB surcharge bands: 20bp score ranges / 0.1% increments (not 100bp/0.5%)
-- NIC in operational risk uses NET basis with 0.7x factor for investment management
-- BIC marginal coefficients: 12% / 15% / 18% at $1B / $30B thresholds
-- FRTB threshold: $5B trading activity (4-quarter average), not $1B from 2023
+- Operational risk BI noninterest component uses the NET basis with the 0.7x factor applied to
+  investment management, investment services AND non-lending treasury services (§ __.150(c)(1)(ii));
+  ILDC caps net interest at 2.25% of interest-earning assets; loss-data threshold $20,000
+- BIC marginal coefficients: 12% / 15% / 18% at $1B / $30B thresholds (CPI-W indexed)
+- FRTB threshold: $5B trading activity (4-quarter average) or 10% of total assets, not $1B from 2023
 
 ### Testing
 - Every module must have corresponding tests in `tests/`
 - Test against known regulatory examples where available
-- Validate that all risk weights match Tables 2-5 in the ERBA NPR
+- Validate that all credit risk weights match Tables 1-8 to § __.111 of the ERBA NPR
+  (sovereign, bank, foreign PSE, residential and commercial real estate)
 - Integration test: end-to-end capital calculation must produce realistic GSIB ratios (CET1 10-15%, SLR 5-7%)
 
 ### Fed Reporting Formats

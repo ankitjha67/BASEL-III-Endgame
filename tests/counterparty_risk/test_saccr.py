@@ -316,7 +316,9 @@ class TestPFE:
         ns = _make_ns([trade])
         result = calc.calculate(ns)
         assert result.pfe > 0
-        assert "CREDIT_IG" in result.addon_by_asset_class
+        # All credit categories form a single hedging set (§ __.114(b)(iii))
+        assert "CREDIT" in result.addon_by_asset_class
+        assert "CREDIT_IG" not in result.addon_by_asset_class
 
     def test_multiple_asset_classes_addon(self, calc):
         """AddOns from different asset classes are summed (no cross-class netting)."""
@@ -562,14 +564,23 @@ class TestSupervisoryParameters:
         assert params.supervisory_factor == 0.20
 
     def test_sf_credit_ig(self):
-        """Supervisory factor for Credit IG = 0.0038."""
+        """Table 2 to § __.114: credit single-name investment grade SF = 0.46%."""
         params = SACCR_ASSET_CLASS_PARAMS[SACCRAssetClass.CREDIT_IG]
-        assert params.supervisory_factor == 0.0038
+        assert params.supervisory_factor == 0.0046
+        assert params.correlation == 0.5
 
     def test_sf_credit_spec(self):
-        """Supervisory factor for Credit Speculative = 0.0054."""
+        """Table 2 to § __.114: credit single-name speculative grade SF = 1.3%."""
         params = SACCR_ASSET_CLASS_PARAMS[SACCRAssetClass.CREDIT_SPEC]
-        assert params.supervisory_factor == 0.0054
+        assert params.supervisory_factor == 0.013
+
+    def test_sf_credit_subspec_and_index(self):
+        """Table 2 to § __.114: sub-speculative 6.0%; index IG 0.38% / spec 1.06%, rho 80%."""
+        assert SACCR_ASSET_CLASS_PARAMS[SACCRAssetClass.CREDIT_SUBSPEC].supervisory_factor == 0.060
+        idx_ig = SACCR_ASSET_CLASS_PARAMS[SACCRAssetClass.CREDIT_INDEX_IG]
+        idx_sp = SACCR_ASSET_CLASS_PARAMS[SACCRAssetClass.CREDIT_INDEX_SPEC]
+        assert idx_ig.supervisory_factor == 0.0038 and idx_ig.correlation == 0.8
+        assert idx_sp.supervisory_factor == 0.0106 and idx_sp.correlation == 0.8
 
     def test_sf_commodity_elec(self):
         """Supervisory factor for commodity electricity = 0.40."""
@@ -726,11 +737,21 @@ class TestEdgeCases:
             assert eads[i + 1] <= eads[i] + 0.01
 
     def test_mpor_scaling_factor(self):
-        """MPOR scaling factor = 1.5 * sqrt(MPOR/250)."""
-        import numpy as np
+        """Margined maturity factor = sqrt(1.5 * MPOR / 250) per § __.114(i)(4)(i)."""
         factor = mpor_scaling_factor(10)
-        expected = 1.5 * np.sqrt(10 / 250.0)
+        expected = math.sqrt(1.5 * 10 / 250.0)
         assert factor == pytest.approx(expected, rel=1e-10)
+
+    def test_unmargined_maturity_factor(self):
+        """Unmargined MF = sqrt(min(M, 1y)/1y), M floored at 10 business days."""
+        from src.counterparty_risk.saccr.saccr_params import unmargined_maturity_factor
+        assert unmargined_maturity_factor(5.0) == pytest.approx(1.0)
+        assert unmargined_maturity_factor(0.25) == pytest.approx(0.5)
+        assert unmargined_maturity_factor(0.001) == pytest.approx(math.sqrt(10 / 250))
+
+    def test_supervisory_duration_floor(self):
+        """SD is floored at 0.04 (ten business days) per § __.114(i)(2)(i)(A)."""
+        assert supervisory_duration(0.0, 0.01) == pytest.approx(0.04)
 
     def test_netting_set_alpha_property(self):
         """NettingSet.alpha returns correct value based on is_financial."""

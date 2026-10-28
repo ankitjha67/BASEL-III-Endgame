@@ -1,21 +1,31 @@
 """Commodity Risk Charge Calculator -- FRTB Sensitivities-Based Method.
 
-Implements the Commodity risk capital charge calculation per MAR21.19-21.20
-of the Basel III Endgame framework.
+Implements the Commodity risk capital charge calculation per the US ERBA
+NPR (March 2026), 12 CFR 217 Subpart F §__.206-§__.209 (BCBS d457
+MAR21.19-21.20 cross-reference).
 
 Commodity covers:
-- Delta risk: Linear sensitivities to commodity spot/forward prices
+- Delta risk: Linear sensitivities to commodity prices by delivery location
+  and contract maturity (§__.208(b)(6); Table 9/10 parameters per
+  §__.209(b)(6), 12 buckets).
 - Vega risk: Sensitivities to implied volatilities of commodity options
-- Curvature risk: Non-linear risk from options on commodities
+  (RW 100%, §__.209 Table 11).
+- Curvature risk: Non-linear risk from options on commodities (curvature
+  RW = highest delta RW of the bucket; correlations squared).
 
-Reference: BCBS d457 MAR21, US Federal Reserve Basel III Endgame Final Rule.
+Sensitivity conventions for this risk class:
+
+* ``bucket`` -- Table 9 bucket number as a string (``"1"`` .. ``"12"``).
+* ``tenor``  -- contract maturity vertex (``GIRRTenor``); ``None`` means
+  spot (maturity 0).
+* ``label``  -- delivery-location identifier (basis); the generic label
+  ``"DEFAULT"`` / empty means a single location.
 """
 
 from __future__ import annotations
 
 import math
 from collections import defaultdict
-from typing import Sequence
 
 import numpy as np
 
@@ -24,7 +34,7 @@ from src.core.enums import (
     RiskClass,
     RiskMeasure,
 )
-from src.core.exceptions import CalculationError, ValidationError
+from src.core.exceptions import ValidationError
 from src.core.models import (
     BucketResult,
     RiskChargeResult,
@@ -32,17 +42,21 @@ from src.core.models import (
     WeightedSensitivity,
 )
 from src.market_risk.frtb.sbm.commodity_params import (
-    COMMODITY_BUCKETS,
-    COMMODITY_DELTA_RW,
+    COMMODITY_DELTA_MATURITIES,
     COMMODITY_INTRA_CORR,
     COMMODITY_VEGA_ALPHA,
     COMMODITY_VEGA_RW,
     apply_correlation_scenario,
     build_commodity_intra_bucket_corr_matrix,
+    get_commodity_curvature_rw,
     get_commodity_delta_rw,
     get_commodity_inter_bucket_corr,
 )
 from src.utils.aggregation import intra_bucket_aggregation
+
+# Spot maturity used when a commodity sensitivity carries no tenor
+# (ERBA NPR §__.208(b)(6): maturity vertex 0 = spot).
+COMMODITY_SPOT_MATURITY: float = COMMODITY_DELTA_MATURITIES[0]
 
 
 class CommodityResult:
@@ -86,7 +100,8 @@ class CommodityCalculator:
     """Main Commodity risk charge calculator.
 
     Orchestrates delta, vega, and curvature risk charge calculations across
-    all three correlation scenarios (Low, Medium, High) per MAR21.19-21.20.
+    all three correlation scenarios (Low, Medium, High) per ERBA NPR
+    §__.206(c) and §__.209(b)(6).
 
     Usage::
 
@@ -166,12 +181,13 @@ class CommodityCalculator:
     ) -> RiskChargeResult:
         """Calculate Commodity delta risk charge for one correlation scenario.
 
-        Steps per MAR21.4:
-        1. Group sensitivities by bucket (1-11).
-        2. Apply risk weights: WS_k = RW_k * s_k.
-        3. Build intra-bucket correlation matrix (commodity * tenor * basis).
+        Steps per ERBA NPR §__.206(b) and §__.209(b)(6):
+        1. Group sensitivities by bucket (1-12).
+        2. Apply risk weights: WS_k = RW_k * s_k (Table 9).
+        3. Build intra-bucket correlation matrix
+           rho_cty (Table 10) * rho_tenor (99%) * rho_basis (99.9%).
         4. Intra-bucket aggregation: K_b = sqrt(WS^T * rho * WS).
-        5. Inter-bucket aggregation with bucket-pair specific gamma.
+        5. Inter-bucket aggregation with gamma = 20% (0% with bucket 11).
 
         Args:
             sensitivities: Commodity delta sensitivities only.
@@ -249,10 +265,10 @@ class CommodityCalculator:
     ) -> RiskChargeResult:
         """Calculate Commodity vega risk charge for one correlation scenario.
 
-        Vega uses:
-        - Risk weight: 100% for Commodity (LH = 120 days, capped).
-        - 2-D correlation: option-maturity x underlying.
-        - Same three-scenario framework as delta.
+        Vega per ERBA NPR §__.209 (Table 11 and vega paragraph):
+        - Risk weight: 100% for Commodity.
+        - Correlation: min(rho_delta * rho_option_maturity, 1), alpha = 1%.
+        - Inter-bucket gamma = delta gamma.
 
         Args:
             sensitivities: Commodity vega sensitivities only.
@@ -318,10 +334,13 @@ class CommodityCalculator:
     ) -> RiskChargeResult:
         """Calculate Commodity curvature risk charge for one correlation scenario.
 
-        Curvature per MAR21.5:
-        - CVR_k = max(CVR_k_up, CVR_k_down) for each risk factor.
-        - Intra-bucket: K_b = sqrt(max(0, sum(CVR) + sum_{k!=l} rho_kl^2 * psi))
-        - Uses squared correlations from delta.
+        Curvature per ERBA NPR §__.206(b)(3) and §__.209 (curvature):
+        - CVR_k is the net curvature risk position per commodity factor,
+          computed with a shock equal to the highest delta risk weight of
+          the bucket (:func:`commodity_params.get_commodity_curvature_rw`).
+        - Intra-bucket: K_b = sqrt(max(0, sum max(CVR,0)^2
+          + sum_{k!=l} rho_kl^2 * psi)) using SQUARED delta correlations.
+        - Inter-bucket: squared delta gamma.
 
         Args:
             sensitivities: Commodity curvature sensitivities only.
@@ -376,10 +395,12 @@ class CommodityCalculator:
             bucket_charges[bucket] = k_b
             bucket_net_sens[bucket] = sum_cvr
 
+            # The recorded risk weight is the curvature shock size.
+            curvature_rw = get_commodity_curvature_rw(bucket_int)
             ws_curvature = [
                 WeightedSensitivity(
                     sensitivity=s,
-                    risk_weight=1.0,
+                    risk_weight=curvature_rw,
                     weighted_value=s.value,
                 )
                 for s in bucket_sens
@@ -433,16 +454,18 @@ class CommodityCalculator:
 
     @staticmethod
     def _extract_tenors(sensitivities: list[Sensitivity]) -> list[float] | None:
-        """Extract delivery tenors from sensitivities.
+        """Extract contract maturities from sensitivities.
 
-        Uses the tenor field (GIRRTenor enum value) if available, falling
-        back to option_maturity, then a default of 1.0.
+        Uses the tenor field (GIRRTenor enum value) if available; a missing
+        tenor means spot (maturity 0 on the ERBA NPR §__.208(b)(6) grid
+        {0, 0.25, 0.5, 1, 2, 3, 5, 10, 15, 20, 30}).
 
         Args:
             sensitivities: List of sensitivities for a single bucket.
 
         Returns:
-            List of tenor values in years, or None if no tenors are set.
+            List of maturities in years, or None if no tenors are set
+            (all spot, so the tenor correlation factor is 100%).
         """
         tenors: list[float] = []
         has_any = False
@@ -451,7 +474,7 @@ class CommodityCalculator:
                 tenors.append(s.tenor.value)
                 has_any = True
             else:
-                tenors.append(1.0)  # default delivery tenor
+                tenors.append(COMMODITY_SPOT_MATURITY)
         return tenors if has_any else None
 
     @staticmethod
@@ -483,9 +506,11 @@ class CommodityCalculator:
     ) -> WeightedSensitivity:
         """Apply risk weight to a single delta sensitivity.
 
+        ERBA NPR §__.209(b)(6) Table 9.
+
         Args:
             sensitivity: A single delta sensitivity.
-            bucket: Bucket number (1-11).
+            bucket: Bucket number (1-12).
 
         Returns:
             WeightedSensitivity with WS_k = RW_k * s_k.
@@ -506,7 +531,8 @@ class CommodityCalculator:
     def _apply_vega_risk_weight(sensitivity: Sensitivity) -> WeightedSensitivity:
         """Apply vega risk weight to a single vega sensitivity.
 
-        For Commodity, the vega risk weight is 100% (LH = 120 days, capped).
+        For Commodity, the vega risk weight is 100% per ERBA NPR §__.209
+        Table 11.
 
         Args:
             sensitivity: A single vega sensitivity.
@@ -533,10 +559,14 @@ class CommodityCalculator:
     ) -> np.ndarray:
         """Build intra-bucket correlation matrix for vega risk.
 
-        Vega correlations combine option-maturity and underlying-tenor
-        dimensions with the intra-bucket base correlation:
+        ERBA NPR §__.209 (vega paragraph): for risk classes other than
+        GIRR,
 
-        rho_kl = rho_commodity * rho_opt(k,l) * rho_tenor(k,l)
+            rho_kl = min(rho_delta * rho_opt(k,l), 1)
+
+        where rho_delta is the Table 10 commodity correlation of the bucket
+        and rho_opt(k,l) = exp(-alpha * |Tk_opt - Tl_opt| / min(Tk_opt, Tl_opt)),
+        alpha = 1%.
 
         Args:
             sensitivities: Vega sensitivities for one bucket.
@@ -548,7 +578,7 @@ class CommodityCalculator:
         """
         n = len(sensitivities)
         corr = np.eye(n, dtype=np.float64)
-        base_rho = COMMODITY_INTRA_CORR[bucket]
+        rho_delta = COMMODITY_INTRA_CORR[bucket]
 
         for i in range(n):
             for j in range(i + 1, n):
@@ -567,19 +597,7 @@ class CommodityCalculator:
                         / min(opt_i, opt_j)
                     )
 
-                # Underlying tenor correlation
-                und_i = si.tenor.value if si.tenor is not None else 0.5
-                und_j = sj.tenor.value if sj.tenor is not None else 0.5
-                if und_i == und_j:
-                    rho_tenor = 1.0
-                else:
-                    rho_tenor = math.exp(
-                        -COMMODITY_VEGA_ALPHA
-                        * abs(und_i - und_j)
-                        / min(und_i, und_j)
-                    )
-
-                rho = base_rho * rho_opt * rho_tenor
+                rho = min(rho_delta * rho_opt, 1.0)
                 rho = apply_correlation_scenario(rho, scenario)
                 corr[i, j] = rho
                 corr[j, i] = rho
@@ -598,8 +616,9 @@ class CommodityCalculator:
     ) -> float:
         """Inter-bucket aggregation with bucket-pair specific correlations.
 
-        Uses gamma = 0.40 within energy group (B1-B6), gamma = 0.20 otherwise.
-        S_b is capped to [-K_b, K_b] per MAR21.4(4).
+        ERBA NPR §__.209(b)(6): gamma = 20% among buckets 1-10 and 12;
+        0% whenever either bucket is 11 (other commodity).  S_b is capped
+        to [-K_b, K_b] only if the radicand is negative (§__.206(b)(1)).
 
         Args:
             bucket_charges: {bucket: K_b} from intra-bucket aggregation.
@@ -677,9 +696,10 @@ class CommodityCalculator:
         bucket_net_cvr: dict[str, float],
         scenario: CorrelationScenario,
     ) -> float:
-        """Curvature inter-bucket aggregation per MAR21.5(5).
+        """Curvature inter-bucket aggregation per ERBA NPR §__.206(b)(3).
 
-        Uses squared gamma correlations between buckets.
+        Uses the squared delta gamma correlations between buckets
+        (§__.209 curvature paragraph).
 
         Args:
             bucket_charges: {bucket: K_b} from intra-bucket curvature.

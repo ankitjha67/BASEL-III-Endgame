@@ -57,12 +57,12 @@ an explicit decision for the owner.
 
 | # | File / constant | Deviation |
 |---|---|---|
-| P1 | `girr_params.TENORS`, `core/enums.GIRRTenor` | 12 vertices; MAR21.8 prescribes **10** (no 7Y, 25Y). RWs on the extra vertices equal neighbours (1.1 %), so numerical effect is small. |
-| P2 | `csr_nonsec_params.DELTA_RISK_WEIGHTS` | 18 buckets as sector×IG/HY pairs at 0.5–3.5 %. MAR21.13 Table 4 is a different taxonomy with Financials IG **5.0 %**, Financials HY **12 %**, Other 12 %, index buckets 1.5 %/5 %, etc. |
-| P3 | `equity_params.EQUITY_DELTA_RW` / `_INTRA_CORR` | 5 EM + 5 AE + small + 2 index. MAR21.17 Table 8 is 4 EM + 4 AE + EM-small + AE-small + Other + 2 index; buckets 5–10 RWs differ (e.g. AE financials 50 %, not 20 %). |
-| P4 | `commodity_params.COMMODITY_DELTA_RW` | Bucket definitions (light/middle/heavy distillates, base metals) do not match MAR21.19 Table 10 (freight 80 %, gaseous combustibles 35 %, …). |
-| P5 | `csr_sec_params.CSR_SEC_NON_CTP_RW` | 8 buckets; MAR21.16 Table 6 has 25 (senior/non-senior × IG/HY × asset type). |
-| P6 | `csr_sec_params.CSR_SEC_CTP_RW` | 5 buckets; MAR21.15 uses the 16-bucket CSR taxonomy with 2–16 % RWs. |
+| P1 | `girr_params.TENORS`, `core/enums.GIRRTenor` | **RESOLVED (2026-10-28)** — reduced to the ten ERBA NPR §__.208(b)(1) vertices (7Y / 25Y removed). Specified-currency list aligned to §__.209(b)(1) (USD, AUD, CAD, EUR, JPY, SEK, GBP; CHF removed) and the sqrt(2) direction corrected: Table 1 is the base, specified currencies are *divided* by sqrt(2). Curvature now curve-level with ρ = 99.8 % cross-curve; inflation / xccy curvature rejected. |
+| P2 | `csr_nonsec_params.DELTA_RISK_WEIGHTS` | **RESOLVED (2026-10-28)** — re-mapped to the 20 buckets of ERBA NPR §__.209(b)(2) Table 3 (IG / speculative / sub-speculative, Financials IG 5.0 %, spec financials 12 %, other 12 %, indices 1.5 % / 5 %), fixed 35 % / 65 % / 99.9 % intra-bucket ρ, Table 4 γ_sector × γ_rating. Remaining `TODO: VERIFY`: sub-speculative PSE / financials mapped to buckets 10 / 11. |
+| P3 | `equity_params.EQUITY_DELTA_RW` / `_INTRA_CORR` | **RESOLVED (2026-10-28)** — re-mapped to the 13 buckets of ERBA NPR §__.209(b)(5) Table 8 (4 EM + 4 liquid-market large cap, EM / liquid small cap, other sector, 2 index); repo RW = spot / 100; ρ 15 / 25 / 7.5 / 12.5 / 80 %, bucket 11 Σ\|WS\|; γ 15 % / 45 % / 75 % / 0 %; vega RW 77.78 % / 100 % (Table 11). FX (`fx_params`) aligned in the same pass: 19-currency specified list, RW 15 % ÷ √2 for specified pairs, optional ÷1.5 curvature election. |
+| P4 | `commodity_params.COMMODITY_DELTA_RW` | **RESOLVED (2026-10-28)** — re-mapped to the 12 buckets of ERBA NPR §__.209(b)(6) Table 9 (incl. freight 80 %, carbon 60 %, index bucket 12 at 30 %); Table 10 ρ_cty; flat 99 % tenor ρ, 99.9 % basis ρ; γ 20 % (0 % with bucket 11); energy-group 40 % rule removed. |
+| P5 | `csr_sec_params.CSR_SEC_NON_CTP_RW` | **RESOLVED (2026-10-28)** — re-mapped to the 25 buckets of ERBA NPR §__.209(b)(4) Table 7 (senior IG / non-senior IG / spec & sub-spec × 8 asset types + other); ρ = ρ_tranche (40 %) × ρ_tenor (80 %) × ρ_basis (99.9 %); γ_bc = 0 %. |
+| P6 | `csr_sec_params.CSR_SEC_CTP_RW` | **RESOLVED (2026-10-28)** — re-mapped to the 16 buckets of ERBA NPR §__.209(b)(3) Table 5 (2–16 % RWs); ρ = 35 % / 65 % / 99 %; γ = γ_rating × γ_sector (Table 6). Remaining `TODO: VERIFY`: sub-speculative PSEs mapped to bucket 9. |
 | P7 | `drc_params.DRC_SEC_RISK_WEIGHTS_*` | Rating×seniority table (0.4 %–64 %). MAR22.29 defines DRC-sec RW as **banking-book SEC RW ÷ 12.5** (AAA senior 15 % → 1.2 %). |
 | P8 | `cva_params.BA_CVA_*` | Rating-based weights; α = 1.0; no `DF_c`; no `DS = 0.65`. MAR50.14/50.17 (rev. 2020) use a sector×IG/HY table, `SCR = (1/1.4)·RW·M·EAD·DF`, and a 0.65 discount scalar. Code cites ERBA p.281 — unverified. |
 | P9 | `gsib_params.STWF_MATURITY_BUCKETS` | Single weight vector (25/10/3/1 %). 12 CFR 217.406(b) is a 4×4 grid of funding-category × maturity. |
@@ -124,7 +124,104 @@ amortisation, G-SIB 20 bp/0.1 % bands and 130 bp threshold, SSFA exponent.
    change to enums/tests) or to document the project taxonomy as a
    deliberate simplification.
 2. Confirm the BA-CVA calibration (P8) against ERBA NPR p.281 text.
-3. Remove GIRR 7Y/25Y (P1) or add a vertex-mapping step.
+3. ~~Remove GIRR 7Y/25Y (P1) or add a vertex-mapping step.~~ Done 2026-10-28 (P1 resolved).
 4. Regenerate `Deliverable_2_FINAL.docx` to correct I2/I3; correct or
    source the 23.003 figure (I4).
 5. Replace stress-test provision rates with published CCAR loss rates.
+
+---
+---
+
+# Part 2 — Reconciliation against the March 2026 ERBA NPR text
+
+**Date:** 2026-10-28  
+**Sources read end to end:**
+1. OCC NR 2026-16a attachment — *Regulatory Capital Rules: Category I and II Banking
+   Organizations; Banking Organizations with Significant Trading Activity* (OCC / Board / FDIC
+   NPR, 1,241 pp.). Preamble sections I–XI and the complete common rule text (Subpart E
+   § __.100–§ __.162, Subpart F § __.201–§ __.225, Parts 217/324 Subparts A–D/G amendments).
+   The rule-text transcription used for the reconciliation is committed as
+   `docs/ERBA_NPR_2026_parameter_reference.md`.
+2. ISDA, *US Basel III Endgame: Trading and Capital Markets Impact — 2026 Update* (6 pp.):
+   QIS results (FRTB-SA +89 %, IMA/SA blend +30 %, DRC ≈ 51 % of FRTB capital, CVA RWA ≈ $168 bn,
+   CCR RWA 0.77× current) and industry recommendations. The ISDA note contains no rule
+   parameters; it was used only to check impact statements in the project documents.
+
+## 2.1 Headline
+
+The engine had been built largely from BCBS d424 / d457 and from the July 2023 NPR. The
+March 2026 NPR text differs from both in many places. **Every parameter table in the engine was
+re-derived from the 2026 rule text**; the material corrections are listed below. Part 1 finding
+I2 is **reversed**: the Deliverable 2 residential-mortgage column (20–70 %) was correct and the
+code (40–90 %, the 2023 NPR schedule) was wrong.
+
+## 2.2 Corrections by module (old → new, with NPR citation)
+
+### Credit risk (SA) — `src/credit_risk/sa/`, `src/reference_data/regulatory_lookups.py`, `src/main_v4_poc.py`
+| Item | Was | Now (ERBA NPR) |
+|---|---|---|
+| Residential mortgage RW (not dependent on cash flows) | 40/45/50/60/70/80/90 % over seven LTV bands | **20/25/30/40/50/70 %** over six bands (≤50/≤60/≤80/≤90/≤100/>100) — Table 5 to § __.111 |
+| Residential mortgage dependent on cash flows | not modelled | 30/35/45/60/75/105 % — Table 6 |
+| Other / past-due residential | not modelled | 100 % (not dependent) / 150 % — § __.111(f)(7)–(8) |
+| Regulatory CRE not dependent on cash flows | not modelled (LTV table applied to all CRE) | LTV ≤ 60 %: min(60 %, borrower RW); else borrower RW — Table 7 |
+| ADC (non-HVCRE) | 150 % (100 % if "pre-sold ADC") | **100 %**; HVCRE 150 %; pre-sold construction 50 %; statutory multifamily 50 % — § __.111(f)(1)–(4) |
+| Bank exposures | CRC-of-home-sovereign table 20/50/100/150 % with a general ≤ 3-month 20 % preference | **Grade A 30 % (§ (d)(2) criteria) / 40 %, Grade B 75 %, Grade C 150 %**; 20/50/150 % only for foreign-bank trade-related contingent items ≤ 3 m; home-sovereign floor — Table 2 to § __.111 |
+| Sovereign CRC 6 | 150 % | **100 %** (CRC 4–6) — Table 1; OECD-no-CRC 0 %, non-OECD 100 %, default 150 % added |
+| Foreign PSEs | US 20/50 % applied to all | Tables 3–4 by home-country CRC |
+| Corporate SME | 85 % | **100 %** — no SME weight in § __.111(h); project finance 130 %/100 % and object finance 100 % added |
+| Publicly traded equity | 250 % | **300 %** — § __.141(b)(5); full 0/20/100/250/300/400/600 ladder implemented; FRB stock 0 %, FHLB/Farmer Mac 20 % |
+| GSE class | absent | 20 %; subordinated 150 % (FHLB/Farmer Mac 20 %) — § __.111(c) |
+| Commitments ≤ 1 year CCF | 20 % | **40 % regardless of maturity** — § __.112(b)(3) |
+| Collateral haircuts (`crm.py`) | BCBS-style 0.5–10 %, gold 15 %, equities 15/25 % | Table 1 to § __.115 (sovereign 0.5–4 %, IG 2–20 % by five maturity bands, senior sec 4–24 %, main-index equities & gold 20 %, other 30 %); multi-collateral E* with the 0.4·net + 0.6·gross/√N terms — § __.115(b) |
+
+### Counterparty credit risk — `src/counterparty_risk/saccr/`
+| Item | Was | Now |
+|---|---|---|
+| Credit supervisory factors | single-name IG 0.38 %, spec 0.54 % (BCBS rating ladder) | **IG 0.46 %, speculative 1.3 %, sub-speculative 6.0 % (ρ 50 %); index IG 0.38 %, spec 1.06 % (ρ 80 %)** — Table 2 to § __.114; all credit trades aggregated in ONE hedging set |
+| Margined maturity factor | 1.5·√(MPOR/250) applied to the netting-set add-on | **√(1.5·MPOR/250)** applied per trade — § __.114(i)(4)(i) |
+| Unmargined maturity factor | absent (1.0) | √(min(M, 1y)/1y), M ≥ 10 business days — § __.114(i)(4)(ii) |
+| Supervisory duration floor | none | 0.04 (ten business days) — § __.114(i)(2)(i)(A) |
+
+### Capital — `src/capital/capital_components.py`
+| Item | Was | Now |
+|---|---|---|
+| MSA threshold deduction | MSAs still tested against the 10 %/15 % thresholds | MSAs removed from both tests; all MSAs 250 % — NPR p. 40, § __.111(j)(4)(i) |
+
+### Securitization — `src/securitization/`
+| Item | Was | Now |
+|---|---|---|
+| SEC-ERBA (external ratings) | used whenever a rating was supplied, attributed to "ERBA NPR Tables 2-5" | **Off by default**; the US proposal has no external-ratings approach (Dodd-Frank § 939A) and "ERBA" means *expanded risk-based approach*. Retained for BCBS comparison only |
+| Concentration add-on | 6 pp per obligor below N = 6 | **removed** — § __.133 specifies SEC-SA completely |
+| Look-through / NPL | absent | constants added (senior look-through floor 15 %; NPL senior 100 % with ≥ 50 % discount) — § __.132(k)–(l) |
+
+### Operational risk — `src/operational_risk/`
+| Item | Was | Now |
+|---|---|---|
+| BI structure | BCBS ILDC + SC (max of fee income/expense) + FC | **Two components**: ILDC = min(Avg3y|NII|, 2.25 %·Avg3y IEA) + dividends; noninterest component = Avg3y(|noninterest income + realized HTM/AFS gains − noninterest expense for BI − 0.7·(net income from investment management, investment services and non-lending treasury services)| + total operational losses) — § __.150(c) |
+| 0.7 factor scope | investment management only | investment management **+ investment services + non-lending treasury services** |
+| ILM | "1.0" constant with formula available | no multiplier term exists; result validator rejects any ILM ≠ 1 — § __.150(a) |
+| Loss collection threshold | $22,000 (EUR 20,000 proxy) | **$20,000**, CPI-W indexed — § __.150(d)(2)(i)(A) |
+
+### CVA — `src/cva_risk/`
+| Item | Was | Now |
+|---|---|---|
+| BA-CVA | rating-based weights "ERBA NPR p. 282", α = 1, no 0.65 scalar, hedge "discount factors" 0.5/0.25, M clipped to [1, 5] | **K = 0.65·(0.25·K_unhedged + 0.75·K_hedged)**, SCVA = (1/α)·RW·Σ M·EAD·DF, DF = (1 − e^(−0.05M))/(0.05M), Table 1 to § __.222 sector × IG/spec/sub-spec weights, r_hc 100/80/50 %, HMA, index hedges × 0.7 — § __.222 |
+| SA-CVA | 10 invented buckets, 0.30 cross-type correlation, vega 0.55 × delta | 6 delta / 5 vega risk classes with Tables 1–9 to § __.225, R = 0.01, m_CVA = 1, S_b always capped — § __.224–§ __.225 |
+| Scope | "all OTC + SFTs" | derivatives that are not cleared / client-facing; SFTs excluded; $1 T OTC notional threshold — § __.201(b)(2), § __.202 |
+
+### FRTB — `src/market_risk/frtb/`
+(See the per-table detail below; populated from the module reconciliation.)
+
+## 2.3 Project documents (`output/*.docx`, README, migration guide)
+(Populated from the document reconciliation.)
+
+## 2.4 Items the NPR text does not settle (kept as `# TODO: VERIFY`)
+* Mapping of "unrated" internal grades: the NPR has no unrated category; the engine maps
+  UNRATED to speculative grade pending the bank's internal grade assignment.
+* Sub-speculative PSE / financial CSR positions: Table 3 to § __.209 labels buckets 9–11
+  "speculative grade" and gives no separate sub-speculative bucket; the engine maps them to
+  buckets 10/11.
+* DRC securitization risk weights require the banking-book SEC-SA risk weight as an input
+  (RW_DRC = RW_SEC × 8 %); the legacy rating table is available only behind an explicit switch.
+* G-SIB surcharge parameters (Method 2 coefficients, 1.2× factor, 20 bp bands) come from the
+  separate G-SIB NPR, which was not part of this review.

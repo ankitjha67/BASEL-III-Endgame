@@ -1,21 +1,31 @@
 """Equity Risk Charge Calculator -- FRTB Sensitivities-Based Method.
 
-Implements the Equity risk capital charge calculation per MAR21.17-21.18
-of the Basel III Endgame framework.
+Implements the Equity risk capital charge calculation per the US ERBA NPR
+(March 2026), 12 CFR 217 Subpart F §__.206-§__.209 (BCBS d457
+MAR21.17-21.18 cross-reference).
 
 Equity covers:
-- Delta risk: Linear sensitivities to equity spot prices and repo rates
+- Delta risk: Linear sensitivities to equity spot prices and equity repo
+  rates (§__.208(b)(5); Table 8 risk weights per §__.209(b)(5)).
 - Vega risk: Sensitivities to implied volatilities of equity options
-- Curvature risk: Non-linear risk from options on equities
+  (77.78% / 100% risk weights per §__.209 Table 11).
+- Curvature risk: Non-linear risk from options on equities, spot only
+  (curvature RW = delta RW; correlations squared).
 
-Reference: BCBS d457 MAR21, US Federal Reserve Basel III Endgame Final Rule.
+Sensitivity conventions for this risk class:
+
+* ``bucket``  -- Table 8 bucket number as a string (``"1"`` .. ``"13"``).
+* ``label``   -- issuer identifier.  Two sensitivities with the same
+  non-empty label (other than the generic ``"DEFAULT"``) are the same
+  issuer.  A label ending in ``"|REPO"`` (case-insensitive) marks an
+  equity REPO-RATE sensitivity of the issuer named before the suffix,
+  e.g. ``"AAPL"`` (spot) and ``"AAPL|REPO"`` (repo rate).
 """
 
 from __future__ import annotations
 
 import math
 from collections import defaultdict
-from typing import Sequence
 
 import numpy as np
 
@@ -24,7 +34,7 @@ from src.core.enums import (
     RiskClass,
     RiskMeasure,
 )
-from src.core.exceptions import CalculationError, ValidationError
+from src.core.exceptions import ValidationError
 from src.core.models import (
     BucketResult,
     RiskChargeResult,
@@ -32,17 +42,22 @@ from src.core.models import (
     WeightedSensitivity,
 )
 from src.market_risk.frtb.sbm.equity_params import (
-    EQUITY_BUCKETS,
-    EQUITY_DELTA_RW,
-    EQUITY_INTRA_CORR,
     EQUITY_VEGA_ALPHA,
-    EQUITY_VEGA_RW,
     apply_correlation_scenario,
     build_equity_intra_bucket_corr_matrix,
+    compute_equity_pair_correlation,
+    get_equity_curvature_rw,
     get_equity_delta_rw,
     get_equity_inter_bucket_corr,
+    get_equity_vega_rw,
+    is_other_sector_bucket,
 )
 from src.utils.aggregation import intra_bucket_aggregation
+
+# Label suffix that marks an equity repo-rate sensitivity (see module doc).
+REPO_LABEL_SUFFIX: str = "|REPO"
+# Labels that carry no issuer information.
+_GENERIC_LABELS: frozenset[str] = frozenset({"", "DEFAULT"})
 
 
 class EquityResult:
@@ -86,7 +101,8 @@ class EquityCalculator:
     """Main Equity risk charge calculator.
 
     Orchestrates delta, vega, and curvature risk charge calculations across
-    all three correlation scenarios (Low, Medium, High) per MAR21.17-21.18.
+    all three correlation scenarios (Low, Medium, High) per ERBA NPR
+    §__.206(c) and §__.209(b)(5).
 
     Usage::
 
@@ -166,12 +182,16 @@ class EquityCalculator:
     ) -> RiskChargeResult:
         """Calculate Equity delta risk charge for one correlation scenario.
 
-        Steps per MAR21.4:
+        Steps per ERBA NPR §__.206(b) and §__.209(b)(5):
         1. Group sensitivities by bucket (1-13).
-        2. Apply risk weights: WS_k = RW_k * s_k.
-        3. Build uniform intra-bucket correlation matrix.
-        4. Intra-bucket aggregation: K_b = sqrt(WS^T * rho * WS).
-        5. Inter-bucket aggregation with bucket-pair specific gamma.
+        2. Apply risk weights: WS_k = RW_k * s_k (Table 8 spot RW, or
+           spot RW / 100 for repo-rate sensitivities).
+        3. Build the intra-bucket correlation matrix (issuer / spot-repo
+           aware).
+        4. Intra-bucket aggregation: K_b = sqrt(WS^T * rho * WS); for
+           bucket 11 (other sector) K_b = sum |WS_k|.
+        5. Inter-bucket aggregation with bucket-pair specific gamma
+           (15% / 45% / 75% / 0%).
 
         Args:
             sensitivities: Equity delta sensitivities only.
@@ -194,16 +214,24 @@ class EquityCalculator:
             # Weight every sensitivity
             ws_list = [self._apply_delta_risk_weight(s, bucket_int) for s in bucket_sens]
 
-            # Build intra-bucket correlation matrix
-            n = len(ws_list)
-            corr = build_equity_intra_bucket_corr_matrix(n, bucket_int, scenario)
-
             ws_array = np.array(
                 [w.weighted_value for w in ws_list], dtype=np.float64
             )
 
-            # Intra-bucket aggregation
-            k_b, s_b = intra_bucket_aggregation(ws_array, corr)
+            if is_other_sector_bucket(bucket_int):
+                # ERBA NPR §__.209(b)(5): bucket 11 K_b = sum |WS_k|
+                k_b, s_b = self._other_sector_aggregation(ws_array)
+            else:
+                # Build intra-bucket correlation matrix
+                n = len(ws_list)
+                issuers = [self._parse_label(s)[0] for s in bucket_sens]
+                is_repo = [self._parse_label(s)[1] for s in bucket_sens]
+                corr = build_equity_intra_bucket_corr_matrix(
+                    n, bucket_int, scenario, issuers=issuers, is_repo=is_repo
+                )
+
+                # Intra-bucket aggregation
+                k_b, s_b = intra_bucket_aggregation(ws_array, corr)
 
             bucket_charges[bucket] = k_b
             bucket_net_sens[bucket] = s_b
@@ -240,10 +268,12 @@ class EquityCalculator:
     ) -> RiskChargeResult:
         """Calculate Equity vega risk charge for one correlation scenario.
 
-        Vega uses:
-        - Risk weight: 55% for Equity.
-        - 2-D correlation: option-maturity x underlying, with alpha = 0.01.
-        - Same three-scenario framework as delta.
+        Vega per ERBA NPR §__.209 (Table 11 and vega paragraph):
+        - Risk weight: 77.78% for large-cap buckets 1-8 and index buckets
+          12-13; 100% for buckets 9-11.
+        - Correlation: min(rho_delta * rho_option_maturity, 1), alpha = 1%.
+        - Bucket 11 (other sector): K_b = sum |WS_k|.
+        - Inter-bucket gamma = delta gamma.
 
         Args:
             sensitivities: Equity vega sensitivities only.
@@ -264,16 +294,18 @@ class EquityCalculator:
             bucket_int = int(bucket)
 
             # Apply vega risk weight
-            ws_list = [self._apply_vega_risk_weight(s) for s in bucket_sens]
-
-            # Build vega correlation matrix
-            corr = self._build_vega_correlation_matrix(bucket_sens, bucket_int, scenario)
+            ws_list = [self._apply_vega_risk_weight(s, bucket_int) for s in bucket_sens]
 
             ws_array = np.array(
                 [w.weighted_value for w in ws_list], dtype=np.float64
             )
 
-            k_b, s_b = intra_bucket_aggregation(ws_array, corr)
+            if is_other_sector_bucket(bucket_int):
+                k_b, s_b = self._other_sector_aggregation(ws_array)
+            else:
+                # Build vega correlation matrix
+                corr = self._build_vega_correlation_matrix(bucket_sens, bucket_int, scenario)
+                k_b, s_b = intra_bucket_aggregation(ws_array, corr)
 
             bucket_charges[bucket] = k_b
             bucket_net_sens[bucket] = s_b
@@ -309,10 +341,17 @@ class EquityCalculator:
     ) -> RiskChargeResult:
         """Calculate Equity curvature risk charge for one correlation scenario.
 
-        Curvature per MAR21.5:
-        - CVR_k = max(CVR_k_up, CVR_k_down) for each risk factor.
-        - Intra-bucket: K_b = sqrt(max(0, sum(CVR) + sum_{k!=l} rho_kl^2 * psi(CVR_k, CVR_l)))
-        - Uses squared correlations from delta.
+        Curvature per ERBA NPR §__.206(b)(3) and §__.209 (curvature):
+        - CVR_k is the net curvature risk position of each equity spot
+          factor, computed with a relative shock equal to the Table 8 delta
+          risk weight (:func:`equity_params.get_equity_curvature_rw`).
+        - Intra-bucket: K_b = sqrt(max(0, sum max(CVR,0)^2
+          + sum_{k!=l} rho_kl^2 * psi(CVR_k, CVR_l))) using the SQUARED
+          delta correlations.
+        - Bucket 11 (other sector): K_b = max(sum max(CVR+,0), sum max(CVR-,0)),
+          which with the single net-CVR representation used here is
+          sum max(CVR_k, 0).
+        - Inter-bucket: squared delta gamma.
 
         Args:
             sensitivities: Equity curvature sensitivities only.
@@ -336,36 +375,44 @@ class EquityCalculator:
             cvr_values = np.array(
                 [s.value for s in bucket_sens], dtype=np.float64
             )
-
-            # Build the delta correlation matrix, then square it
             n = len(bucket_sens)
-            delta_corr = build_equity_intra_bucket_corr_matrix(n, bucket_int, scenario)
-            rho_sq = delta_corr ** 2
-
-            # Intra-bucket curvature aggregation per MAR21.5(4)
-            # K_b = sqrt(max(0, sum_k max(CVR_k,0)^2 + sum_{k!=l} rho^2 CVR_k CVR_l psi))
             sum_cvr = float(np.sum(cvr_values))          # S_b for inter-bucket
-            diag_term = float(np.sum(np.maximum(cvr_values, 0.0) ** 2))
 
-            cross_term = 0.0
-            for i in range(n):
-                for j in range(i + 1, n):
-                    cross_term += (
-                        rho_sq[i, j]
-                        * self._psi(cvr_values[i], cvr_values[j])
-                    )
-            cross_term *= 2.0  # symmetric: (i,j) and (j,i)
+            if is_other_sector_bucket(bucket_int):
+                # ERBA NPR §__.209 (curvature, other-sector buckets)
+                k_b = float(np.sum(np.maximum(cvr_values, 0.0)))
+            else:
+                # Build the delta correlation matrix (spot only), then square it
+                issuers = [self._parse_label(s)[0] for s in bucket_sens]
+                delta_corr = build_equity_intra_bucket_corr_matrix(
+                    n, bucket_int, scenario, issuers=issuers
+                )
+                rho_sq = delta_corr ** 2
 
-            k_b = math.sqrt(max(0.0, diag_term + cross_term))
+                # K_b = sqrt(max(0, sum_k max(CVR_k,0)^2 + sum_{k!=l} rho^2 CVR_k CVR_l psi))
+                diag_term = float(np.sum(np.maximum(cvr_values, 0.0) ** 2))
+
+                cross_term = 0.0
+                for i in range(n):
+                    for j in range(i + 1, n):
+                        cross_term += (
+                            rho_sq[i, j]
+                            * self._psi(cvr_values[i], cvr_values[j])
+                        )
+                cross_term *= 2.0  # symmetric: (i,j) and (j,i)
+
+                k_b = math.sqrt(max(0.0, diag_term + cross_term))
 
             bucket_charges[bucket] = k_b
             bucket_net_sens[bucket] = sum_cvr
 
-            # Build WeightedSensitivity wrappers for reporting
+            # Build WeightedSensitivity wrappers for reporting; the recorded
+            # risk weight is the curvature shock size.
+            curvature_rw = get_equity_curvature_rw(bucket_int)
             ws_curvature = [
                 WeightedSensitivity(
                     sensitivity=s,
-                    risk_weight=1.0,
+                    risk_weight=curvature_rw,
                     weighted_value=s.value,
                 )
                 for s in bucket_sens
@@ -415,6 +462,48 @@ class EquityCalculator:
         return dict(grouped)
 
     # --------------------------------------------------------------------- #
+    #  Helper: issuer / repo parsing and other-sector aggregation            #
+    # --------------------------------------------------------------------- #
+
+    @staticmethod
+    def _parse_label(sensitivity: Sensitivity) -> tuple[str | None, bool]:
+        """Extract ``(issuer, is_repo)`` from a sensitivity label.
+
+        See the module docstring: a label ending in ``"|REPO"`` marks an
+        equity repo-rate sensitivity (ERBA NPR §__.208(b)(5)); generic
+        labels (empty or ``"DEFAULT"``) carry no issuer information and
+        yield ``None`` (treated as a distinct issuer).
+
+        Args:
+            sensitivity: Any equity sensitivity.
+
+        Returns:
+            Tuple of issuer identifier (or ``None``) and repo flag.
+        """
+        label = (sensitivity.label or "").strip()
+        is_repo = label.upper().endswith(REPO_LABEL_SUFFIX)
+        if is_repo:
+            label = label[: -len(REPO_LABEL_SUFFIX)].strip()
+        issuer = None if label.upper() in _GENERIC_LABELS else label
+        return issuer, is_repo
+
+    @staticmethod
+    def _other_sector_aggregation(ws_array: np.ndarray) -> tuple[float, float]:
+        """Aggregate bucket 11 (other sector) per ERBA NPR §__.209(b)(5).
+
+        ``K_b = sum |WS_k|`` -- no diversification is recognised within the
+        other-sector bucket.  ``S_b = sum WS_k`` is still reported for the
+        inter-bucket step (where bucket 11 carries gamma = 0%).
+
+        Args:
+            ws_array: Weighted sensitivities of the bucket.
+
+        Returns:
+            Tuple ``(K_b, S_b)``.
+        """
+        return float(np.sum(np.abs(ws_array))), float(np.sum(ws_array))
+
+    # --------------------------------------------------------------------- #
     #  Helper: delta risk weights                                            #
     # --------------------------------------------------------------------- #
 
@@ -425,6 +514,9 @@ class EquityCalculator:
     ) -> WeightedSensitivity:
         """Apply risk weight to a single delta sensitivity.
 
+        ERBA NPR §__.209(b)(5) Table 8: spot risk weight, or spot / 100 for
+        a repo-rate sensitivity (label suffix ``"|REPO"``).
+
         Args:
             sensitivity: A single delta sensitivity.
             bucket: Bucket number (1-13).
@@ -432,7 +524,8 @@ class EquityCalculator:
         Returns:
             WeightedSensitivity with WS_k = RW_k * s_k.
         """
-        rw = get_equity_delta_rw(bucket)
+        _, is_repo = EquityCalculator._parse_label(sensitivity)
+        rw = get_equity_delta_rw(bucket, is_repo=is_repo)
         weighted_value = rw * sensitivity.value
         return WeightedSensitivity(
             sensitivity=sensitivity,
@@ -445,18 +538,23 @@ class EquityCalculator:
     # --------------------------------------------------------------------- #
 
     @staticmethod
-    def _apply_vega_risk_weight(sensitivity: Sensitivity) -> WeightedSensitivity:
+    def _apply_vega_risk_weight(
+        sensitivity: Sensitivity,
+        bucket: int,
+    ) -> WeightedSensitivity:
         """Apply vega risk weight to a single vega sensitivity.
 
-        For Equity, the vega risk weight is 55%.
+        ERBA NPR §__.209 Table 11: 77.78% for large-cap buckets 1-8 and
+        index buckets 12-13; 100% for buckets 9-11.
 
         Args:
             sensitivity: A single vega sensitivity.
+            bucket: Bucket number (1-13).
 
         Returns:
-            WeightedSensitivity with WS_k = 0.55 * s_k.
+            WeightedSensitivity with WS_k = RW_vega * s_k.
         """
-        rw = EQUITY_VEGA_RW
+        rw = get_equity_vega_rw(bucket)
         return WeightedSensitivity(
             sensitivity=sensitivity,
             risk_weight=rw,
@@ -475,17 +573,19 @@ class EquityCalculator:
     ) -> np.ndarray:
         """Build intra-bucket correlation matrix for vega risk.
 
-        Vega correlations combine option-maturity and underlying-tenor
-        dimensions with the intra-bucket base correlation:
+        ERBA NPR §__.209 (vega paragraph): for risk classes other than
+        GIRR,
 
-        rho_kl = rho_bucket * rho_opt(k,l) * rho_tenor(k,l)
+            rho_kl = min(rho_delta * rho_opt(k,l), 1)
 
-        where:
-        - rho_opt(k,l) = exp(-alpha * |Tk_opt - Tl_opt| / min(Tk_opt, Tl_opt))
-        - rho_tenor(k,l) = exp(-alpha * |Tk_und - Tl_und| / min(Tk_und, Tl_und))
+        where rho_delta is the delta correlation between the underlying
+        equity spot factors (100% same issuer, Table 8 bucket rho
+        otherwise) and
+        rho_opt(k,l) = exp(-alpha * |Tk_opt - Tl_opt| / min(Tk_opt, Tl_opt)),
+        alpha = 1%.
 
         Args:
-            sensitivities: Vega sensitivities for one bucket.
+            sensitivities: Vega sensitivities for one bucket (not 11).
             bucket: Bucket number.
             scenario: Correlation scenario.
 
@@ -494,7 +594,7 @@ class EquityCalculator:
         """
         n = len(sensitivities)
         corr = np.eye(n, dtype=np.float64)
-        base_rho = EQUITY_INTRA_CORR[bucket]
+        issuers = [EquityCalculator._parse_label(s)[0] for s in sensitivities]
 
         for i in range(n):
             for j in range(i + 1, n):
@@ -513,19 +613,13 @@ class EquityCalculator:
                         / min(opt_i, opt_j)
                     )
 
-                # Underlying tenor correlation
-                und_i = si.tenor.value if si.tenor is not None else 0.5
-                und_j = sj.tenor.value if sj.tenor is not None else 0.5
-                if und_i == und_j:
-                    rho_tenor = 1.0
-                else:
-                    rho_tenor = math.exp(
-                        -EQUITY_VEGA_ALPHA
-                        * abs(und_i - und_j)
-                        / min(und_i, und_j)
-                    )
+                # Delta correlation between the underlying spot factors
+                same_issuer = issuers[i] is not None and issuers[i] == issuers[j]
+                rho_delta = compute_equity_pair_correlation(
+                    bucket, same_issuer, False, False
+                )
 
-                rho = base_rho * rho_opt * rho_tenor
+                rho = min(rho_delta * rho_opt, 1.0)
                 rho = apply_correlation_scenario(rho, scenario)
                 corr[i, j] = rho
                 corr[j, i] = rho
@@ -544,8 +638,9 @@ class EquityCalculator:
     ) -> float:
         """Inter-bucket aggregation with bucket-pair specific correlations.
 
-        Uses gamma = 0.15 for most pairs, gamma = 0.75 for bucket 12-13.
-        S_b is capped to [-K_b, K_b] per MAR21.4(4).
+        ERBA NPR §__.209(b)(5): gamma = 15% among buckets 1-10, 75% between
+        12 and 13, 45% index-vs-sector, 0% with bucket 11.  S_b is capped
+        to [-K_b, K_b] only if the radicand is negative (§__.206(b)(1)).
 
         Args:
             bucket_charges: {bucket: K_b} from intra-bucket aggregation.
@@ -623,9 +718,10 @@ class EquityCalculator:
         bucket_net_cvr: dict[str, float],
         scenario: CorrelationScenario,
     ) -> float:
-        """Curvature inter-bucket aggregation per MAR21.5(5).
+        """Curvature inter-bucket aggregation per ERBA NPR §__.206(b)(3).
 
-        Uses squared gamma correlations between buckets.
+        Uses the squared delta gamma correlations between buckets
+        (§__.209 curvature paragraph).
 
         Args:
             bucket_charges: {bucket: K_b} from intra-bucket curvature.

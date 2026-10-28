@@ -388,16 +388,19 @@ def compute_threshold_deductions(
     cet1_before_threshold: float,
     threshold_inputs: ThresholdDeductionInputs,
 ) -> dict[str, float]:
-    """Compute threshold-based deductions per 12 CFR 217.22(d).
+    """Compute threshold-based deductions per 12 CFR 217.22(d) as amended
+    by the March 2026 ERBA NPR.
 
-    Applies the two-step threshold test:
-    1. Individual 10% threshold: each item (significant investments, MSA,
-       DTA timing) is tested against 10% of CET1.
-    2. Aggregate 15% threshold: combined below-threshold amounts tested
-       against 15% of CET1.
+    Applies the two-step threshold test to significant investments in the
+    capital of unconsolidated financial institutions (common stock) and
+    DTAs arising from temporary differences:
+    1. Individual 10% threshold against CET1 (net of certain deductions).
+    2. Aggregate 15% threshold on the combined below-threshold amounts.
 
-    For MSA: per US 2026 re-proposal, amounts below the 10% threshold
-    receive 250% risk weight instead of deduction (ERBA NPR p. 78).
+    Mortgage servicing assets are NOT threshold items under the proposal:
+    "MSAs would not be considered when calculating the aggregate deduction
+    amount" and all MSAs receive a 250% risk weight (ERBA NPR p. 40;
+    § __.111(j)(4)(i)).
 
     Args:
         cet1_before_threshold: CET1 before threshold deductions, in $M.
@@ -411,7 +414,7 @@ def compute_threshold_deductions(
     individual_threshold = cet1_before_threshold * DTA_THRESHOLD_PERCENT
     aggregate_threshold = cet1_before_threshold * DTA_AGGREGATE_THRESHOLD
 
-    # Step 1: Individual 10% test
+    # Step 1: Individual 10% test (significant investments and DTAs only)
     sig_inv = threshold_inputs.significant_investments_cet1
     msa = threshold_inputs.mortgage_servicing_assets
     dta = threshold_inputs.dta_timing_differences
@@ -419,29 +422,31 @@ def compute_threshold_deductions(
     sig_inv_deduction = max(0.0, sig_inv - individual_threshold)
     sig_inv_below = min(sig_inv, individual_threshold)
 
-    msa_deduction = max(0.0, msa - individual_threshold)
-    msa_below = min(msa, individual_threshold)
+    # ERBA NPR (p. 40, § __.22(d)): MSAs are no longer threshold items.
+    # They are never deducted and are excluded from the 15% aggregate
+    # calculation; ALL MSAs receive a 250% risk weight (§ __.111(j)(4)(i)).
+    msa_deduction = 0.0
+    msa_below = msa
 
     dta_deduction = max(0.0, dta - individual_threshold)
     dta_below = min(dta, individual_threshold)
 
-    # Step 2: Aggregate 15% test on below-threshold amounts
-    total_below = sig_inv_below + msa_below + dta_below
+    # Step 2: Aggregate 15% test on below-threshold amounts (excl. MSAs)
+    total_below = sig_inv_below + dta_below
     aggregate_excess = max(0.0, total_below - aggregate_threshold)
 
     # Proportional allocation of aggregate excess
     if total_below > 0 and aggregate_excess > 0:
         sig_inv_agg_deduction = aggregate_excess * (sig_inv_below / total_below)
-        msa_agg_deduction = aggregate_excess * (msa_below / total_below)
         dta_agg_deduction = aggregate_excess * (dta_below / total_below)
     else:
         sig_inv_agg_deduction = 0.0
-        msa_agg_deduction = 0.0
         dta_agg_deduction = 0.0
+    msa_agg_deduction = 0.0
 
     # Final below-threshold amounts (after aggregate test)
     sig_inv_final_below = sig_inv_below - sig_inv_agg_deduction
-    msa_final_below = msa_below - msa_agg_deduction
+    msa_final_below = msa_below
     dta_final_below = dta_below - dta_agg_deduction
 
     return {

@@ -96,10 +96,14 @@ class TestCCFValues:
         assert calculator.get_ccf(OBSCategory.COMMITMENT_GT_1Y) == 0.40
 
     def test_ccf_commitment_le_1y(self, calculator: OBSCCFCalculator) -> None:
-        """Other commitments <= 1 year = 20%.
-        Per 12 CFR 217.33(e) and BCBS d424 CRE20.76.
+        """Commitments <= 1 year = 40%, the same as > 1 year.
+        ERBA NPR § __.112(b)(3): 40% "regardless of the maturity of the
+        facility" (the current rule's 20% short-term CCF is withdrawn).
         """
-        assert calculator.get_ccf(OBSCategory.COMMITMENT_LE_1Y) == 0.20
+        assert calculator.get_ccf(OBSCategory.COMMITMENT_LE_1Y) == 0.40
+        assert calculator.get_ccf(OBSCategory.COMMITMENT_LE_1Y) == calculator.get_ccf(
+            OBSCategory.COMMITMENT_GT_1Y
+        )
 
     def test_ccf_direct_credit_sub(self, calculator: OBSCCFCalculator) -> None:
         """Direct credit substitutes = 100%.

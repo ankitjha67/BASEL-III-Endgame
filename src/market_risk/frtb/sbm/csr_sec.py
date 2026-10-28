@@ -1,35 +1,37 @@
 """CSR Securitization Risk Charge Calculator -- FRTB Sensitivities-Based Method.
 
-Implements the Credit Spread Risk -- Securitization (both Non-CTP and CTP)
-capital charge calculation per MAR21.14-21.15 of the Basel III Endgame framework.
+Implements the Credit Spread Risk -- Securitization capital charges per ERBA
+NPR §__.206 (SBM formulas), §__.208(d)-(e) (risk factors) and
+§__.209(b)(3)-(4), (c), (d) (buckets, risk weights, correlations) of the
+March 2026 US re-proposal, for both:
 
-CSR Securitization covers:
-- Delta risk: Linear sensitivities to credit spreads of securitized products
-- Vega risk: Sensitivities to implied volatilities of securitization options
-- Curvature risk: Non-linear risk from options on securitized credit
+* **CTP** (correlation trading portfolio) -- 16 buckets, §__.209(b)(3)
+  Table 5; intra-bucket name x tenor x basis (35 % / 65 % / 99 %);
+  inter-bucket ``gamma_rating x gamma_sector`` (Table 6).
+* **Non-CTP** -- 25 buckets, §__.209(b)(4) Table 7; intra-bucket
+  tranche x tenor x basis (40 % / 80 % / 99.9 %); inter-bucket gamma 0 %.
 
-Non-CTP (Correlation Trading Portfolio excluded):
-  8 buckets -- RMBS (prime/mid-prime/sub-prime), CMBS, ABS Consumer,
-  CLO non-CTP, ABS Other, Other Securitization
+Special cases implemented here:
 
-CTP (Correlation Trading Portfolio):
-  5 buckets -- CTP IG, CTP HY, CTP Index IG, CTP Index HY, CTP Other
+- Other-sector buckets (16 CTP / 25 non-CTP): ``K_b = sum |WS_k|`` for delta
+  and vega; ``K_b = max(sum max(CVR+,0), sum max(CVR-,0))`` for curvature.
+- Vega RW 100 % (Table 11); curvature RW = bucket delta RW (§__.209(d)).
 
-Reference: BCBS d457 MAR21.14-21.15, US Federal Reserve Basel III Endgame Final Rule.
+Risk-factor identification: the sensitivity ``label`` encodes
+``tranche::curve`` (non-CTP) or ``name::curve`` (CTP); the curve part is
+optional.  Tranches with more than 80 % notional overlap must be given the
+same tranche identifier by the caller (§__.209(b)(4)).
 """
 
 from __future__ import annotations
 
 import math
 from collections import defaultdict
-from typing import Sequence
 
 import numpy as np
 
 from src.core.enums import (
     CorrelationScenario,
-    CSRSecBucket,
-    CSRSecCTPBucket,
     RiskClass,
     RiskMeasure,
 )
@@ -41,32 +43,32 @@ from src.core.models import (
     WeightedSensitivity,
 )
 from src.market_risk.frtb.sbm.csr_sec_params import (
-    CSR_SEC_CTP_CORR,
     CSR_SEC_CTP_RW,
-    CSR_SEC_NON_CTP_CORR,
     CSR_SEC_NON_CTP_RW,
-    GAMMA_CTP,
-    GAMMA_NON_CTP,
-    VEGA_ALPHA,
+    TENORS,
+    VEGA_OPTION_MATURITIES,
     VEGA_RISK_WEIGHT,
     apply_correlation_scenario,
     build_csr_sec_correlation_matrix,
+    build_csr_sec_curvature_correlation_matrix,
+    build_csr_sec_vega_correlation_matrix,
     get_ctp_risk_weight,
+    get_curvature_risk_weight,
     get_inter_bucket_correlation,
     get_non_ctp_risk_weight,
+    is_other_sector_bucket,
 )
-from src.utils.aggregation import intra_bucket_aggregation, inter_bucket_aggregation
-
+from src.utils.aggregation import intra_bucket_aggregation
 
 # ---------------------------------------------------------------------------
 #  Result model for CSR Securitization (parallels GIRRResult)
 # ---------------------------------------------------------------------------
 
 class CSRSecResult:
-    """Complete CSR Securitization result across all three correlation scenarios.
+    """Complete CSR securitization result across all three correlation scenarios.
 
-    Per MAR21.6, the capital requirement is max across scenarios for each
-    risk measure (delta, vega, curvature).
+    Per ERBA NPR §__.206 the capital requirement is the maximum across
+    scenarios; per-measure maxima are exposed for reporting.
     """
 
     def __init__(
@@ -122,38 +124,31 @@ class CSRSecResult:
 
     @property
     def total_charge(self) -> float:
-        """Total CSR Sec capital charge = delta + vega + curvature."""
+        """Total CSR sec capital charge = delta + vega + curvature."""
         return self.delta_charge + self.vega_charge + self.curvature_charge
 
 
 class CSRSecCalculator:
-    """Main CSR Securitization risk charge calculator.
+    """Main CSR securitization risk charge calculator.
 
-    Orchestrates delta, vega, and curvature risk charge calculations across
-    all three correlation scenarios (Low, Medium, High) per MAR21.14-21.15.
+    Orchestrates delta, vega and curvature risk charge calculations across
+    all three correlation scenarios (low, medium, high) per ERBA NPR §__.206.
 
-    Supports both Non-CTP (8 buckets) and CTP (5 buckets) sub-portfolios
-    through the ``is_ctp`` parameter on the :meth:`calculate` method.
+    Supports the non-CTP (25 buckets, §__.209(b)(4)) and CTP (16 buckets,
+    §__.209(b)(3)) sub-classes through the ``is_ctp`` parameter.
 
     Usage::
 
         calculator = CSRSecCalculator()
-        # Non-CTP
         result_non_ctp = calculator.calculate(sensitivities, is_ctp=False)
-        # CTP
         result_ctp = calculator.calculate(ctp_sensitivities, is_ctp=True)
-        print(result_non_ctp.total_charge)
     """
-
-    # --------------------------------------------------------------------- #
-    #  Initialization                                                        #
-    # --------------------------------------------------------------------- #
 
     def __init__(self) -> None:
         """Initialize with regulatory parameters.
 
-        All parameters are sourced from :mod:`csr_sec_params` at module level,
-        so no mutable configuration state is kept here.
+        All parameters are sourced from :mod:`csr_sec_params` at module
+        level, so no mutable configuration state is kept here.
         """
 
     # --------------------------------------------------------------------- #
@@ -165,55 +160,52 @@ class CSRSecCalculator:
         sensitivities: list[Sensitivity],
         is_ctp: bool = False,
     ) -> CSRSecResult:
-        """Calculate the complete CSR Securitization capital charge.
-
-        Runs delta, vega, and curvature calculations across all three
-        correlation scenarios (Low, Medium, High) per MAR21.6.
+        """Calculate the complete CSR securitization capital charge.
 
         Args:
-            sensitivities: List of CSR Sec sensitivities (delta, vega, curvature).
-            is_ctp: If True, treat as Correlation Trading Portfolio (CTP)
-                with 5 buckets per MAR21.15. If False, treat as Non-CTP
-                with 8 buckets per MAR21.14.
+            sensitivities: CSR sec sensitivities (delta, vega, curvature).
+            is_ctp: True for the correlation trading portfolio
+                (§__.209(b)(3), 16 buckets); False for non-CTP
+                (§__.209(b)(4), 25 buckets).
 
         Returns:
             :class:`CSRSecResult` with charges for every scenario.
 
         Raises:
-            ValidationError: If no sensitivities are provided or any
-                sensitivity does not belong to the correct risk class.
+            ValidationError: If any sensitivity has the wrong risk class or
+                is malformed.
         """
         risk_class = RiskClass.CSR_SEC_CTP if is_ctp else RiskClass.CSR_SEC_NON_CTP
 
         if not sensitivities:
-            empty = self._empty_result(RiskMeasure.DELTA, CorrelationScenario.MEDIUM, risk_class)
+            low, med, high = (
+                CorrelationScenario.LOW,
+                CorrelationScenario.MEDIUM,
+                CorrelationScenario.HIGH,
+            )
+
+            def empty(measure: RiskMeasure, scenario: CorrelationScenario) -> RiskChargeResult:
+                return self._empty_result(measure, scenario, risk_class)
+
             return CSRSecResult(
-                delta_low=self._empty_result(RiskMeasure.DELTA, CorrelationScenario.LOW, risk_class),
-                delta_medium=self._empty_result(RiskMeasure.DELTA, CorrelationScenario.MEDIUM, risk_class),
-                delta_high=self._empty_result(RiskMeasure.DELTA, CorrelationScenario.HIGH, risk_class),
-                vega_low=self._empty_result(RiskMeasure.VEGA, CorrelationScenario.LOW, risk_class),
-                vega_medium=self._empty_result(RiskMeasure.VEGA, CorrelationScenario.MEDIUM, risk_class),
-                vega_high=self._empty_result(RiskMeasure.VEGA, CorrelationScenario.HIGH, risk_class),
-                curvature_low=self._empty_result(RiskMeasure.CURVATURE, CorrelationScenario.LOW, risk_class),
-                curvature_medium=self._empty_result(RiskMeasure.CURVATURE, CorrelationScenario.MEDIUM, risk_class),
-                curvature_high=self._empty_result(RiskMeasure.CURVATURE, CorrelationScenario.HIGH, risk_class),
+                delta_low=empty(RiskMeasure.DELTA, low),
+                delta_medium=empty(RiskMeasure.DELTA, med),
+                delta_high=empty(RiskMeasure.DELTA, high),
+                vega_low=empty(RiskMeasure.VEGA, low),
+                vega_medium=empty(RiskMeasure.VEGA, med),
+                vega_high=empty(RiskMeasure.VEGA, high),
+                curvature_low=empty(RiskMeasure.CURVATURE, low),
+                curvature_medium=empty(RiskMeasure.CURVATURE, med),
+                curvature_high=empty(RiskMeasure.CURVATURE, high),
                 is_ctp=is_ctp,
             )
 
         self._validate_sensitivities(sensitivities, risk_class)
 
-        # Partition by risk measure ----------------------------------------
-        delta_sens = [
-            s for s in sensitivities if s.risk_measure == RiskMeasure.DELTA
-        ]
-        vega_sens = [
-            s for s in sensitivities if s.risk_measure == RiskMeasure.VEGA
-        ]
-        curvature_sens = [
-            s for s in sensitivities if s.risk_measure == RiskMeasure.CURVATURE
-        ]
+        delta_sens = [s for s in sensitivities if s.risk_measure == RiskMeasure.DELTA]
+        vega_sens = [s for s in sensitivities if s.risk_measure == RiskMeasure.VEGA]
+        curvature_sens = [s for s in sensitivities if s.risk_measure == RiskMeasure.CURVATURE]
 
-        # Run all 9 scenario combinations ---------------------------------
         scenarios = [
             CorrelationScenario.LOW,
             CorrelationScenario.MEDIUM,
@@ -259,20 +251,22 @@ class CSRSecCalculator:
         is_ctp: bool,
         risk_class: RiskClass,
     ) -> RiskChargeResult:
-        """Calculate CSR Sec delta risk charge for one correlation scenario.
+        """Calculate the CSR sec delta charge for one correlation scenario.
 
-        Steps per MAR21.4:
+        Steps per ERBA NPR §__.206 and §__.209(b)(3)/(4):
 
-        1. Group sensitivities by bucket (securitization type).
-        2. Apply risk weights: ``WS_k = RW_k * s_k``.
-        3. Build intra-bucket correlation matrix (tranche x tenor).
-        4. Intra-bucket aggregation: ``K_b = sqrt(WS^T * rho * WS)``.
-        5. Inter-bucket aggregation with gamma = 0.25 (Non-CTP) or 0.20 (CTP).
+        1. Group sensitivities by bucket.
+        2. Net sensitivities to the same (tranche|name, tenor, curve).
+        3. Apply risk weights ``WS_k = RW_b * s_k`` (Table 5 / Table 7).
+        4. Other-sector bucket: ``K_b = sum |WS_k|``; otherwise build the
+           tranche|name x tenor x basis correlation matrix and aggregate.
+        5. Inter-bucket aggregation: gamma 0 % (non-CTP) or the Table 6
+           pair-specific gamma (CTP).
 
         Args:
-            sensitivities: CSR Sec delta sensitivities only.
+            sensitivities: CSR sec delta sensitivities only.
             scenario: LOW / MEDIUM / HIGH.
-            is_ctp: Whether CTP parameters should be used.
+            is_ctp: Whether CTP parameters apply.
             risk_class: The risk class enum value.
 
         Returns:
@@ -287,33 +281,24 @@ class CSRSecCalculator:
         bucket_net_sens: dict[str, float] = {}
 
         for bucket, bucket_sens in grouped.items():
-            # Weight every sensitivity ----------------------------------------
-            ws_list = [
-                self._apply_delta_risk_weight(s, is_ctp)
-                for s in bucket_sens
-            ]
+            bucket_int = self._parse_bucket(bucket, is_ctp)
+            netted = self._net_sensitivities(bucket_sens)
+            ws_list = [self._apply_delta_risk_weight(s, is_ctp) for s in netted]
+            ws_array = np.array([w.weighted_value for w in ws_list], dtype=np.float64)
 
-            # Extract tranche and tenor metadata for correlation matrix -------
-            tranches = [s.label or "DEFAULT" for s in bucket_sens]
-            tenors = [self._get_tenor_years(s) for s in bucket_sens]
-
-            bucket_int = int(bucket)
-
-            # Build intra-bucket correlation matrix ---------------------------
-            corr = build_csr_sec_correlation_matrix(
-                bucket=bucket_int,
-                tranches=tranches,
-                tenors=tenors,
-                is_ctp=is_ctp,
-                scenario=scenario,
-            )
-
-            ws_array = np.array(
-                [w.weighted_value for w in ws_list], dtype=np.float64
-            )
-
-            # Intra-bucket aggregation ----------------------------------------
-            k_b, s_b = intra_bucket_aggregation(ws_array, corr)
+            if is_other_sector_bucket(bucket_int, is_ctp=is_ctp):
+                k_b = float(np.sum(np.abs(ws_array)))
+                s_b = float(np.sum(ws_array))
+            else:
+                corr = build_csr_sec_correlation_matrix(
+                    bucket=bucket_int,
+                    tranches=[self._get_tranche(s) for s in netted],
+                    tenors=[self._get_tenor_years(s) for s in netted],
+                    is_ctp=is_ctp,
+                    scenario=scenario,
+                    curves=[self._get_curve_label(s) for s in netted],
+                )
+                k_b, s_b = intra_bucket_aggregation(ws_array, corr)
 
             bucket_charges[bucket] = k_b
             bucket_net_sens[bucket] = s_b
@@ -326,14 +311,8 @@ class CSRSecCalculator:
                 )
             )
 
-        # Inter-bucket aggregation --------------------------------------------
-        gamma = apply_correlation_scenario(
-            get_inter_bucket_correlation(is_ctp=is_ctp),
-            scenario,
-            is_inter_bucket=True,
-        )
-        total_charge = inter_bucket_aggregation(
-            bucket_charges, bucket_net_sens, gamma
+        total_charge = self._inter_bucket_aggregation(
+            bucket_charges, bucket_net_sens, scenario, is_ctp
         )
 
         return RiskChargeResult(
@@ -355,18 +334,17 @@ class CSRSecCalculator:
         is_ctp: bool,
         risk_class: RiskClass,
     ) -> RiskChargeResult:
-        """Calculate CSR Sec vega risk charge for one correlation scenario.
+        """Calculate the CSR sec vega charge for one correlation scenario.
 
-        Vega uses (per MAR21.44-47):
-
-        - Risk weight: 100% for CSR Sec.
-        - 2-D correlation: option-maturity x underlying-tenor.
-        - Same three-scenario framework as delta.
+        Per ERBA NPR §__.209(c): RW 100 % (Table 11); intra-bucket
+        ``rho_kl = min(rho_tranche|name x exp(-0.01 |Tk-Tl|/min(Tk,Tl)), 1)``
+        on option maturities; other-sector bucket ``K_b = sum |WS_k|``;
+        inter-bucket gamma equals the delta gamma.
 
         Args:
-            sensitivities: CSR Sec vega sensitivities only.
+            sensitivities: CSR sec vega sensitivities only.
             scenario: LOW / MEDIUM / HIGH.
-            is_ctp: Whether CTP parameters should be used.
+            is_ctp: Whether CTP parameters apply.
             risk_class: The risk class enum value.
 
         Returns:
@@ -381,17 +359,21 @@ class CSRSecCalculator:
         bucket_net_sens: dict[str, float] = {}
 
         for bucket, bucket_sens in grouped.items():
-            # Apply vega risk weight (100%) -----------------------------------
+            bucket_int = self._parse_bucket(bucket, is_ctp)
             ws_list = [self._apply_vega_risk_weight(s) for s in bucket_sens]
+            ws_array = np.array([w.weighted_value for w in ws_list], dtype=np.float64)
 
-            # Build vega correlation matrix -----------------------------------
-            corr = self._build_vega_correlation_matrix(bucket_sens, scenario)
-
-            ws_array = np.array(
-                [w.weighted_value for w in ws_list], dtype=np.float64
-            )
-
-            k_b, s_b = intra_bucket_aggregation(ws_array, corr)
+            if is_other_sector_bucket(bucket_int, is_ctp=is_ctp):
+                k_b = float(np.sum(np.abs(ws_array)))
+                s_b = float(np.sum(ws_array))
+            else:
+                corr = build_csr_sec_vega_correlation_matrix(
+                    tranches=[self._get_tranche(s) for s in bucket_sens],
+                    option_maturities=[self._get_option_maturity(s) for s in bucket_sens],
+                    is_ctp=is_ctp,
+                    scenario=scenario,
+                )
+                k_b, s_b = intra_bucket_aggregation(ws_array, corr)
 
             bucket_charges[bucket] = k_b
             bucket_net_sens[bucket] = s_b
@@ -404,13 +386,8 @@ class CSRSecCalculator:
                 )
             )
 
-        gamma = apply_correlation_scenario(
-            get_inter_bucket_correlation(is_ctp=is_ctp),
-            scenario,
-            is_inter_bucket=True,
-        )
-        total_charge = inter_bucket_aggregation(
-            bucket_charges, bucket_net_sens, gamma
+        total_charge = self._inter_bucket_aggregation(
+            bucket_charges, bucket_net_sens, scenario, is_ctp
         )
 
         return RiskChargeResult(
@@ -432,20 +409,19 @@ class CSRSecCalculator:
         is_ctp: bool,
         risk_class: RiskClass,
     ) -> RiskChargeResult:
-        """Calculate CSR Sec curvature risk charge for one correlation scenario.
+        """Calculate the CSR sec curvature charge for one correlation scenario.
 
-        Curvature per MAR21.5:
-
-        - ``CVR_k = max(CVR_k_up, CVR_k_down)`` for each risk factor (the
-          *sensitivity value* already encodes the net CVR per risk factor).
-        - Intra-bucket:
-          ``K_b = max(0, sum(CVR) + sum_{k!=l} rho_kl^2 * psi(CVR_k, CVR_l))``
-        - Uses **squared** correlations from delta.
+        Per ERBA NPR §__.206 and §__.209(d): the sensitivity ``value`` is the
+        net ``CVR_k`` per (tranche|name, curve) factor under a parallel shift
+        by the bucket's delta RW; intra-bucket uses the squared
+        (scenario-adjusted) tranche|name x basis correlation; the
+        other-sector bucket uses ``sum max(CVR_k, 0)``; inter-bucket uses
+        ``gamma_bc^2`` with the psi function.
 
         Args:
-            sensitivities: CSR Sec curvature sensitivities only.
+            sensitivities: CSR sec curvature sensitivities only.
             scenario: LOW / MEDIUM / HIGH.
-            is_ctp: Whether CTP parameters should be used.
+            is_ctp: Whether CTP parameters apply.
             risk_class: The risk class enum value.
 
         Returns:
@@ -460,58 +436,31 @@ class CSRSecCalculator:
         bucket_net_sens: dict[str, float] = {}
 
         for bucket, bucket_sens in grouped.items():
-            # CVR values are the sensitivity values themselves -----------------
-            cvr_values = np.array(
-                [s.value for s in bucket_sens], dtype=np.float64
-            )
+            bucket_int = self._parse_bucket(bucket, is_ctp)
+            self._check_bucket(bucket_int, is_ctp)
 
-            # Build the delta correlation matrix, then square it ---------------
-            tranches = [s.label or "DEFAULT" for s in bucket_sens]
-            tenors = [self._get_tenor_years(s) for s in bucket_sens]
-            bucket_int = int(bucket)
+            cvr_values = np.array([s.value for s in bucket_sens], dtype=np.float64)
+            sum_cvr = float(np.sum(cvr_values))
 
-            delta_corr = build_csr_sec_correlation_matrix(
-                bucket=bucket_int,
-                tranches=tranches,
-                tenors=tenors,
-                is_ctp=is_ctp,
-                scenario=scenario,
-            )
+            if is_other_sector_bucket(bucket_int, is_ctp=is_ctp):
+                k_b = float(np.sum(np.maximum(cvr_values, 0.0)))
+            else:
+                rho_sq = build_csr_sec_curvature_correlation_matrix(
+                    tranches=[self._get_tranche(s) for s in bucket_sens],
+                    is_ctp=is_ctp,
+                    scenario=scenario,
+                    curves=[self._get_curve_label(s) for s in bucket_sens],
+                )
+                k_b = self._curvature_intra_bucket(cvr_values, rho_sq)
 
-            # Squared correlations for curvature per MAR21.5 ------------------
-            rho_sq = delta_corr ** 2
-
-            # Intra-bucket curvature aggregation per MAR21.5(4) ---------------
-            # K_b = sqrt(max(0, sum_k max(CVR_k,0)^2 + sum_{k!=l} rho^2 CVR_k CVR_l psi))
-            n = len(cvr_values)
-            sum_cvr = float(np.sum(cvr_values))          # S_b for inter-bucket
-            diag_term = float(np.sum(np.maximum(cvr_values, 0.0) ** 2))
-
-            cross_term = 0.0
-            for i in range(n):
-                for j in range(i + 1, n):
-                    cross_term += (
-                        rho_sq[i, j]
-                        * self._psi(cvr_values[i], cvr_values[j])
-                    )
-            cross_term *= 2.0  # symmetric: (i,j) and (j,i)
-
-            k_b = math.sqrt(max(0.0, diag_term + cross_term))
-
-            # For curvature inter-bucket, S_b = sum(CVR_k) --------------------
             bucket_charges[bucket] = k_b
             bucket_net_sens[bucket] = sum_cvr
 
-            # Build WeightedSensitivity wrappers for reporting -----------------
+            rw_curv = get_curvature_risk_weight(bucket_int, is_ctp=is_ctp)
             ws_curvature = [
-                WeightedSensitivity(
-                    sensitivity=s,
-                    risk_weight=1.0,
-                    weighted_value=s.value,
-                )
+                WeightedSensitivity(sensitivity=s, risk_weight=rw_curv, weighted_value=s.value)
                 for s in bucket_sens
             ]
-
             bucket_results.append(
                 BucketResult(
                     bucket=bucket,
@@ -521,16 +470,8 @@ class CSRSecCalculator:
                 )
             )
 
-        # Inter-bucket curvature aggregation -----------------------------------
-        gamma = apply_correlation_scenario(
-            get_inter_bucket_correlation(is_ctp=is_ctp),
-            scenario,
-            is_inter_bucket=True,
-        )
-        gamma_sq = gamma ** 2
-
         total_charge = self._curvature_inter_bucket(
-            bucket_charges, bucket_net_sens, gamma_sq
+            bucket_charges, bucket_net_sens, scenario, is_ctp
         )
 
         return RiskChargeResult(
@@ -542,13 +483,13 @@ class CSRSecCalculator:
         )
 
     # --------------------------------------------------------------------- #
-    #  Helper: grouping                                                      #
+    #  Helper: grouping / parsing / netting                                  #
     # --------------------------------------------------------------------- #
 
     def _group_by_bucket(
         self, sensitivities: list[Sensitivity]
     ) -> dict[str, list[Sensitivity]]:
-        """Group sensitivities by bucket (securitization type).
+        """Group sensitivities by bucket identifier.
 
         Args:
             sensitivities: Flat list of sensitivities.
@@ -561,67 +502,123 @@ class CSRSecCalculator:
             grouped[s.bucket].append(s)
         return dict(grouped)
 
+    @staticmethod
+    def _parse_bucket(bucket: str, is_ctp: bool) -> int:
+        """Parse a bucket identifier into an integer bucket number.
+
+        Args:
+            bucket: Bucket identifier string.
+            is_ctp: Whether CTP buckets are expected (for the error text).
+
+        Returns:
+            Integer bucket number.
+
+        Raises:
+            CalculationError: If the identifier is not an integer.
+        """
+        try:
+            return int(bucket)
+        except (ValueError, TypeError):
+            valid = "1-16" if is_ctp else "1-25"
+            raise CalculationError(
+                f"Invalid CSR Sec bucket identifier: '{bucket}'. "
+                f"Expected an integer bucket number ({valid})."
+            ) from None
+
+    @staticmethod
+    def _check_bucket(bucket: int, is_ctp: bool) -> None:
+        """Raise if *bucket* is outside the Table 5 / Table 7 range.
+
+        Args:
+            bucket: Integer bucket number.
+            is_ctp: Whether CTP buckets are expected.
+
+        Raises:
+            CalculationError: If the bucket is unknown.
+        """
+        table = CSR_SEC_CTP_RW if is_ctp else CSR_SEC_NON_CTP_RW
+        if bucket not in table:
+            valid = "1-16" if is_ctp else "1-25"
+            raise CalculationError(
+                f"Bucket {bucket} is not a valid CSR Sec "
+                f"{'CTP' if is_ctp else 'Non-CTP'} bucket. Valid buckets: {valid}."
+            )
+
+    def _net_sensitivities(self, sensitivities: list[Sensitivity]) -> list[Sensitivity]:
+        """Net sensitivities to the same (tranche|name, tenor, curve) factor.
+
+        Per ERBA NPR §__.206 sensitivities to the same risk factor are
+        summed before risk-weighting (§__.208(d)(1), (e)(1)).
+
+        Args:
+            sensitivities: Sensitivities within a single bucket.
+
+        Returns:
+            One netted sensitivity per unique risk factor.
+        """
+        key_to_sens: dict[tuple[str, float, str], Sensitivity] = {}
+        key_to_value: dict[tuple[str, float, str], float] = defaultdict(float)
+        for s in sensitivities:
+            key = (self._get_tranche(s), self._get_tenor_years(s), self._get_curve_label(s))
+            key_to_value[key] += s.value
+            if key not in key_to_sens:
+                key_to_sens[key] = s
+
+        netted: list[Sensitivity] = []
+        for key, total_value in key_to_value.items():
+            template = key_to_sens[key]
+            netted.append(
+                Sensitivity(
+                    risk_class=template.risk_class,
+                    risk_measure=template.risk_measure,
+                    bucket=template.bucket,
+                    risk_factor_type=template.risk_factor_type,
+                    tenor=template.tenor,
+                    label=template.label,
+                    value=total_value,
+                    option_maturity=template.option_maturity,
+                )
+            )
+        return netted
+
     # --------------------------------------------------------------------- #
-    #  Helper: delta risk weights                                            #
+    #  Helper: risk weights                                                  #
     # --------------------------------------------------------------------- #
 
     def _apply_delta_risk_weight(
         self, sensitivity: Sensitivity, is_ctp: bool
     ) -> WeightedSensitivity:
-        """Apply risk weight to a single delta sensitivity.
+        """Apply the Table 5 (CTP) / Table 7 (non-CTP) delta risk weight.
 
-        Uses bucket-level risk weights from MAR21.14 (Non-CTP) or
-        MAR21.15 (CTP). The risk weight is uniform across all tenors
-        within a bucket.
+        ERBA NPR §__.209(b)(3)/(4): uniform across tenors within a bucket.
 
         Args:
             sensitivity: A single delta sensitivity.
             is_ctp: Whether to use CTP risk weights.
 
         Returns:
-            :class:`WeightedSensitivity` with ``WS_k = RW_k * s_k``.
+            :class:`WeightedSensitivity` with ``WS_k = RW_b * s_k``.
 
         Raises:
-            CalculationError: If the bucket is not recognized.
+            CalculationError: If the bucket is not recognised.
         """
+        bucket_int = self._parse_bucket(sensitivity.bucket, is_ctp)
         try:
-            bucket_int = int(sensitivity.bucket)
-        except (ValueError, TypeError):
-            raise CalculationError(
-                f"Invalid CSR Sec bucket identifier: '{sensitivity.bucket}'. "
-                f"Expected an integer bucket number."
-            )
-
-        try:
-            if is_ctp:
-                rw = get_ctp_risk_weight(bucket_int)
-            else:
-                rw = get_non_ctp_risk_weight(bucket_int)
+            rw = get_ctp_risk_weight(bucket_int) if is_ctp else get_non_ctp_risk_weight(bucket_int)
         except KeyError:
-            valid = "1-5" if is_ctp else "1-8"
+            valid = "1-16" if is_ctp else "1-25"
             raise CalculationError(
                 f"Bucket {bucket_int} is not a valid CSR Sec "
-                f"{'CTP' if is_ctp else 'Non-CTP'} bucket. "
-                f"Valid buckets: {valid}."
-            )
-
-        weighted_value = rw * sensitivity.value
+                f"{'CTP' if is_ctp else 'Non-CTP'} bucket. Valid buckets: {valid}."
+            ) from None
         return WeightedSensitivity(
             sensitivity=sensitivity,
             risk_weight=rw,
-            weighted_value=weighted_value,
+            weighted_value=rw * sensitivity.value,
         )
 
-    # --------------------------------------------------------------------- #
-    #  Helper: vega risk weights                                             #
-    # --------------------------------------------------------------------- #
-
-    def _apply_vega_risk_weight(
-        self, sensitivity: Sensitivity
-    ) -> WeightedSensitivity:
-        """Apply vega risk weight to a single vega sensitivity.
-
-        For CSR Securitization, the vega risk weight is 100% per MAR21.44.
+    def _apply_vega_risk_weight(self, sensitivity: Sensitivity) -> WeightedSensitivity:
+        """Apply the vega risk weight (100 %) per ERBA NPR §__.209(c) Table 11.
 
         Args:
             sensitivity: A single vega sensitivity.
@@ -629,124 +626,85 @@ class CSRSecCalculator:
         Returns:
             :class:`WeightedSensitivity` with ``WS_k = 1.0 * s_k``.
         """
-        rw = VEGA_RISK_WEIGHT  # 1.0
         return WeightedSensitivity(
             sensitivity=sensitivity,
-            risk_weight=rw,
-            weighted_value=rw * sensitivity.value,
+            risk_weight=VEGA_RISK_WEIGHT,
+            weighted_value=VEGA_RISK_WEIGHT * sensitivity.value,
         )
 
     # --------------------------------------------------------------------- #
-    #  Helper: vega correlation matrix                                       #
+    #  Helper: inter-bucket aggregation                                      #
     # --------------------------------------------------------------------- #
 
-    def _build_vega_correlation_matrix(
+    def _inter_bucket_aggregation(
         self,
-        sensitivities: list[Sensitivity],
+        bucket_charges: dict[str, float],
+        bucket_net_sens: dict[str, float],
         scenario: CorrelationScenario,
-    ) -> np.ndarray:
-        """Build the intra-bucket correlation matrix for vega risk.
+        is_ctp: bool,
+    ) -> float:
+        """Inter-bucket aggregation with pair-specific gamma per ERBA NPR §__.206.
 
-        Vega correlations are two-dimensional per MAR21.47:
-
-        .. math::
-
-            \\rho_{kl} = \\rho^{\\mathrm{opt}}_{kl}
-                        \\times \\rho^{\\mathrm{tenor}}_{kl}
-
-        where:
-
-        - ``rho_opt(k, l) = exp(-alpha * |Tk_opt - Tl_opt| / min(Tk_opt, Tl_opt))``
-        - ``rho_tenor(k, l) = exp(-alpha * |Tk_und - Tl_und| / min(Tk_und, Tl_und))``
-
-        and ``alpha = 0.01`` per the regulatory parameter.
+        ``Capital = sqrt(sum_b K_b^2 + sum_{b!=c} gamma_bc S_b S_c)`` with
+        uncapped ``S_b``; only if the radicand is negative is it recomputed
+        with ``S_b = max(min(sum WS, K_b), -K_b)``.  gamma is 0 % for
+        non-CTP (§__.209(b)(4)) and Table 6-based for CTP (§__.209(b)(3)).
 
         Args:
-            sensitivities: Vega sensitivities for one bucket.
-            scenario: Correlation scenario.
+            bucket_charges: ``{bucket: K_b}``.
+            bucket_net_sens: ``{bucket: S_b}``.
+            scenario: Correlation scenario for gamma adjustment.
+            is_ctp: Whether CTP gamma applies.
 
         Returns:
-            numpy ``ndarray`` of shape ``(n, n)``.
+            Total aggregated capital charge.
         """
-        n = len(sensitivities)
-        corr = np.eye(n, dtype=np.float64)
+        if not bucket_charges:
+            return 0.0
 
-        for i in range(n):
-            for j in range(i + 1, n):
-                si = sensitivities[i]
-                sj = sensitivities[j]
+        buckets = list(bucket_charges.keys())
+        sum_kb_squared = sum(k ** 2 for k in bucket_charges.values())
 
-                # Option maturity correlation ----------------------------------
-                opt_i = si.option_maturity if si.option_maturity else 0.5
-                opt_j = sj.option_maturity if sj.option_maturity else 0.5
-                if opt_i == opt_j:
-                    rho_opt = 1.0
-                else:
-                    rho_opt = math.exp(
-                        -VEGA_ALPHA
-                        * abs(opt_i - opt_j)
-                        / min(opt_i, opt_j)
-                    )
+        gammas: dict[tuple[str, str], float] = {}
+        for i, b in enumerate(buckets):
+            for j in range(i + 1, len(buckets)):
+                c = buckets[j]
+                g = get_inter_bucket_correlation(int(b), int(c), is_ctp=is_ctp)
+                gammas[(b, c)] = apply_correlation_scenario(g, scenario, is_inter_bucket=True)
 
-                # Underlying tenor correlation ---------------------------------
-                und_i = self._get_tenor_years(si)
-                und_j = self._get_tenor_years(sj)
-                if und_i == und_j:
-                    rho_tenor = 1.0
-                else:
-                    rho_tenor = math.exp(
-                        -VEGA_ALPHA
-                        * abs(und_i - und_j)
-                        / min(und_i, und_j)
-                    )
+        def _cross(s: dict[str, float]) -> float:
+            return 2.0 * sum(g * s[b] * s[c] for (b, c), g in gammas.items())
 
-                rho = rho_opt * rho_tenor
-                rho = apply_correlation_scenario(rho, scenario)
-                corr[i, j] = rho
-                corr[j, i] = rho
+        raw_s = {b: bucket_net_sens.get(b, 0.0) for b in buckets}
+        total_variance = sum_kb_squared + _cross(raw_s)
+        if total_variance >= 0:
+            return math.sqrt(total_variance)
 
-        return corr
+        capped_s = {
+            b: max(min(raw_s[b], bucket_charges[b]), -bucket_charges[b])
+            for b in buckets
+        }
+        total_variance = sum_kb_squared + _cross(capped_s)
+        return math.sqrt(max(total_variance, 0.0))
 
     # --------------------------------------------------------------------- #
-    #  Helper: tenor extraction                                              #
-    # --------------------------------------------------------------------- #
-
-    @staticmethod
-    def _get_tenor_years(sensitivity: Sensitivity) -> float:
-        """Extract the tenor in years from a sensitivity.
-
-        Falls back to 0.25 if no tenor is specified.
-
-        Args:
-            sensitivity: A sensitivity object.
-
-        Returns:
-            Tenor in years.
-        """
-        if sensitivity.tenor is not None:
-            return sensitivity.tenor.value
-        return 0.25
-
-    # --------------------------------------------------------------------- #
-    #  Helper: curvature psi function                                        #
+    #  Helper: curvature                                                     #
     # --------------------------------------------------------------------- #
 
     @staticmethod
     def _psi(cvr_k: float, cvr_l: float) -> float:
-        """Curvature psi function per MAR21.5(3).
-
-        Returns the product ``|CVR_k| * |CVR_l|`` scaled by a sign factor:
+        """Curvature psi-weighted cross product per ERBA NPR §__.206.
 
         - Both positive: ``+|CVR_k| * |CVR_l|``
-        - Both negative: ``0`` (both negative means no diversification benefit)
-        - Mixed signs: ``-|CVR_k| * |CVR_l|`` (reduces the charge)
+        - Both negative: ``0`` (psi = 0)
+        - Mixed signs: ``-|CVR_k| * |CVR_l|``
 
         Args:
-            cvr_k: Curvature risk ``CVR_k`` for factor *k*.
-            cvr_l: Curvature risk ``CVR_l`` for factor *l*.
+            cvr_k: Curvature risk for factor *k*.
+            cvr_l: Curvature risk for factor *l*.
 
         Returns:
-            Signed cross-product for the curvature aggregation formula.
+            Signed cross product for the curvature aggregation formula.
         """
         abs_product = abs(cvr_k) * abs(cvr_l)
         if cvr_k > 0 and cvr_l > 0:
@@ -756,28 +714,43 @@ class CSRSecCalculator:
         else:
             return -abs_product
 
-    # --------------------------------------------------------------------- #
-    #  Helper: curvature inter-bucket aggregation                            #
-    # --------------------------------------------------------------------- #
+    def _curvature_intra_bucket(self, cvr_values: np.ndarray, rho_sq: np.ndarray) -> float:
+        """Intra-bucket curvature aggregation per ERBA NPR §__.206.
 
-    @staticmethod
-    def _curvature_inter_bucket(
-        bucket_charges: dict[str, float],
-        bucket_net_cvr: dict[str, float],
-        gamma_sq: float,
-    ) -> float:
-        """Curvature inter-bucket aggregation per MAR21.5(5).
-
-        Formula::
-
-            Total = sqrt(max(0, sum_b K_b^2
-                              + sum_{b!=c} gamma_bc^2
-                                * Psi(sum_CVR_b, sum_CVR_c)))
+        ``K_b = sqrt(max(0, sum_k max(CVR_k,0)^2 + sum_{k!=l} rho_kl^2 psi(CVR_k,CVR_l)))``
 
         Args:
-            bucket_charges: ``{bucket: K_b}`` from intra-bucket curvature.
-            bucket_net_cvr: ``{bucket: sum(CVR_k)}`` per bucket.
-            gamma_sq: Squared inter-bucket correlation.
+            cvr_values: Net curvature risk per factor.
+            rho_sq: Squared (scenario-adjusted) delta correlation matrix.
+
+        Returns:
+            Bucket curvature charge ``K_b``.
+        """
+        n = len(cvr_values)
+        diag_term = float(np.sum(np.maximum(cvr_values, 0.0) ** 2))
+        cross_term = 0.0
+        for i in range(n):
+            for j in range(i + 1, n):
+                cross_term += rho_sq[i, j] * self._psi(cvr_values[i], cvr_values[j])
+        cross_term *= 2.0
+        return math.sqrt(max(0.0, diag_term + cross_term))
+
+    def _curvature_inter_bucket(
+        self,
+        bucket_charges: dict[str, float],
+        bucket_net_cvr: dict[str, float],
+        scenario: CorrelationScenario,
+        is_ctp: bool,
+    ) -> float:
+        """Curvature inter-bucket aggregation per ERBA NPR §__.206 / §__.209(d).
+
+        ``Total = sqrt(max(0, sum_b K_b^2 + sum_{b!=c} gamma_bc^2 psi(S_b, S_c)))``
+
+        Args:
+            bucket_charges: ``{bucket: K_b}``.
+            bucket_net_cvr: ``{bucket: sum CVR_k}``.
+            scenario: Correlation scenario for gamma adjustment.
+            is_ctp: Whether CTP gamma applies.
 
         Returns:
             Aggregated curvature capital charge.
@@ -792,16 +765,88 @@ class CSRSecCalculator:
         for i, b in enumerate(buckets):
             for j in range(i + 1, len(buckets)):
                 c = buckets[j]
-                cvr_b = bucket_net_cvr.get(b, 0.0)
-                cvr_c = bucket_net_cvr.get(c, 0.0)
-                cross_sum += gamma_sq * CSRSecCalculator._psi(cvr_b, cvr_c)
-        cross_sum *= 2.0  # symmetric
+                gamma = apply_correlation_scenario(
+                    get_inter_bucket_correlation(int(b), int(c), is_ctp=is_ctp),
+                    scenario,
+                    is_inter_bucket=True,
+                )
+                cross_sum += (gamma ** 2) * self._psi(
+                    bucket_net_cvr.get(b, 0.0), bucket_net_cvr.get(c, 0.0)
+                )
+        cross_sum *= 2.0
 
-        total_var = sum_kb_sq + cross_sum
-        if total_var >= 0:
-            return math.sqrt(total_var)
-        else:
-            return sum(abs(k) for k in bucket_charges.values())
+        return math.sqrt(max(0.0, sum_kb_sq + cross_sum))
+
+    # --------------------------------------------------------------------- #
+    #  Helper: risk-factor attribute extraction                              #
+    # --------------------------------------------------------------------- #
+
+    @staticmethod
+    def _get_tenor_years(sensitivity: Sensitivity) -> float:
+        """Extract the tenor vertex in years from a sensitivity.
+
+        Falls back to the first §__.208(d)/(e) vertex (0.5y) when no tenor
+        is specified.
+
+        Args:
+            sensitivity: A sensitivity object.
+
+        Returns:
+            Tenor in years.
+        """
+        if sensitivity.tenor is not None:
+            return float(sensitivity.tenor.value)
+        return TENORS[0]
+
+    @staticmethod
+    def _get_option_maturity(sensitivity: Sensitivity) -> float:
+        """Extract the option maturity in years from a vega sensitivity.
+
+        Args:
+            sensitivity: A vega sensitivity.
+
+        Returns:
+            Option maturity in years (defaults to 0.5y).
+        """
+        if sensitivity.option_maturity:
+            return float(sensitivity.option_maturity)
+        return VEGA_OPTION_MATURITIES[0]
+
+    @staticmethod
+    def _get_tranche(sensitivity: Sensitivity) -> str:
+        """Extract the tranche (non-CTP) / name (CTP) identifier from the label.
+
+        The label encodes ``tranche::curve``; the identifier is the portion
+        before the last ``::`` separator.
+
+        Args:
+            sensitivity: A sensitivity object.
+
+        Returns:
+            Tranche / name identifier (``"DEFAULT"`` if empty).
+        """
+        label = sensitivity.label or ""
+        if "::" in label:
+            return label.rsplit("::", maxsplit=1)[0] or "DEFAULT"
+        return label or "DEFAULT"
+
+    @staticmethod
+    def _get_curve_label(sensitivity: Sensitivity) -> str:
+        """Extract the curve label from a sensitivity.
+
+        The portion after the last ``::`` separator, defaulting to
+        ``"DEFAULT"`` (all sensitivities on the same curve).
+
+        Args:
+            sensitivity: A sensitivity object.
+
+        Returns:
+            Curve label string.
+        """
+        label = sensitivity.label or ""
+        if "::" in label:
+            return label.rsplit("::", maxsplit=1)[1]
+        return "DEFAULT"
 
     # --------------------------------------------------------------------- #
     #  Validation                                                            #
@@ -812,26 +857,25 @@ class CSRSecCalculator:
         sensitivities: list[Sensitivity],
         risk_class: RiskClass,
     ) -> None:
-        """Validate that all sensitivities belong to the correct risk class.
+        """Validate CSR sec inputs.
+
+        Checks per ERBA NPR §__.208(d)-(e): risk class, delta tenor present
+        and on a prescribed vertex (0.5, 1, 3, 5, 10), vega option maturity
+        present.
 
         Args:
             sensitivities: Input sensitivity list.
             risk_class: Expected risk class (CSR_SEC_NON_CTP or CSR_SEC_CTP).
 
         Raises:
-            ValidationError: If the list is empty or contains sensitivities
-                with a mismatched risk class.
+            ValidationError: On any violation.
         """
         if not sensitivities:
             raise ValidationError(
                 f"No sensitivities provided for {risk_class.value} calculation."
             )
 
-        invalid = [
-            s
-            for s in sensitivities
-            if s.risk_class != risk_class
-        ]
+        invalid = [s for s in sensitivities if s.risk_class != risk_class]
         if invalid:
             bad_classes = {s.risk_class.value for s in invalid}
             raise ValidationError(
@@ -839,15 +883,21 @@ class CSRSecCalculator:
                 f"Found: {bad_classes}"
             )
 
-        # Validate vega sensitivities have option_maturity --------------------
         for s in sensitivities:
-            if (
-                s.risk_measure == RiskMeasure.VEGA
-                and s.option_maturity is None
-            ):
+            if s.risk_measure == RiskMeasure.DELTA:
+                if s.tenor is None:
+                    raise ValidationError(
+                        f"Delta sensitivity for bucket '{s.bucket}' must specify a tenor."
+                    )
+                if float(s.tenor.value) not in TENORS:
+                    raise ValidationError(
+                        f"Delta sensitivity for bucket '{s.bucket}' has tenor "
+                        f"{s.tenor.value}y; CSR sec vertices are {TENORS} "
+                        f"(ERBA NPR §__.208(d)-(e))."
+                    )
+            if s.risk_measure == RiskMeasure.VEGA and s.option_maturity is None:
                 raise ValidationError(
-                    f"Vega sensitivity for bucket '{s.bucket}' must "
-                    f"specify an option_maturity."
+                    f"Vega sensitivity for bucket '{s.bucket}' must specify an option_maturity."
                 )
 
     # --------------------------------------------------------------------- #

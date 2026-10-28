@@ -1,22 +1,26 @@
 """Credit Risk Mitigation (CRM) — Comprehensive & Substitution Approaches.
 
 Implements eligible collateral recognition, supervisory haircuts, and guarantee
-substitution per Basel III Endgame rules (MAR22 / CRE22).
+substitution per the March 2026 US ERBA NPR, common rule text § __.115
+(collateral haircut approach), § __.120 (guarantees and credit derivatives:
+substitution approach) and § __.121 (collateralized transactions).
 
 Key formulas
 ------------
-Comprehensive Approach (collateral):
+Collateral haircut approach (single collateral piece, N = 1):
     E* = max(0, E * (1 + He) - C * (1 - Hc - Hfx))
+Collateral haircut approach (netting set, § __.115(b)):
+    E* = max(0, (ΣE - ΣC) + 0.4·net + 0.6·gross/√N + Σ E_fx·H_fx)
 
-Substitution Approach (guarantees / credit derivatives):
+Substitution Approach (guarantees / credit derivatives, § __.120):
     Covered portion uses guarantor risk weight; uncovered portion keeps
-    original obligor risk weight.
+    original obligor risk weight; maturity mismatch Pm = E·(t−0.25)/(T−0.25).
 
 References
 ----------
-- CRE22: Credit risk mitigation — overview
-- CRE22.51-22.75: Comprehensive approach
-- CRE22.76-22.89: Substitution approach for guarantees / credit derivatives
+- ERBA NPR § __.115, Table 1 to § __.115 (pp. 726-731)
+- ERBA NPR § __.120-§ __.121 (pp. 743-757)
+- BCBS d424 CRE22 (international standard, where aligned)
 """
 
 from __future__ import annotations
@@ -35,34 +39,77 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 
 SUPERVISORY_HAIRCUTS: dict[str, float] = {
-    # Cash
+    # Table 1 to § __.115 (ERBA NPR pp. 729-730) -- market price volatility
+    # haircuts Hs, by issuer type and residual maturity band
+    # (<=1y, 1-3y, 3-5y, 5-10y, >10y).
+    # Cash on deposit
     "cash": 0.00,
-    # Gold
-    "gold": 0.15,
-    # Sovereign securities by residual maturity
+    # Main index equities (incl. convertible bonds) and gold: 20%
+    "gold": 0.20,
+    # Sovereign / 0% supranational / MDB issuer with 0% risk weight
     "sovereign_residual_1y": 0.005,
+    "sovereign_residual_3y": 0.02,
     "sovereign_residual_5y": 0.02,
     "sovereign_residual_10y": 0.04,
-    "sovereign_residual_10y_plus": 0.06,
-    # Investment-grade corporate bonds by residual maturity
-    "corporate_ig_residual_1y": 0.01,
-    "corporate_ig_residual_5y": 0.04,
-    "corporate_ig_residual_10y": 0.06,
-    "corporate_ig_residual_10y_plus": 0.10,
+    "sovereign_residual_10y_plus": 0.04,
+    # Sovereign issuer with 20% or 50% risk weight
+    "sovereign_rw20_50_residual_1y": 0.01,
+    "sovereign_rw20_50_residual_3y": 0.03,
+    "sovereign_rw20_50_residual_5y": 0.03,
+    "sovereign_rw20_50_residual_10y": 0.06,
+    "sovereign_rw20_50_residual_10y_plus": 0.06,
+    # Sovereign issuer with 100% risk weight: 15% for all maturities
+    "sovereign_rw100": 0.15,
+    # GSE exposures
+    "gse_residual_1y": 0.01,
+    "gse_residual_3y": 0.04,
+    "gse_residual_5y": 0.04,
+    "gse_residual_10y": 0.08,
+    "gse_residual_10y_plus": 0.08,
+    # Other investment-grade securities (not GSE, not securitization)
+    "corporate_ig_residual_1y": 0.02,
+    "corporate_ig_residual_3y": 0.04,
+    "corporate_ig_residual_5y": 0.06,
+    "corporate_ig_residual_10y": 0.12,
+    "corporate_ig_residual_10y_plus": 0.20,
+    # Senior securitization exposures with risk weight < 100%
+    "senior_sec_residual_1y": 0.04,
+    "senior_sec_residual_3y": 0.12,
+    "senior_sec_residual_5y": 0.12,
+    "senior_sec_residual_10y": 0.24,
+    "senior_sec_residual_10y_plus": 0.24,
     # Equities
-    "equity_main_index": 0.15,
-    "equity_other": 0.25,
-    # Mutual funds — highest haircut of underlying assets
-    "mutual_fund": 0.20,
+    "equity_main_index": 0.20,
+    "equity_other": 0.30,
+    # Mutual funds / ETFs: highest haircut applicable to any security the
+    # fund can invest in (30% unless full look-through is applied)
+    "mutual_fund": 0.30,
+    # Other exposure types (incl. senior securitizations with RW >= 100%,
+    # sovereigns with RW > 100%, non-financial collateral): 30%
+    "other": 0.30,
 }
 
-# FX mismatch add-on per CRE22.62
+# FX mismatch haircut Hfx = 8% per ERBA NPR § __.115(c)(2)
 CURRENCY_MISMATCH_HAIRCUT: float = 0.08
 
-# Holding-period scaling: standard = 10 business days.
-# For repo-style transactions the standard period is 5 days.
+# Collateral haircut approach diversification weights per § __.115(b):
+#   E* = max(0, (sum E_i - sum C_i) + 0.4 * net_exposure
+#               + 0.6 * gross_exposure / sqrt(N) + sum(E_fx * H_fx))
+NET_EXPOSURE_WEIGHT: float = 0.4
+GROSS_EXPOSURE_WEIGHT: float = 0.6
+# Instruments with E_s below one tenth of the largest E_s are excluded
+# from the count N (§ __.115(b)(8)).
+N_COUNT_MATERIALITY_FRACTION: float = 0.10
+
+# Holding-period scaling per § __.115(c)(4): H_a = H_s * sqrt(T_m / T_s)
+# with T_s = 10 business days for eligible margin loans and 5 business
+# days for repo-style transactions; 20 business days for netting sets with
+# > 5,000 trades or illiquid collateral; doubled after > 2 margin disputes.
 STANDARD_HOLDING_PERIOD_DAYS: int = 10
 REPO_HOLDING_PERIOD_DAYS: int = 5
+LARGE_NETTING_SET_HOLDING_PERIOD_DAYS: int = 20
+# Repo-style transactions may scale haircuts by sqrt(1/2) (§ __.115(c)(3)).
+REPO_HAIRCUT_SCALING: float = float(np.sqrt(0.5))
 
 
 # ============================================================================
@@ -71,15 +118,20 @@ REPO_HOLDING_PERIOD_DAYS: int = 5
 
 
 class CollateralType(str, Enum):
-    """Types of eligible financial collateral per CRE22.39-22.45."""
+    """Types of eligible financial collateral per Table 1 to § __.115."""
 
     CASH = "cash"
     GOLD = "gold"
-    SOVEREIGN_DEBT = "sovereign_debt"
-    CORPORATE_IG_BOND = "corporate_ig_bond"
+    SOVEREIGN_DEBT = "sovereign_debt"                # issuer RW 0%
+    SOVEREIGN_DEBT_RW20_50 = "sovereign_debt_rw20_50"  # issuer RW 20% or 50%
+    SOVEREIGN_DEBT_RW100 = "sovereign_debt_rw100"    # issuer RW 100%
+    GSE_DEBT = "gse_debt"
+    CORPORATE_IG_BOND = "corporate_ig_bond"          # other investment-grade securities
+    SENIOR_SECURITIZATION = "senior_securitization"  # senior, RW < 100%
     EQUITY_MAIN_INDEX = "equity_main_index"
     EQUITY_OTHER = "equity_other"
     MUTUAL_FUND = "mutual_fund"
+    OTHER = "other"
 
 
 class GuarantorType(str, Enum):
@@ -262,11 +314,17 @@ class CRMResult(BaseModel):
 
 
 def _residual_maturity_bucket(years: float | None) -> str:
-    """Map residual maturity in years to a haircut bucket suffix."""
+    """Map residual maturity in years to a Table 1 to § __.115 maturity band.
+
+    Bands: <= 1y, > 1y-3y, > 3y-5y, > 5y-10y, > 10y.  Missing maturity
+    conservatively maps to the longest band.
+    """
     if years is None:
-        return "residual_5y"  # default mid-bucket
+        return "residual_10y_plus"
     if years <= 1.0:
         return "residual_1y"
+    if years <= 3.0:
+        return "residual_3y"
     if years <= 5.0:
         return "residual_5y"
     if years <= 10.0:
@@ -282,18 +340,27 @@ def collateral_haircut_key(collateral: CRMCollateral) -> str:
         return "cash"
     if ctype == CollateralType.GOLD:
         return "gold"
+    bucket = _residual_maturity_bucket(collateral.residual_maturity_years)
     if ctype == CollateralType.SOVEREIGN_DEBT:
-        bucket = _residual_maturity_bucket(collateral.residual_maturity_years)
         return f"sovereign_{bucket}"
+    if ctype == CollateralType.SOVEREIGN_DEBT_RW20_50:
+        return f"sovereign_rw20_50_{bucket}"
+    if ctype == CollateralType.SOVEREIGN_DEBT_RW100:
+        return "sovereign_rw100"
+    if ctype == CollateralType.GSE_DEBT:
+        return f"gse_{bucket}"
     if ctype == CollateralType.CORPORATE_IG_BOND:
-        bucket = _residual_maturity_bucket(collateral.residual_maturity_years)
         return f"corporate_ig_{bucket}"
+    if ctype == CollateralType.SENIOR_SECURITIZATION:
+        return f"senior_sec_{bucket}"
     if ctype == CollateralType.EQUITY_MAIN_INDEX:
         return "equity_main_index"
     if ctype == CollateralType.EQUITY_OTHER:
         return "equity_other"
     if ctype == CollateralType.MUTUAL_FUND:
         return "mutual_fund"
+    if ctype == CollateralType.OTHER:
+        return "other"
 
     raise ValueError(f"Unknown collateral type: {ctype}")
 
@@ -434,36 +501,66 @@ class CRMCalculator:
         exposure: CRMExposure,
         collaterals: list[CRMCollateral],
     ) -> float:
-        """Apply multiple collateral pieces sequentially.
+        """Compute E* for several collateral pieces per ERBA NPR § __.115(b).
 
-        For multiple pieces of collateral, the adjusted exposure is computed
-        iteratively: each piece reduces the remaining exposure.
+        .. math::
+
+            E^* = \\max\\Bigl(0,\\; (\\textstyle\\sum E_i - \\sum C_i)
+                  + 0.4\\,|\\textstyle\\sum_s E_s H_s|
+                  + 0.6\\,\\tfrac{\\sum_s E_s |H_s|}{\\sqrt{N}}
+                  + \\textstyle\\sum_{fx} E_{fx} H_{fx}\\Bigr)
+
+        where E_s is the net position per instrument (positive sign for
+        the exposure side, negative for collateral taken), N is the number
+        of distinct instruments excluding those below one tenth of the
+        largest E_s, and H_fx = 8% for each currency different from the
+        settlement currency.
 
         Parameters
         ----------
         exposure : CRMExposure
-            The exposure to be mitigated.
+            The exposure to be mitigated (E, with haircut He if a security).
         collaterals : list[CRMCollateral]
-            List of eligible collateral pieces.
+            Eligible collateral pieces (C_i).
 
         Returns
         -------
         float
-            Final adjusted exposure after all collateral is applied.
+            Adjusted exposure E*.
         """
-        remaining = exposure.exposure_amount
-        he = exposure.exposure_haircut
+        e = exposure.exposure_amount
+        total_c = sum(c.market_value for c in collaterals)
 
-        for coll in collaterals:
-            hc = get_collateral_haircut(coll)
-            hfx = get_fx_haircut(exposure.currency, coll.currency)
-            c_adj = coll.market_value * (1.0 - hc - hfx)
-            remaining = remaining * (1.0 + he) - c_adj
-            remaining = max(0.0, remaining)
-            # Reset He after first application (avoids double-counting)
-            he = 0.0
+        # Net positions per instrument: exposure side positive, collateral
+        # side negative (§ __.115(b)(6)-(7)).
+        positions: list[tuple[float, float]] = []
+        if exposure.exposure_haircut > 0:
+            positions.append((e, exposure.exposure_haircut))
+        for c in collaterals:
+            positions.append((-c.market_value, get_collateral_haircut(c)))
 
-        return remaining
+        net_exposure = abs(sum(es * hs for es, hs in positions))
+        gross_exposure = sum(abs(es) * abs(hs) for es, hs in positions)
+
+        largest = max((abs(es) for es, _ in positions), default=0.0)
+        n_count = sum(
+            1 for es, _ in positions
+            if largest > 0 and abs(es) >= N_COUNT_MATERIALITY_FRACTION * largest
+        )
+        n_count = max(n_count, 1)
+
+        fx_term = sum(
+            c.market_value * get_fx_haircut(exposure.currency, c.currency)
+            for c in collaterals
+        )
+
+        e_star = (
+            (e - total_c)
+            + NET_EXPOSURE_WEIGHT * net_exposure
+            + GROSS_EXPOSURE_WEIGHT * gross_exposure / np.sqrt(n_count)
+            + fx_term
+        )
+        return max(0.0, float(e_star))
 
     # ------------------------------------------------------------------
     #  Substitution Approach — Guarantees / Credit Derivatives

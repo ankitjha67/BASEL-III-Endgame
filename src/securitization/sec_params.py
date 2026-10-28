@@ -316,20 +316,21 @@ RESEC_RW_FLOOR: float = 1.00  # 100%
 
 
 # =========================================================================
-#  Concentration Ratio Thresholds
+#  Look-through / NPL treatments -- ERBA NPR § __.132(k)-(l)
 # =========================================================================
 
-# Maximum number of effective obligors below which concentration add-on applies
-# per CRE40.56
-# TODO: VERIFY -- No CRE40 provision defines a per-obligor "concentration
-#   risk-weight add-on" of this form (CRE40.56 concerns the effective number
-#   of exposures N used in SEC-IRBA, not an SEC-SA add-on).  Retained from
-#   the original project specification pending a source citation.
-CONCENTRATION_N_THRESHOLD: int = 6
+# Senior non-resecuritization exposure under the look-through approach:
+# greater of the weighted-average underlying risk weight and 15%.
+LOOK_THROUGH_SENIOR_RW_FLOOR: float = 0.15
 
-# Concentration ratio risk weight add-on (see TODO above)
-CONCENTRATION_RW_ADDON: float = 0.06  # 6 percentage points per unit
+# NPL securitization: senior exposure receives 100% if the nonrefundable
+# purchase price discount is >= 50% of the pool balance at inception.
+NPL_SENIOR_RW: float = 1.00
+NPL_MIN_PURCHASE_PRICE_DISCOUNT: float = 0.50
 
+# Securitization exposures for which SEC-SA cannot be applied, or that
+# fail the due-diligence requirements of § __.130(c): 1,250%.
+DUE_DILIGENCE_FAILURE_RW: float = 12.50
 
 # =========================================================================
 #  CTP (Correlation Trading Portfolio) Parameters

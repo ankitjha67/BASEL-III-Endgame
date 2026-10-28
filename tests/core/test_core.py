@@ -89,16 +89,30 @@ class TestRiskClassEnum:
 
 
 class TestCSRBucketEnum:
-    """Tests for CSR Non-Sec bucket enum per MAR21.12 Table 4."""
+    """Tests for CSR bucket enums per ERBA NPR §__.209(b)(2)-(4)."""
 
-    def test_csr_bucket_has_18_values(self) -> None:
-        """CSRBucket must have 18 buckets per MAR21.12."""
-        assert len(CSRBucket) == 18
+    def test_csr_bucket_has_20_values(self) -> None:
+        """CSRBucket must have 20 buckets per ERBA NPR §__.209(b)(2) Table 3."""
+        assert len(CSRBucket) == 20
 
-    def test_csr_bucket_values_1_to_18(self) -> None:
-        """CSRBucket values are integers 1 through 18."""
+    def test_csr_bucket_values_1_to_20(self) -> None:
+        """CSRBucket values are integers 1 through 20."""
         values = sorted(b.value for b in CSRBucket)
-        assert values == list(range(1, 19))
+        assert values == list(range(1, 21))
+
+    def test_csr_sec_bucket_has_25_values(self) -> None:
+        """CSRSecBucket must have 25 buckets per ERBA NPR §__.209(b)(4) Table 7."""
+        assert sorted(b.value for b in CSRSecBucket) == list(range(1, 26))
+
+    def test_csr_sec_ctp_bucket_has_16_values(self) -> None:
+        """CSRSecCTPBucket must have 16 buckets per ERBA NPR §__.209(b)(3) Table 5."""
+        assert sorted(b.value for b in CSRSecCTPBucket) == list(range(1, 17))
+
+    def test_credit_quality_three_categories(self) -> None:
+        """Three internally-assessed categories (no external ratings, Dodd-Frank §939A)."""
+        assert {q.name for q in CreditQuality} == {
+            "INVESTMENT_GRADE", "SPECULATIVE_GRADE", "SUB_SPECULATIVE_GRADE",
+        }
 
 
 class TestEquityBucketEnum:
@@ -117,14 +131,14 @@ class TestEquityBucketEnum:
 class TestCommodityBucketEnum:
     """Tests for Commodity bucket enum per MAR21.19 Table 10."""
 
-    def test_commodity_bucket_has_11_values(self) -> None:
-        """CommodityBucket must have 11 buckets per MAR21.19."""
-        assert len(CommodityBucket) == 11
+    def test_commodity_bucket_has_12_values(self) -> None:
+        """CommodityBucket must have 12 buckets per ERBA NPR §__.209(b)(6) Table 9."""
+        assert len(CommodityBucket) == 12
 
-    def test_commodity_bucket_values_1_to_11(self) -> None:
-        """CommodityBucket values are integers 1 through 11."""
+    def test_commodity_bucket_values_1_to_12(self) -> None:
+        """CommodityBucket values are integers 1 through 12."""
         values = sorted(b.value for b in CommodityBucket)
-        assert values == list(range(1, 12))
+        assert values == list(range(1, 13))
 
 
 class TestOtherEnums:
@@ -138,9 +152,9 @@ class TestOtherEnums:
         """LOW, MEDIUM, HIGH per MAR21.6."""
         assert len(CorrelationScenario) == 3
 
-    def test_girr_tenor_has_12_members(self) -> None:
-        """12 standard tenors from 0.25Y to 30Y per MAR21.8."""
-        assert len(GIRRTenor) == 12
+    def test_girr_tenor_has_10_members(self) -> None:
+        """Ten standard tenors from 0.25Y to 30Y per ERBA NPR §__.208(b)(1)."""
+        assert len(GIRRTenor) == 10
 
     def test_girr_tenor_values(self) -> None:
         """Tenor values match regulatory specification."""
@@ -152,15 +166,18 @@ class TestOtherEnums:
         assert len(GIRRRiskFactorType) == 3
 
     def test_currency_category(self) -> None:
-        """LOW_VOLATILITY, HIGH_VOLATILITY, SPECIFIED per MAR21.8."""
-        assert len(CurrencyCategory) == 3
+        """SPECIFIED and OTHER per ERBA NPR §__.209(b)(1)."""
+        assert len(CurrencyCategory) == 2
+        assert CurrencyCategory.SPECIFIED.value == "SPECIFIED"
+        assert CurrencyCategory.OTHER.value == "OTHER"
 
     def test_drc_seniority(self) -> None:
-        """4 seniority levels per MAR22.12."""
-        assert len(DRCSeniority) == 4
+        """8 LGD classes per ERBA NPR §__.210(b)(1)(iv); SENIOR_SECURED is an alias."""
+        assert len(DRCSeniority) == 8
+        assert DRCSeniority.SENIOR_SECURED is DRCSeniority.COVERED_BOND
 
     def test_drc_rating_category(self) -> None:
-        """9 rating categories per MAR22.14 (AAA through DEFAULTED)."""
+        """9 rating-style convenience categories (AAA through DEFAULTED)."""
         assert len(DRCRatingCategory) == 9
 
     def test_rrao_category(self) -> None:

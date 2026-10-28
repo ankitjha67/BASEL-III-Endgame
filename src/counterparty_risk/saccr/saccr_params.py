@@ -2,17 +2,26 @@
 
 Contains all regulatory constants, asset-class parameters, and supervisory
 factor tables required by the Standardized Approach for Counterparty Credit
-Risk (SA-CCR) per CRE52.
+Risk (SA-CCR) as written in the March 2026 US ERBA NPR, common rule text
+§ __.114 (12 CFR 217.114; ERBA NPR pp. 705-726).  The US text uses
+investment-grade / speculative-grade / sub-speculative-grade credit
+quality categories (Dodd-Frank § 939A) instead of external ratings.
 
 References
 ----------
-- CRE52.40-52.72: Add-on calculation and supervisory parameters
-- CRE52.30: Alpha multiplier
-- CRE52.33-52.36: Replacement cost formulas
+- ERBA NPR § __.114(e): exposure amount, alpha (1.4; 1.0 for commercial
+  end-users under § __.114(e)(4))
+- ERBA NPR § __.114(f)-(g): replacement cost and PFE multiplier
+- ERBA NPR § __.114(h)-(i): hedging-set amounts, adjusted notional,
+  supervisory duration, supervisory delta, maturity factor
+- ERBA NPR Table 2 to § __.114: supervisory option volatility,
+  correlation parameters and supervisory factors
+- BCBS d424 CRE52 (international standard, where aligned)
 """
 
 from __future__ import annotations
 
+import math
 from enum import Enum
 from typing import NamedTuple
 
@@ -21,30 +30,75 @@ from typing import NamedTuple
 # ============================================================================
 
 ALPHA_FINANCIAL: float = 1.4
-"""Alpha multiplier for financial counterparties per CRE52.30."""
+"""Alpha multiplier: exposure amount = 1.4 x (RC + PFE) per ERBA NPR
+§ __.114(e)(1)."""
 
 ALPHA_NON_FINANCIAL: float = 1.0
-"""Alpha multiplier for commercial end-users (2026 rule)."""
+"""Netting sets with a commercial end-user counterparty: exposure amount =
+RC + PFE (no 1.4 multiplier) per ERBA NPR § __.114(e)(4)."""
 
 # ============================================================================
 #  PFE multiplier floor
 # ============================================================================
 
 PFE_FLOOR: float = 0.05
-"""Floor for the PFE multiplier per CRE52.41."""
+"""Floor for the PFE multiplier per ERBA NPR § __.114(g)(1):
+multiplier = min(1; 0.05 + 0.95 * exp((V - C) / (1.9 * A)))."""
+
+PFE_MULTIPLIER_DENOMINATOR_FACTOR: float = 1.9
+"""The 1.9 = 2 x (1 - 0.05) factor in the PFE multiplier exponent."""
+
+SUPERVISORY_DURATION_FLOOR: float = 0.04
+"""Floor on the supervisory duration (ten business days / 250) per ERBA NPR
+§ __.114(i)(2)(i)(A)."""
+
+SUPERVISORY_DISCOUNT_RATE: float = 0.05
+"""Discount rate in the supervisory duration formula (§ __.114(i)(2)(i)(A))."""
+
+BUSINESS_DAYS_PER_YEAR: int = 250
+"""Business-day convention used throughout § __.114."""
+
+BASIS_HEDGING_SET_SF_MULTIPLIER: float = 0.5
+"""Supervisory factor for basis derivative hedging sets = 0.5 x Table 2
+(footnote 1 to Table 2 to § __.114)."""
+
+VOLATILITY_HEDGING_SET_SF_MULTIPLIER: float = 5.0
+"""Supervisory factor for volatility derivative hedging sets = 5 x Table 2
+(footnote 1 to Table 2 to § __.114)."""
+
+CLIENT_FACING_HAIRCUT_SCALING: float = math.sqrt(0.5)
+"""Clearing members may scale standard supervisory haircuts on NICA / VM for
+client-facing transactions by sqrt(1/2) = 0.707107 (§ __.114(e)(7))."""
 
 # ============================================================================
 #  Margin period of risk defaults (business days)
 # ============================================================================
 
 MPOR_DEFAULT_DAYS: int = 10
-"""Default margin period of risk for bilateral margined netting sets."""
+"""MPOR floor for a margined derivative that is not a client-facing
+transaction: ten business days plus (re-margining periodicity - 1)
+per ERBA NPR § __.114(i)(4)(i)(B)(1)."""
 
 MPOR_CENTRALLY_CLEARED_DAYS: int = 5
-"""MPOR for centrally cleared transactions."""
+"""MPOR floor for client-facing derivative transactions: five business days
+plus (re-margining periodicity - 1) per § __.114(i)(4)(i)(B)(2)."""
 
 MPOR_DISPUTE_DAYS: int = 20
-"""MPOR where disputes exceed threshold per CRE52.36."""
+"""MPOR floor of twenty business days for netting sets with more than 5,000
+non-cleared derivative contracts, illiquid collateral or hard-to-replace
+derivatives per § __.114(i)(4)(i)(B)(3)."""
+
+MPOR_LARGE_NETTING_SET_TRADE_COUNT: int = 5_000
+"""Trade-count trigger for the twenty-business-day MPOR floor."""
+
+MPOR_DISPUTE_MULTIPLIER: float = 2.0
+"""Floors are doubled for netting sets with more than two margin disputes
+lasting longer than the MPOR over the previous two quarters
+(§ __.114(i)(4)(i)(B)(4))."""
+
+UNMARGINED_MATURITY_FLOOR_DAYS: int = 10
+"""Unmargined maturity factor uses M = max(10 business days, remaining
+maturity) per § __.114(i)(4)(ii)."""
 
 # ============================================================================
 #  Asset class enumeration
@@ -52,16 +106,35 @@ MPOR_DISPUTE_DAYS: int = 20
 
 
 class SACCRAssetClass(str, Enum):
-    """SA-CCR asset classes per CRE52.40."""
+    """SA-CCR asset classes / categories per Table 2 to § __.114.
+
+    Credit categories follow the US credit-quality taxonomy (investment
+    grade, speculative grade, sub-speculative grade) for single names and
+    (investment grade, speculative grade) for indices.
+    """
 
     IR = "IR"
     FX = "FX"
-    CREDIT_IG = "CREDIT_IG"
-    CREDIT_SPEC = "CREDIT_SPEC"
+    CREDIT_IG = "CREDIT_IG"                  # single-name, investment grade
+    CREDIT_SPEC = "CREDIT_SPEC"              # single-name, speculative grade
+    CREDIT_SUBSPEC = "CREDIT_SUBSPEC"        # single-name, sub-speculative grade
+    CREDIT_INDEX_IG = "CREDIT_INDEX_IG"      # index, investment grade
+    CREDIT_INDEX_SPEC = "CREDIT_INDEX_SPEC"  # index, speculative grade
     EQUITY_SINGLE = "EQUITY_SINGLE"
     EQUITY_INDEX = "EQUITY_INDEX"
     COMMODITY_ELEC = "COMMODITY_ELEC"
     COMMODITY_OTHER = "COMMODITY_OTHER"
+
+
+CREDIT_ASSET_CLASSES: frozenset["SACCRAssetClass"] = frozenset({
+    SACCRAssetClass.CREDIT_IG,
+    SACCRAssetClass.CREDIT_SPEC,
+    SACCRAssetClass.CREDIT_SUBSPEC,
+    SACCRAssetClass.CREDIT_INDEX_IG,
+    SACCRAssetClass.CREDIT_INDEX_SPEC,
+})
+"""All credit derivative categories; they form ONE hedging set per netting
+set (§ __.114(b) hedging set definition (iii))."""
 
 
 # ============================================================================
@@ -92,16 +165,23 @@ SACCR_ASSET_CLASS_PARAMS: dict[SACCRAssetClass, AssetClassParams] = {
     SACCRAssetClass.FX: AssetClassParams(
         supervisory_factor=0.04, correlation=1.0
     ),
-    # CRE52.72 Table 2 -- credit SINGLE-NAME correlation is 50%; index is 80%.
-    # These two classes model single-name credit (IG / speculative-grade).
-    # TODO: VERIFY -- add CREDIT_INDEX_IG (SF 0.38%, rho 0.8) and
-    # CREDIT_INDEX_SG (SF 1.06%, rho 0.8) classes; SF for single-name SG
-    # ranges 0.54% (BBB) to 6.0% (CCC) by rating in CRE52.72.
+    # Table 2 to § __.114 (ERBA NPR p. 726): credit single-name IG 0.46%,
+    # speculative 1.3%, sub-speculative 6.0% (rho 50%); credit index IG
+    # 0.38%, speculative 1.06% (rho 80%).
     SACCRAssetClass.CREDIT_IG: AssetClassParams(
-        supervisory_factor=0.0038, correlation=0.5
+        supervisory_factor=0.0046, correlation=0.5
     ),
     SACCRAssetClass.CREDIT_SPEC: AssetClassParams(
-        supervisory_factor=0.0054, correlation=0.5
+        supervisory_factor=0.013, correlation=0.5
+    ),
+    SACCRAssetClass.CREDIT_SUBSPEC: AssetClassParams(
+        supervisory_factor=0.060, correlation=0.5
+    ),
+    SACCRAssetClass.CREDIT_INDEX_IG: AssetClassParams(
+        supervisory_factor=0.0038, correlation=0.8
+    ),
+    SACCRAssetClass.CREDIT_INDEX_SPEC: AssetClassParams(
+        supervisory_factor=0.0106, correlation=0.8
     ),
     SACCRAssetClass.EQUITY_SINGLE: AssetClassParams(
         supervisory_factor=0.32, correlation=0.5
@@ -163,10 +243,14 @@ def ir_maturity_bucket(end_years: float) -> IRMaturityBucket:
 # ============================================================================
 
 SUPERVISORY_OPTION_VOLATILITY: dict[SACCRAssetClass, float] = {
+    # Table 2 to § __.114 -- supervisory option volatility
     SACCRAssetClass.IR: 0.50,
     SACCRAssetClass.FX: 0.15,
     SACCRAssetClass.CREDIT_IG: 1.00,
     SACCRAssetClass.CREDIT_SPEC: 1.00,
+    SACCRAssetClass.CREDIT_SUBSPEC: 1.00,
+    SACCRAssetClass.CREDIT_INDEX_IG: 0.80,
+    SACCRAssetClass.CREDIT_INDEX_SPEC: 0.80,
     SACCRAssetClass.EQUITY_SINGLE: 1.20,
     SACCRAssetClass.EQUITY_INDEX: 0.75,
     SACCRAssetClass.COMMODITY_ELEC: 1.50,
@@ -179,25 +263,57 @@ SUPERVISORY_OPTION_VOLATILITY: dict[SACCRAssetClass, float] = {
 
 
 def mpor_scaling_factor(mpor_days: int) -> float:
-    """Compute the MPOR scaling factor applied to supervisory duration.
+    """Maturity factor for a margined derivative per ERBA NPR § __.114(i)(4)(i).
 
-    The factor is sqrt(MPOR / 250) normalised against a 1-year reference.
-    Per CRE52.52, the factor is:
-        1.5 * sqrt(MPOR / 250)
+    .. math::
+
+        MF = \\sqrt{\\tfrac{3}{2} \\cdot \\tfrac{MPOR}{250}}
+
+    (The previous implementation used ``1.5 * sqrt(MPOR/250)``, which
+    overstates the factor by sqrt(1.5).)
 
     Parameters
     ----------
     mpor_days : int
-        Margin period of risk in business days.
+        Margin period of risk in business days (after applying the floors
+        in § __.114(i)(4)(i)(B)).
 
     Returns
     -------
     float
-        Scaling factor.
+        Margined maturity factor.
     """
-    import numpy as np
+    return math.sqrt(1.5 * mpor_days / BUSINESS_DAYS_PER_YEAR)
 
-    return float(1.5 * np.sqrt(mpor_days / 250.0))
+
+def margined_maturity_factor(mpor_days: int) -> float:
+    """Alias of :func:`mpor_scaling_factor` with the NPR's terminology."""
+    return mpor_scaling_factor(mpor_days)
+
+
+def unmargined_maturity_factor(remaining_maturity_years: float) -> float:
+    """Maturity factor for an unmargined derivative per § __.114(i)(4)(ii).
+
+    .. math::
+
+        MF = \\sqrt{\\tfrac{\\min(M, 250)}{250}},\\quad
+        M = \\max(10\\text{ bd}, \\text{remaining maturity in bd})
+
+    Parameters
+    ----------
+    remaining_maturity_years : float
+        Remaining maturity of the contract in years.
+
+    Returns
+    -------
+    float
+        Unmargined maturity factor in (0, 1].
+    """
+    maturity_days = max(
+        float(UNMARGINED_MATURITY_FLOOR_DAYS),
+        remaining_maturity_years * BUSINESS_DAYS_PER_YEAR,
+    )
+    return math.sqrt(min(maturity_days, BUSINESS_DAYS_PER_YEAR) / BUSINESS_DAYS_PER_YEAR)
 
 
 # ============================================================================

@@ -126,7 +126,7 @@ GAP_ANALYSIS = {
         "[FAKE] RRAO — v4 hardcodes $1.5B. Real: Identify all exotic positions (1% notional) and other residual risk positions (0.1% notional). Exemption logic for listed options, embedded optionality, securitization. ~300 lines",
         "[MISSING] IMA (Internal Models Approach) — Expected Shortfall at 97.5%, 5 liquidity horizons (10/20/40/60/120 days), non-modellable risk factors, stressed ES, capital multiplier, backtesting, P&L attribution test. ~2000 lines (if IMA-approved desks exist)",
         "[MISSING] Trading Desk Infrastructure — Desk definition, boundary management, trading book/banking book boundary rules, IRT tracking, IPV, prudent valuation. ~500 lines",
-        "[MISSING] P&L Attribution Test — Desk-level: Spearman correlation > 0.7 AND KL divergence < threshold for risk-theoretical P&L vs hypothetical P&L. Determines desk eligibility for IMA. ~400 lines",
+        "[MISSING] P&L Attribution Test — Desk-level Kolmogorov-Smirnov metric on 250 days of risk-theoretical vs hypothetical P&L (ERBA NPR § __.213(c)): green KS < 0.09, amber 0.09-0.12 (PLA add-on), red > 0.12 (model-ineligible); consequences start three years after the effective date. ~400 lines",
         "[MISSING] Backtesting — 250-day rolling window. Actual P&L vs ES-based measure. Traffic light approach (green/yellow/red zones). Capital multiplier adjustment. ~300 lines",
     ],
 },
