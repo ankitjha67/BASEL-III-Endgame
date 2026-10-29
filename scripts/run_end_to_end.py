@@ -62,6 +62,14 @@ from src.capital.capital_components import (  # noqa: E402
 )
 from src.capital.capital_ratios import compute_capital_adequacy  # noqa: E402
 from src.capital.gsib.gsib_params import GSIBRuleVersion  # noqa: E402
+from src.jurisdictions.base import Jurisdiction, OpRiskInputs  # noqa: E402
+from src.jurisdictions.comparison import (  # noqa: E402
+    ComparisonResult,
+    FloorSensitivityRow,
+    build_reference_book,
+    floor_sensitivity,
+    run_comparison,
+)
 from src.data_generation.frtb_inputs import (  # noqa: E402
     DEFAULT_NET_FRACTION,
     trading_positions_to_frtb_inputs,
@@ -367,7 +375,8 @@ def run_saccr(p: Pipeline, st: StageResult) -> None:
                      "commercial_end_user": end_user, "margined": margined, "trades": len(trades),
                      "rc": r.replacement_cost, "pfe": r.pfe, "multiplier": r.multiplier,
                      "alpha": r.alpha, "ead": r.ead, "risk_weight": rw, "rwa": r.ead * rw,
-                     "notional": sum(t.notional for t in trades), "maturity": m})
+                     "notional": sum(t.notional for t in trades), "maturity": m,
+                     "mtm": v, "collateral": ns.collateral})
     p.data["saccr_rows"] = rows
     ead = sum(r["ead"] for r in rows)
     rwa = sum(r["rwa"] for r in rows)
@@ -706,6 +715,73 @@ def _num(x: Any) -> Any:
     return x
 
 
+COMPARISON_YEAR = 2027
+"""Reporting year for the cross-jurisdiction run (UK go-live; mid phase-in elsewhere)."""
+FULLY_PHASED_YEAR = 2030
+"""First year every floor schedule has reached its end-state (EU/UK 72.5% from 2030)."""
+
+
+def _comparison_op_inputs() -> OpRiskInputs:
+    """Business-indicator inputs in the BCBS item structure (OPE10), synthetic, USD $M.
+
+    Consistent with the US stage's FR Y-9C inputs: same interest income,
+    expense, earning assets and dividends; noninterest items split into
+    fee / other operating income and expense plus trading and banking-book P&L.
+    """
+    iea = list(np.linspace(2_200_000.0, 2_800_000.0, 12))
+    return OpRiskInputs(
+        interest_income=[95_000.0, 102_000.0, 115_000.0],
+        interest_expense=[45_000.0, 52_000.0, 67_000.0],
+        interest_earning_assets=[float(np.mean(iea[i * 4:(i + 1) * 4])) for i in range(3)],
+        dividend_income=[2_100.0, 2_400.0, 2_700.0],
+        fee_income=[40_000.0, 43_000.0, 47_000.0], fee_expense=[15_000.0, 16_000.0, 17_500.0],
+        other_operating_income=[8_000.0, 8_500.0, 9_000.0],
+        other_operating_expense=[11_000.0, 12_000.0, 13_500.0],
+        net_pnl_trading_book=[10_000.0, 10_500.0, 12_000.0],
+        net_pnl_banking_book=[1_300.0, -1_700.0, 700.0],
+        annual_operational_losses=[2_400.0, 2_700.0, 3_900.0, 2_600.0, 2_900.0, 3_100.0, 2_800.0,
+                                   3_200.0, 4_100.0, 3_500.0],
+    )
+
+
+def run_jurisdictions(p: Pipeline, st: StageResult) -> None:
+    """Run the bank through the BCBS, US, UK, EU, Singapore and Canada rulebooks.
+
+    Uses src.jurisdictions.comparison. Market-risk and securitisation RWA are
+    held common (US engines); everything else is computed under each regime's
+    own parameters. The bank uses standardised approaches, so the floor cannot
+    bind; the floor what-if applies each regime's schedule to hypothetical
+    modelled/SA ratios (50/60/70%) in 2027 and 2030. The US proposal has no floor.
+    """
+    book = build_reference_book(p.data["gen_credit"].exposures, p.data["saccr_rows"],
+                                _comparison_op_inputs(), seed=SEED)
+    cap = p.data["capital"]
+    common = dict(market_rwa_usd=p.data["frtb_result"].total_rwa, securitisation_rwa_usd=p.data["sec_rwa"],
+                  capital_usd={"cet1": cap.cet1.net_cet1, "tier1": cap.tier1_capital,
+                               "total": cap.total_capital},
+                  leverage_exposure_usd=p.data["adequacy"].ratios.total_leverage_exposure
+                  if hasattr(p.data["adequacy"].ratios, "total_leverage_exposure")
+                  else cap.tier1_capital / p.data["adequacy"].ratios.leverage_ratio,
+                  gsib_method1_score_bps=p.data["gsib"].method1_score_bps, us_gsib_rate=p.data["gsib_rate"],
+                  us_scb=p.data["stress"].stress_capital_buffer)
+    res = run_comparison(book, COMPARISON_YEAR, **common)
+    full = run_comparison(book, FULLY_PHASED_YEAR, **common)
+    sens = floor_sensitivity(res, (COMPARISON_YEAR, FULLY_PHASED_YEAR))
+    p.data.update(jurisdictions=res, jurisdictions_full=full, jurisdiction_book=book, floor_sens=sens)
+    st.headline = " | ".join(f"{r.jurisdiction.value} CET1 {r.cet1_ratio:.1%}" for r in res.regimes)
+    by = {r.jurisdiction: r for r in res.regimes}
+    check(st, "six regimes computed", float(len(res.regimes)), 6, 6, ".0f")
+    check(st, "US: no output floor", float(by[Jurisdiction.US].floor_applies), 0, 0, ".0f")
+    check(st, "EU floor factor 2027 (Art. 465(1))", by[Jurisdiction.EU].floor_factor, 0.60, 0.60, ".3f")
+    check(st, "UK floor factor 2027 (Art. 92(5))", by[Jurisdiction.UK].floor_factor, 0.60, 0.60, ".3f")
+    check(st, "CA floor factor (CAR Ch.1 1.5.1)", by[Jurisdiction.CA].floor_factor, 0.675, 0.675, ".3f")
+    check(st, "fully phased BCBS/EU/UK/SG floor 72.5%",
+          min(r.floor_factor for r in full.regimes if r.jurisdiction in
+              (Jurisdiction.BCBS, Jurisdiction.EU, Jurisdiction.UK, Jurisdiction.SG)), 0.725, 0.725, ".3f")
+    check(st, "UK/EU op-risk ILM = 1 (UK rule 5.9; CRR Art. 312)",
+          max(by[Jurisdiction.UK].op_ilm, by[Jurisdiction.EU].op_ilm), 1.0, 1.0, ".2f")
+
+
 def write_outputs(p: Pipeline, out: Path) -> dict[str, Any]:
     out.mkdir(parents=True, exist_ok=True)
     d = p.data
@@ -730,6 +806,11 @@ def write_outputs(p: Pipeline, out: Path) -> dict[str, Any]:
         g = d["gsib"]
         summary["gsib"] = {"method1_bps": g.method1_score_bps, "method2_bps": g.method2_score_bps,
                            "surcharge": g.final_surcharge_pct, "binding": str(g.binding_method)}
+    if "jurisdictions" in d:
+        summary["jurisdictions"] = {"year": d["jurisdictions"].year, "fx_source": d["jurisdictions"].fx_source,
+                                    "common_components": d["jurisdictions"].common_components,
+                                    "rows": d["jurisdictions"].table(),
+                                    "fully_phased": d["jurisdictions_full"].table()}
     (out / "e2e_results.json").write_text(json.dumps(summary, indent=2, default=str))
 
     # ---- Excel workbook -------------------------------------------------
@@ -760,6 +841,14 @@ def write_outputs(p: Pipeline, out: Path) -> dict[str, Any]:
                               ("ilm", o.ilm), ("rwa", o.rwa)], columns=["item", "value_$M"]).to_excel(w, sheet_name="OpRisk", index=False)
             if "ffiec_a" in d:
                 pd.DataFrame(list(d["ffiec_a"].model_dump().items()), columns=["line", "value"]).to_excel(w, sheet_name="FFIEC101_SchedA", index=False)
+            if "jurisdictions" in d:
+                pd.DataFrame(d["jurisdictions"].table()).to_excel(w, sheet_name="Jurisdictions_2027", index=False)
+                pd.DataFrame(d["jurisdictions_full"].table()).to_excel(w, sheet_name="Jurisdictions_2030", index=False)
+                pd.DataFrame([{"jurisdiction": r.jurisdiction.value, "class": c, "rwa_$M": v}
+                              for r in d["jurisdictions"].regimes for c, v in r.credit_rwa_by_class.items()]
+                             ).to_excel(w, sheet_name="Jurisdiction_Credit", index=False)
+                pd.DataFrame([x.model_dump() for x in d["floor_sens"]]).to_excel(
+                    w, sheet_name="Output_Floor_WhatIf", index=False)
             if "reports" in d and d["reports"].fr_y9c is not None:
                 pd.DataFrame(list(d["reports"].fr_y9c.model_dump().items()), columns=["field", "value"]).astype(str).to_excel(w, sheet_name="FR_Y9C", index=False)
     except Exception as exc:  # noqa: BLE001
@@ -868,7 +957,50 @@ def write_markdown(p: Pipeline, summary: dict[str, Any], out: Path) -> None:
             for c in checks:
                 det = getattr(c, "message", "") or getattr(c, "description", "")
                 L.append(f"| {getattr(c, 'check_name', getattr(c, 'name', ''))} | {getattr(c, 'passed', '')} | {str(det)[:100]} |")
+    if "jurisdictions" in d:
+        L.extend(_jurisdiction_markdown(d["jurisdictions"], d["jurisdictions_full"], d["floor_sens"]))
     (out / "E2E_Report.md").write_text("\n".join(L) + "\n")
+
+
+def _jurisdiction_markdown(res: ComparisonResult, full: ComparisonResult,
+                           sens: list[FloorSensitivityRow]) -> list[str]:
+    """Markdown section comparing the six regimes."""
+    L = [f"\n## Multi-jurisdiction comparison ({res.year}; end-state rules {full.year})\n",
+         "Same synthetic bank under each rulebook. Held common: " + "; ".join(res.common_components) + ".",
+         f"FX: {res.fx_source}. The bank uses standardised approaches, so no output floor binds; "
+         "see the floor what-if below (US proposal: no floor).\n",
+         "| Regime | SA credit RWA | CCR RWA | CVA RWA | Op RWA (ILM) | Total RWA | Floor factor | CET1 | "
+         "CET1 req. | Surplus | Leverage req. |",
+         "|---|---|---|---|---|---|---|---|---|---|---|"]
+    for r in res.regimes:
+        fl = f"{r.floor_factor:.1%}" if r.floor_applies else "none"
+        L.append(f"| {r.jurisdiction.value} | {r.credit_rwa:,.0f} | {r.ccr_rwa:,.0f} | {r.cva_rwa:,.0f} | "
+                 f"{r.op_rwa:,.0f} ({r.op_ilm:.2f}) | {r.total_rwa:,.0f} | {fl} | "
+                 f"{r.cet1_ratio:.2%} | {r.cet1_requirement:.2%} | {r.cet1_surplus:+.2%} | "
+                 f"{r.leverage_requirement:.2%} |")
+    L += [f"\nEnd-state rules ({full.year}: transitionals such as equity phase-ins and the EU UCC CCF "
+          "have run off):\n", "| Regime | Total RWA | CET1 | vs " + str(res.year) + " |", "|---|---|---|---|"]
+    by_now = {r.jurisdiction: r for r in res.regimes}
+    for r in full.regimes:
+        L.append(f"| {r.jurisdiction.value} | {r.total_rwa:,.0f} | {r.cet1_ratio:.2%} | "
+                 f"{r.total_rwa - by_now[r.jurisdiction].total_rwa:+,.0f} |")
+    L += ["\nOutput-floor what-if: floor add-on ($M) for a hypothetical internal-models bank whose modelled "
+          "RWA is 50/60/70% of its standardised RWA (scenario grid, not model output):\n",
+          "| Regime | Year | Floor | 50% | 60% | 70% |", "|---|---|---|---|---|---|"]
+    keyed: dict[tuple[str, int], dict[float, FloorSensitivityRow]] = {}
+    for x in sens:
+        keyed.setdefault((x.jurisdiction.value, x.year), {})[x.modelled_to_sa] = x
+    for (jur, yr), cells in keyed.items():
+        first = next(iter(cells.values()))
+        fl = f"{first.floor_factor:.1%}" if first.floor_applies else "none"
+        L.append(f"| {jur} | {yr} | {fl} | " + " | ".join(f"{cells[k].add_on:,.0f}" for k in sorted(cells)) + " |")
+    L += ["\nSA credit RWA by exposure class ($M):\n"]
+    classes = sorted({c for r in res.regimes for c in r.credit_rwa_by_class})
+    L.append("| Class | " + " | ".join(r.jurisdiction.value for r in res.regimes) + " |")
+    L.append("|---|" + "---|" * len(res.regimes))
+    for c in classes:
+        L.append(f"| {c} | " + " | ".join(f"{r.credit_rwa_by_class.get(c, 0.0):,.0f}" for r in res.regimes) + " |")
+    return L
 
 
 def main() -> int:
@@ -897,6 +1029,7 @@ def main() -> int:
         ("Large exposures (SCCL)", run_large_exposures),
         ("Fed reports (Y-9C, 101, Y-15, Y-14)", run_reports),
         ("Pillar 3 disclosures", run_pillar3),
+        ("Multi-jurisdiction comparison", run_jurisdictions),
     ]
     for name, fn in stages:
         p.run(name, lambda st, fn=fn: fn(p, st))

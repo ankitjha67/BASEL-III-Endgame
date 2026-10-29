@@ -72,8 +72,15 @@ config/                 # Regulatory parameters (JSON/YAML)
   speculative; 50% sub-speculative; 100% defaulted); LGD 100/75/50 (US PSE)/25 (covered, GSE-guaranteed);
   HBR = long/(long+|short|); CTP total = max(Σ[max(DRC_b,0) + 0.5·min(DRC_b,0)], 0)
 - FRTB IMA: m_c 1.5 (ladder to 2.0), ES 97.5%, ω 0.5, SES ρ_b 0.36, PLA KS 0.09/0.12 (3-year transition)
-- G-SIB Method 2 coefficients adjusted by 1.2x downward factor (separate G-SIB NPR — not covered by the ERBA NPR text)
-- G-SIB surcharge bands: 20bp score ranges / 0.1% increments (not 100bp/0.5%)
+- G-SIB surcharge (12 CFR 217.403-405 and the separate G-SIB NPR, FR Doc. 2026-05961, 91 FR 14908):
+  Method 1 = indicator / aggregate global amount (FR Doc. 2025-22964) × 10,000 × weight (Table 1 to
+  § 217.404; the NPR adds trading-volume indicators 1.67%/1.67% and cuts underwriting to 3.33%);
+  substitutability capped at **100 bp** (§ 217.404(b)(2)); Method 1 keeps the **100 bp / Table 1 to
+  § 217.403** bands (unchanged by the NPR). Method 2 = indicator in $bn × fixed coefficient; the NPR
+  divides the coefficients by 1.2, indexes them by a GDP growth adjustment, makes weighted STWF an
+  indicator with coefficient 23.003 (no average-RWA denominator; § 217.406 removed), and maps the score
+  with **20 bp / 0.1% bands above 190 bp** (1.0% at or below 189 bp). STWF weights: Table 1 to
+  § 217.406 (4 funding categories × 4 maturity buckets)
 - Operational risk BI noninterest component uses the NET basis with the 0.7x factor applied to
   investment management, investment services AND non-lending treasury services (§ __.150(c)(1)(ii));
   ILDC caps net interest at 2.25% of interest-earning assets; loss-data threshold $20,000
@@ -92,7 +99,8 @@ config/                 # Regulatory parameters (JSON/YAML)
 - FFIEC 101 Schedule A: RWA by exposure type (line references 1a-16b)
 - FR Y-15: Systemic risk report (12 indicators, Method 1/2 scores)
 - FR Y-14A/Q: Capital assessment and stress testing
-- Pillar 3: OV1, KM1, CC1, CC2, CR1-CR5, SEC1-SEC4, MR1-MR4, OR1, LR1-LR2
+- Pillar 3: OV1, KM1, CC1, CC2, CR1-CR5, SEC1-SEC4, MR1-MR3 (Basel Framework DIS50: MR1 SA,
+  MR2 IMA banks only, MR3 simplified-SA banks only; MR4 withdrawn), OR1, LR1-LR2
 
 ### Model Governance (SR 11-7)
 - Every model assumption must be documented in `docs/model_documentation.md`
@@ -191,13 +199,14 @@ reporting/* (depends on ALL)
 - Capital: CET1/AT1/T2 components, regulatory deductions, threshold tests
 - RWA Aggregator: credit + market + operational + CVA (output floor NOT applied)
 - Capital Ratios: CET1/T1/Total/SLR, PCA classification, buffer stack
-- G-SIB: Method 1/2, 20bp bands, 0.1% increments, 1.2x downward factor
+- G-SIB: current rule and 2026 G-SIB NPR side by side (see Critical Rules); FR Y-15 delegates to
+  `src/capital/gsib` so the report and the capital stack share one implementation
 - ECL: PD/LGD/EAD models, IFRS 9 staging, CECL calculator
 - IRB: Vasicek formula (comparison only)
 
 ### Phase 5 — COMPLETE (Pillar 2/3, Reporting, Stress Testing)
 - Pillar 2: ICAAP engine, IRRBB (EVE/NII, 6 scenarios), buffer calculator
-- Pillar 3: OV1, KM1, CC1/CC2, CR1-CR5, MR1-MR4, OR1, LR1-LR2
+- Pillar 3: OV1, KM1, CC1/CC2, CR1-CR5, MR1-MR3 (DIS50), OR1, LR1-LR2
 - Reporting: FR Y-9C, FFIEC 101, FR Y-15, FR Y-14A/Q
 - Stress Testing: CCAR scenarios, 9-quarter capital projection, SCB
 
@@ -205,6 +214,20 @@ reporting/* (depends on ALL)
 - Utils: Math helpers, BCBS 239 lineage/data quality framework
 - Reference Data: Counterparty registry, instrument classification
 - Data Generation: Synthetic portfolio and financial statement generators
+
+### Phase 7 — COMPLETE (Multi-jurisdiction engines, 2026-10-29)
+`src/jurisdictions/` — one package per regulator implementing `RegimeCalculator` (`base.py`):
+SA credit risk (all exposure classes, CCFs, CRM), operational risk, output floor, capital/buffer/
+leverage stack, SA-CCR EAD, BA-CVA. Verbatim parameter references in `docs/jurisdictions/`.
+- `bcbs` — Basel Framework (consolidated), cross-checked with d424
+- `us` — adapter over the ERBA NPR calculators in `src/`
+- `uk` — PRA PS1/26 (PRA Rulebook CRR Firms (CRR) Instrument 2026)
+- `eu` — CRR3, Regulation (EU) 2024/1623 (+ consolidated CRR for unchanged articles)
+- `sg` — MAS Notice 637 (version effective 1 January 2026)
+- `ca` — OSFI CAR 2026
+- `comparison.py` — one bank through all six rulebooks (ECB 31 Dec 2024 FX for local-currency
+  thresholds) plus an output-floor what-if; e2e stage 18. Market-risk and securitisation RWA are
+  held common (US engines) — jurisdictional FRTB / securitisation calibrations are not yet modelled.
 
 ### Gap Analysis Summary (Reconciled to the March 2026 ERBA NPR text, 2026-10-28 — actual `wc -l` counts)
 | Module | Src Lines | Target | Status |
@@ -227,6 +250,8 @@ reporting/* (depends on ALL)
 | Core | 820 | — | Enums re-mapped to NPR bucket taxonomies |
 | **Src total** | **51,185** | **~49,000** | — |
 | Tests | 14,321 lines / 1,374 tests | 8,000 | All passing |
+| Jurisdictions (2026-10-29) | ~13,700 src+tests / 1,543 tests | — | BCBS, US, UK, EU, SG, CA |
+| **Full suite (2026-10-29)** | **2,992 tests** | — | All passing |
 
 Regulatory-accuracy status is tracked in `docs/AUDIT_REPORT.md` (Part 1: formula audit;
 Part 2: reconciliation against the ERBA NPR text). The verbatim transcription of the NPR

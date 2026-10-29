@@ -270,3 +270,51 @@ README.md and docs/migration_guide.md were updated for the same claims.
   (RW_DRC = RW_SEC × 8 %); the legacy rating table is available only behind an explicit switch.
 * G-SIB surcharge parameters (Method 2 coefficients, 1.2× factor, 20 bp bands) come from the
   separate G-SIB NPR, which was not part of this review.
+
+---
+
+# Part 3 — G-SIB rule-text reconciliation, open issues, multi-jurisdiction build (2026-10-29)
+
+## 3.1 G-SIB surcharge, reconciled to the rule text
+
+Sources: 12 CFR 217.403–406 (eCFR, current rule); the G-SIB NPR, FR Doc. 2026-05961 (91 FR 14908–14949,
+27 Mar 2026), read in full; the 2025 aggregate global indicator amounts, FR Doc. 2025-22964.
+
+| Item | Was | Now (citation) |
+|---|---|---|
+| Method 1 bands | 20 bp / 0.1% steps | Table 1 to § 217.403 (130–229: 1.0%, 230–329: 1.5%, …, 530–629: 3.5%, then +1.0% per 100 bp). The NPR keeps these unchanged (preamble § II.D). |
+| Substitutability cap | 500 bp | 100 bp on the weighted sum (§ 217.404(b)(2)) |
+| Method 1 weights | 12 indicators | Current rule: 12. NPR: 14, adding trading volume (fixed income, and equity and other) at 1.67% each; underwriting 3.33% |
+| Method 1 denominators | Illustrative values | 2025 aggregate global indicator amounts (FR Doc. 2025-22964) |
+| Method 2 indicator scores | Global denominators × 20% weights | Indicator in $bn × fixed coefficient (Table 1 to § 217.405). The NPR divides each coefficient by 1.2 and then by the GDP growth adjustment. |
+| STWF score | Ratio to total assets × 291.67 × 10,000 | Current rule: weighted STWF ÷ average RWA × 350 (§ 217.406(a)). NPR: indicator in $bn × 23.003 with no RWA denominator, and § 217.406 removed. |
+| STWF weights | One vector (25/10/3/1%) | Table 1 to § 217.406: funding category 1–4 × maturity bucket |
+| Method 2 bands | 20 bp from 130 bp | Current rule: Table 2 to § 217.403. NPR: 1.0% up to 189 bp, then 1.1% + 0.1% per 20 bp above 190 bp. |
+| FR Y-15 | Separate scoring with its own denominators and weights | Delegates to `src/capital/gsib`. Report cross-validation is now 4/4. |
+
+## 3.2 Other open issues closed
+
+- **SCB.** The end-to-end ratios now take the SCB from the CCAR projection: max(2.5%, peak-to-trough
+  decline + four quarters of dividends ÷ RWA).
+- **Pillar 3 market risk** is realigned to Basel Framework DIS50. MR1 has 12 rows. MR2 is the IMA
+  template, with the row 8, 12 and 16 formulas. MR3 is the simplified-SA template. MR4 no longer exists
+  and is removed. MR2 and MR3 are required only for banks using those approaches.
+- **FRTB DRC securitisation.** The non-CTP and CTP calculators are now called from the master FRTB
+  calculator; previously their positions were ignored.
+- **POC (`main_v4_poc.py`).** SA-CCR, BA-CVA, FRTB, operational risk and G-SIB now use the `src/`
+  calculators. This replaces the hard-coded FRTB charges, the ad-hoc CVA formula (with a mislabelled
+  β = 0.65) and the invented method 2 score of 580 bp.
+
+## 3.3 Multi-jurisdiction engines
+
+`src/jurisdictions/` covers BCBS, US, UK (PRA PS1/26), EU (CRR3), Singapore (MAS 637) and Canada
+(OSFI CAR 2026), with 1,543 tests. See `docs/jurisdictions/README.md` for the differences matrix and
+the open `TODO: VERIFY` items. Points needing an owner decision:
+
+- **OSFI CAR transactor weight.** The text prints 15% (CAR Ch.4, para. 85, checked on OSFI's own
+  Chapter 4 page) but cites CRE20.68, which is 45%. The engine applies the more conservative 45% by
+  default; the flag `ca_apply_printed_transactor_rw` switches to the printed 15%.
+- **UK.** Buffer rates and leverage requirements sit outside the PS1/26 rule instrument. BCBS
+  placeholders are used and flagged.
+- **FRTB and securitisation** are held common across regimes in the comparison (US engines);
+  jurisdiction-specific calibrations are not yet modelled.
