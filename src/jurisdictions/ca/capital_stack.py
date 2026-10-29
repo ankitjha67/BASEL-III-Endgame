@@ -4,8 +4,9 @@ Stack (s.1.6-1.10): CET1 4.5% / Tier 1 6% / Total 8%; capital conservation buffe
 countercyclical buffer 0-2.5% (jurisdictional weighted average); D-SIB surcharge 1% CET1
 (the higher of the D-SIB and G-SIB surcharges applies, Annex 1); Domestic Stability Buffer
 0-4.0% for D-SIBs -- a Pillar 2 buffer whose level is set in OSFI's semi-annual announcements,
-not in CAR, so it is an input here. Leverage: 3% minimum; D-SIBs 3.5% (CAR Ch.4 s.4.1.4,
-Ch.1 Table 7), i.e. a 0.5% D-SIB leverage buffer.
+not in CAR, so it is an input here. Leverage (OSFI Leverage Requirements Guideline (2023) s.IV):
+3% minimum; D-SIB leverage ratio buffer = 50% of the D-SIB's higher-loss absorbency requirement
+(0.5% with the 1% D-SIB surcharge, i.e. 3.5%; 50% of the G-SIB surcharge where that is higher).
 
 References:
     - OSFI CAR 2026 Ch.1 s.1.6-1.10, Tables 2-8, Annexes 1-2
@@ -60,8 +61,10 @@ def capital_requirements(
                                    "jurisdictional rates) [RBC 30.8-30.14]"),
         "systemic_buffer": ("CAR Ch.1 s.1.8 (D-SIB 1% CET1) and Annex 1 (higher of D-SIB and "
                             "G-SIB surcharges) [RBC 40]"),
-        "leverage": ("CAR Ch.4 s.4.1.4: minimum Leverage Ratio 3%; D-SIBs >= 3.5% (Ch.1 Table 7); "
-                     "Leverage Requirements Guideline governs"),
+        "leverage": ("OSFI Leverage Requirements Guideline (2023) s.IV: minimum 3% [LEV 20.7]; "
+                     "D-SIB leverage ratio buffer = 50% of the higher-loss absorbency requirement "
+                     "(1% D-SIB -> 3.5%) [LEV 40.1-40.2]; authorized leverage ratios are "
+                     "bilateral and not modelled"),
     }
     dsb = 0.0
     if domestic_stability_buffer is None:
@@ -89,7 +92,7 @@ def capital_requirements(
         systemic_risk_buffer=0.0,
         stress_buffer=dsb,
         leverage_minimum=p.LEVERAGE_MINIMUM,
-        leverage_buffer=p.DSIB_LEVERAGE_BUFFER if is_dsib else 0.0,
+        leverage_buffer=p.DSIB_LEVERAGE_BUFFER_SHARE_OF_HLA * systemic if is_dsib else 0.0,
         citations=citations,
     )
 

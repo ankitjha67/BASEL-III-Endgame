@@ -81,17 +81,23 @@ of the D-SIB and G-SIB surcharges will apply". Bucket rates transcribed from Bas
 RBC40.4 Table 1 (CAR itself does not tabulate the buckets)."""
 
 LEVERAGE_MINIMUM: Final[float] = 0.030
-"""CAR Ch.4 s.4.1.4 (SCRA Grade A, Canadian banks) -- "Banks are required to have a minimum
-Leverage Ratio of 3%" [CRE 20.24]; full requirements in OSFI's Leverage Requirements Guideline
-(CAR Ch.4 footnote 18)."""
+"""OSFI Leverage Requirements Guideline (2023) s.IV paragraph 17 -- "Institutions are expected to
+maintain a leverage ratio that meets or exceeds 3% at all times" [LEV 20.7]; also CAR Ch.4 s.4.1.4
+("Banks are required to have a minimum Leverage Ratio of 3%" [CRE 20.24])."""
+DSIB_LEVERAGE_BUFFER_SHARE_OF_HLA: Final[float] = 0.50
+"""OSFI Leverage Requirements Guideline (2023) s.IV -- "The leverage ratio buffer will be set at 50%
+of a D-SIB's higher-loss absorbency risk-weighted requirements. For example, a D-SIB subject to a
+1% higher-loss absorbency requirement would be subject to a 0.5% leverage ratio buffer
+requirement." [LEV 40.1-40.2]. Met with Tier 1; applies to D-SIBs only."""
 DSIB_LEVERAGE_REQUIREMENT: Final[float] = 0.035
-"""CAR Ch.4 s.4.1.4 -- "Banks designated by OSFI as D-SIB are expected to maintain a leverage
-ratio that meets or exceeds 3.5% at all times"; consistent with Ch.1 s.1.8 Table 7 Tier 1
-leverage ranges 3%-3.50%."""
-DSIB_LEVERAGE_BUFFER: Final[float] = DSIB_LEVERAGE_REQUIREMENT - LEVERAGE_MINIMUM
-"""0.5% D-SIB leverage buffer implied by CAR Ch.1 Table 7 (3.00% -> 3.50%)."""
-# TODO: VERIFY -- the Leverage Requirements Guideline (not supplied) is the governing text for
-# the 3%/3.5% leverage figures; they are taken here from CAR Ch.4 s.4.1.4 and Ch.1 Table 7.
+"""LR s.IV -- "This means that DSIBs are expected to maintain a leverage ratio that meets or exceeds
+3.5% at all times" (with the 1% D-SIB surcharge); also CAR Ch.4 s.4.1.4 and Ch.1 Table 7 / LR
+Table 1 Tier 1 leverage ranges 3%-3.50%."""
+DSIB_LEVERAGE_BUFFER: Final[float] = DSIB_LEVERAGE_BUFFER_SHARE_OF_HLA * DSIB_SURCHARGE
+"""0.5% = 50% x the 1% D-SIB surcharge (LR s.IV); confirmed against the Leverage Requirements
+Guideline (the previous TODO: VERIFY is resolved). Where a G-SIB surcharge above 1% applies (the
+higher of the D-SIB and G-SIB surcharges, CAR Ch.1 Annex 1), the buffer is 50% of that HLA.
+Institution-specific authorized leverage ratios are set bilaterally and are not modelled."""
 
 CONSERVATION_RATIOS_NON_DSIB: Final[tuple[tuple[float, float], ...]] = (
     (0.05125, 1.00), (0.0575, 0.80), (0.06375, 0.60), (0.070, 0.40),

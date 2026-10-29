@@ -115,8 +115,10 @@ are also designated as G-SIBs, the higher of the D-SIB and G-SIB surcharges will
 ### Leverage (stated in CAR Ch.4 s.4.1.4, SCRA Grade A for Canadian banks)
 "Banks are required to have a minimum Leverage Ratio of 3%. Banks designated by OSFI as D-SIB are
 expected to maintain a leverage ratio that meets or exceeds 3.5% at all times." → D-SIB leverage
-buffer 0.5% (consistent with Table 7). Governing text is the separate Leverage Requirements
-Guideline (not supplied). **⚠ VERIFY** against that guideline.
+buffer 0.5% (consistent with Table 7). Confirmed against the OSFI Leverage Requirements Guideline
+(2023): 3% minimum; the D-SIB leverage buffer is 50% of the D-SIB's higher-loss-absorbency
+requirement (0.5% at the 1% D-SIB surcharge), now computed as 0.5 x the systemic surcharge in
+`capital_stack.py`. See `CA_pillar1_reference.md`.
 
 ---
 

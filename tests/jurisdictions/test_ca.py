@@ -705,6 +705,18 @@ def test_gsib_higher_of(bucket: int, expected: float) -> None:
     assert REGIME.capital_requirements(systemic_bucket_or_rate=bucket).systemic_buffer == expected
 
 
+@pytest.mark.parametrize("bucket,expected", [(1, 0.005), (2, 0.0075), (3, 0.01), (5, 0.0175)])
+def test_leverage_buffer_half_of_hla(bucket: int, expected: float) -> None:
+    """OSFI Leverage Requirements Guideline (2023) s.IV: buffer = 50% of the D-SIB's HLA."""
+    c = REGIME.capital_requirements(systemic_bucket_or_rate=bucket)
+    assert c.leverage_buffer == pytest.approx(expected)
+    assert p.LEVERAGE_MINIMUM == 0.03
+    assert pytest.approx(0.005) == p.DSIB_LEVERAGE_BUFFER
+    assert pytest.approx(p.DSIB_LEVERAGE_REQUIREMENT) == (
+        p.LEVERAGE_MINIMUM + p.DSIB_LEVERAGE_BUFFER)
+    assert "Leverage Requirements Guideline" in c.citations["leverage"]
+
+
 def test_gsib_rate_and_non_dsib() -> None:
     assert REGIME.capital_requirements(systemic_bucket_or_rate=0.005).systemic_buffer == 0.01
     smsb = CARegime(is_dsib=False).capital_requirements(countercyclical_rate=0.01)
