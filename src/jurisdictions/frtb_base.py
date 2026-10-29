@@ -309,7 +309,12 @@ class MarketRiskCalculator(Protocol):
         ...
 
     def sbm_capital(self, sensitivities: list[FRTBSensitivity]) -> list[SBMClassResult]:
-        """SBM capital by risk class, highest of the three correlation scenarios."""
+        """SBM capital by risk class under the binding correlation scenario.
+
+        The binding scenario is the one with the largest SBM total across all
+        risk classes (MAR21.7; ERBA NPR § __.206); per-class maxima would
+        overstate capital.
+        """
         ...
 
     def drc_capital(self, positions: list[DRCPositionInput]) -> dict[str, float]:
