@@ -19,7 +19,7 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
-from src.core.enums import RiskClass, RiskMeasure
+from src.core.enums import CorrelationScenario, RiskClass, RiskMeasure
 from src.core.exceptions import CalculationError, ValidationError
 from src.core.models import Sensitivity
 
@@ -53,6 +53,7 @@ class FRTBResult(BaseModel):
     sbm_total: float = Field(default=0.0, description="Total SBM charge = delta + vega + curvature")
 
     # DRC -----------------------------------------------------------------
+    binding_scenario: str = Field(default="", description="Binding correlation scenario (§ __.206)")
     drc_nonsec: float = Field(default=0.0, description="DRC Non-Sec charge")
     drc_sec_nonctp: float = Field(default=0.0, description="DRC securitisation (non-CTP) charge")
     drc_sec_ctp: float = Field(default=0.0, description="DRC securitisation (CTP) charge")
@@ -108,6 +109,24 @@ _RISK_CLASS_MAP: dict[RiskClass, str] = {
     RiskClass.COMMODITY: "commodity",
     RiskClass.FX: "fx",
 }
+
+
+_MEASURES: tuple[str, ...] = ("delta", "vega", "curvature")
+
+
+def _scenario_charges(class_result: object, measure: str) -> dict[CorrelationScenario, float]:
+    """Capital charge of one measure by correlation scenario for a risk-class result.
+
+    Risk-class results expose either ``<measure>_results`` (a dict keyed by
+    scenario) or ``<measure>_low/_medium/_high`` attributes.
+    """
+    by_dict = getattr(class_result, f"{measure}_results", None)
+    if isinstance(by_dict, dict):
+        return {sc: float(r.capital_charge) for sc, r in by_dict.items()}
+    return {
+        sc: float(getattr(class_result, f"{measure}_{sc.value.lower()}").capital_charge)
+        for sc in CorrelationScenario
+    }
 
 
 def _partition_sensitivities(
@@ -265,16 +284,14 @@ class FRTBCalculator:
         # SBM: Partition and calculate per risk class
         # -----------------------------------------------------------------
         partitioned = _partition_sensitivities(sensitivities)
+        class_results: dict[str, object] = {}
 
         # --- GIRR ---------------------------------------------------------
         girr_sens = partitioned.get(RiskClass.GIRR, [])
         if girr_sens and self._girr is not None:
             try:
                 girr_result = self._girr.calculate(girr_sens)
-                result.girr_charge = girr_result.total_charge
-                result.girr_delta = girr_result.delta_charge
-                result.girr_vega = girr_result.vega_charge
-                result.girr_curvature = girr_result.curvature_charge
+                class_results["girr"] = girr_result
             except (CalculationError, ValidationError) as e:
                 logger.error("GIRR calculation failed: %s", e)
 
@@ -283,10 +300,7 @@ class FRTBCalculator:
         if csr_nonsec_sens and self._csr_nonsec is not None:
             try:
                 csr_nonsec_result = self._csr_nonsec.calculate(csr_nonsec_sens)
-                result.csr_nonsec_charge = csr_nonsec_result.total_charge
-                result.csr_nonsec_delta = csr_nonsec_result.delta_charge
-                result.csr_nonsec_vega = csr_nonsec_result.vega_charge
-                result.csr_nonsec_curvature = csr_nonsec_result.curvature_charge
+                class_results["csr_nonsec"] = csr_nonsec_result
             except (CalculationError, ValidationError) as e:
                 logger.error("CSR Non-Sec calculation failed: %s", e)
 
@@ -297,10 +311,7 @@ class FRTBCalculator:
                 csr_sec_nonctp_result = self._csr_sec.calculate(
                     csr_sec_nonctp_sens, is_ctp=False
                 )
-                result.csr_sec_nonctp_charge = csr_sec_nonctp_result.total_charge
-                result.csr_sec_nonctp_delta = csr_sec_nonctp_result.delta_charge
-                result.csr_sec_nonctp_vega = csr_sec_nonctp_result.vega_charge
-                result.csr_sec_nonctp_curvature = csr_sec_nonctp_result.curvature_charge
+                class_results["csr_sec_nonctp"] = csr_sec_nonctp_result
             except (CalculationError, ValidationError) as e:
                 logger.error("CSR Sec Non-CTP calculation failed: %s", e)
 
@@ -311,10 +322,7 @@ class FRTBCalculator:
                 csr_sec_ctp_result = self._csr_sec.calculate(
                     csr_sec_ctp_sens, is_ctp=True
                 )
-                result.csr_sec_ctp_charge = csr_sec_ctp_result.total_charge
-                result.csr_sec_ctp_delta = csr_sec_ctp_result.delta_charge
-                result.csr_sec_ctp_vega = csr_sec_ctp_result.vega_charge
-                result.csr_sec_ctp_curvature = csr_sec_ctp_result.curvature_charge
+                class_results["csr_sec_ctp"] = csr_sec_ctp_result
             except (CalculationError, ValidationError) as e:
                 logger.error("CSR Sec CTP calculation failed: %s", e)
 
@@ -323,10 +331,7 @@ class FRTBCalculator:
         if equity_sens and self._equity is not None:
             try:
                 equity_result = self._equity.calculate(equity_sens)
-                result.equity_charge = equity_result.total_charge
-                result.equity_delta = equity_result.delta_charge
-                result.equity_vega = equity_result.vega_charge
-                result.equity_curvature = equity_result.curvature_charge
+                class_results["equity"] = equity_result
             except (CalculationError, ValidationError) as e:
                 logger.error("Equity calculation failed: %s", e)
 
@@ -335,10 +340,7 @@ class FRTBCalculator:
         if commodity_sens and self._commodity is not None:
             try:
                 commodity_result = self._commodity.calculate(commodity_sens)
-                result.commodity_charge = commodity_result.total_charge
-                result.commodity_delta = commodity_result.delta_charge
-                result.commodity_vega = commodity_result.vega_charge
-                result.commodity_curvature = commodity_result.curvature_charge
+                class_results["commodity"] = commodity_result
             except (CalculationError, ValidationError) as e:
                 logger.error("Commodity calculation failed: %s", e)
 
@@ -347,12 +349,28 @@ class FRTBCalculator:
         if fx_sens and self._fx is not None:
             try:
                 fx_result = self._fx.calculate(fx_sens)
-                result.fx_charge = fx_result.total_charge
-                result.fx_delta = fx_result.delta_charge
-                result.fx_vega = fx_result.vega_charge
-                result.fx_curvature = fx_result.curvature_charge
+                class_results["fx"] = fx_result
             except (CalculationError, ValidationError) as e:
                 logger.error("FX calculation failed: %s", e)
+
+        # -----------------------------------------------------------------
+        # Binding correlation scenario (ERBA NPR § __.206; MAR21.7): the SBM
+        # capital is the LARGEST of the three portfolio totals, each summing
+        # delta + vega + curvature over all risk classes under ONE scenario.
+        # Taking the worst scenario per class or per measure overstates capital.
+        # -----------------------------------------------------------------
+        scenario_totals = {
+            sc: sum(sum(_scenario_charges(r, m)[sc] for m in _MEASURES) for r in class_results.values())
+            for sc in CorrelationScenario
+        }
+        binding = max(CorrelationScenario, key=lambda sc: scenario_totals[sc])
+        result.binding_scenario = binding.value if class_results else ""
+        for key, res in class_results.items():
+            d, v, c = (_scenario_charges(res, m)[binding] for m in _MEASURES)
+            setattr(result, f"{key}_delta", d)
+            setattr(result, f"{key}_vega", v)
+            setattr(result, f"{key}_curvature", c)
+            setattr(result, f"{key}_charge", d + v + c)
 
         # -----------------------------------------------------------------
         # SBM Subtotals

@@ -175,3 +175,33 @@ class TestFRTBCalculator:
         result = FRTBResult(girr_charge=11000, drc_nonsec=50000, rrao_total=5000)
         summary = calc.summary(result)
         assert "GIRR" in summary or "girr" in summary.lower()
+
+
+def test_sbm_uses_one_binding_scenario_on_portfolio_total() -> None:
+    """ERBA NPR § __.206 / MAR21.7: SBM = max over scenarios of the portfolio total."""
+    import numpy as np
+
+    from src.core.enums import CorrelationScenario
+    from src.data_generation.frtb_inputs import trading_positions_to_frtb_inputs
+    from src.data_generation.portfolio_generator import PortfolioGenerator
+    from src.market_risk.frtb.calculator import _MEASURES, FRTBCalculator, _scenario_charges
+
+    pos = PortfolioGenerator(seed=5).generate_trading_portfolio().positions
+    sens, _ = trading_positions_to_frtb_inputs(pos, np.random.default_rng(5))
+    calc = FRTBCalculator()
+    res = calc.calculate(sensitivities=sens)
+    # Recompute every scenario total from the per-class calculators
+    from src.market_risk.frtb.calculator import _partition_sensitivities
+
+    parts = _partition_sensitivities(sens)
+    per_class = []
+    for rc, items in parts.items():
+        sub = {"GIRR": calc._girr, "CSR_NON_SEC": calc._csr_nonsec, "EQUITY": calc._equity,
+               "COMMODITY": calc._commodity, "FX": calc._fx}[rc.value]
+        per_class.append(sub.calculate(items))
+    totals = {sc: sum(sum(_scenario_charges(r, m)[sc] for m in _MEASURES) for r in per_class)
+              for sc in CorrelationScenario}
+    assert res.sbm_total == pytest.approx(max(totals.values()))
+    worst_per_class = sum(r.total_charge for r in per_class)
+    assert res.sbm_total <= worst_per_class + 1e-9
+    assert res.binding_scenario == max(totals, key=totals.get).value
