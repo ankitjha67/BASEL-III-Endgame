@@ -257,7 +257,7 @@ leverage stack, SA-CCR EAD, BA-CVA. Verbatim parameter references in `docs/juris
 | **Src total** | **51,185** | **~49,000** | — |
 | Tests | 14,321 lines / 1,374 tests | 8,000 | All passing |
 | Jurisdictions (2026-10-29) | ~13,700 src+tests / 1,543 tests | — | BCBS, US, UK, EU, SG, CA |
-| **Full suite (2026-10-29)** | **2,992 tests** | — | All passing |
+| **Full suite (2026-10-29)** | **5,636 tests** | — | All passing (incl. per-jurisdiction FRTB + Pillar 1) |
 
 Regulatory-accuracy status is tracked in `docs/AUDIT_REPORT.md` (Part 1: formula audit;
 Part 2: reconciliation against the ERBA NPR text). The verbatim transcription of the NPR
