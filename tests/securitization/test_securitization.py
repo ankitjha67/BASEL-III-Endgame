@@ -261,7 +261,7 @@ class TestSECSA:
         assert result.k_g == pytest.approx(0.04)
 
     def test_k_a_with_delinquency(self, calc) -> None:
-        """K_A = K_G + W * (1 - K_G) per CRE40.54."""
+        """K_A = (1 - W) * K_G + 0.5 * W (ERBA NPR § __.133; Basel Framework CRE41.8)."""
         from src.securitization.sec_framework import SecuritizationPool
         pool = SecuritizationPool(
             pool_id="P1", total_ead=1e9, pool_rwa=500e6,
@@ -270,7 +270,7 @@ class TestSECSA:
         tranche = self._make_tranche("T1", 0.10, 0.50, 100e6)
         result = calc.calculate([tranche], pool)
         k_g = 500e6 * 0.08 / 1e9
-        expected_ka = k_g + 0.2 * (1 - k_g)
+        expected_ka = (1 - 0.2) * k_g + 0.5 * 0.2
         assert result.k_a == pytest.approx(expected_ka)
 
     def test_ssfa_rw_is_12_5_times_k_ssfa_above_ka(self, calc) -> None:

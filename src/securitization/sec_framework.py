@@ -39,6 +39,7 @@ from src.securitization.sec_params import (
     CTP_LONG_FLOOR,
     CTP_SHORT_FLOOR,
     DEFAULT_POOL_CAPITAL_RATIO,
+    DELINQUENT_EXPOSURE_CAPITAL,
     MAX_POOL_CAPITAL_RATIO,
     MAX_RISK_WEIGHT,
     MINIMUM_CAPITAL_RATIO,
@@ -423,7 +424,9 @@ class SecuritizationCalculator:
         k_g = self._compute_k_g(pool)
 
         # Delinquency-adjusted K_A per CRE40.54
-        k_a = k_g + pool.delinquency_ratio * (1 - k_g)
+        # K_A = (1 - W) K_G + 0.5 W (ERBA NPR § __.133; CRE41.8)
+        w = pool.delinquency_ratio
+        k_a = (1.0 - w) * k_g + DELINQUENT_EXPOSURE_CAPITAL * w
 
         total_rwa = 0.0
         stc_rwa = 0.0
@@ -542,7 +545,7 @@ class SecuritizationCalculator:
             u = D - K_A
             l = max(A - K_A, 0)
             p = supervisory parameter (0.5 non-resec, 1.5 resec, 0.3 STC)
-            K_A = K_g + W * (1 - K_g) [delinquency-adjusted pool capital]
+            K_A = (1 - W) * K_g + 0.5 * W [delinquency-adjusted pool capital]
 
         Args:
             tranche: The tranche to evaluate.

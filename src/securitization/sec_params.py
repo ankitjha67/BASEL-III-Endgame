@@ -257,6 +257,10 @@ SEC_IRBA_OMEGA: float = 20.0
 W_THRESHOLD_LOW: float = 0.0
 W_THRESHOLD_HIGH: float = 1.0
 
+DELINQUENT_EXPOSURE_CAPITAL: float = 0.5
+"""Capital charge applied to the delinquent share W of the pool:
+K_A = (1 - W) * K_G + W * 0.5 (ERBA NPR § __.133; Basel Framework CRE41.8)."""
+
 # Default K_g (pool capital ratio) when pool RWA data is unavailable
 # per CRE40.48 — conservative assumption of 8%
 DEFAULT_POOL_CAPITAL_RATIO: float = 0.08
