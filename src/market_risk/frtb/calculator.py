@@ -19,7 +19,7 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
-from src.core.enums import CorrelationScenario, RiskClass, RiskMeasure
+from src.core.enums import CorrelationScenario, RiskClass
 from src.core.exceptions import CalculationError, ValidationError
 from src.core.models import Sensitivity
 
@@ -360,7 +360,9 @@ class FRTBCalculator:
         # Taking the worst scenario per class or per measure overstates capital.
         # -----------------------------------------------------------------
         scenario_totals = {
-            sc: sum(sum(_scenario_charges(r, m)[sc] for m in _MEASURES) for r in class_results.values())
+            sc: sum(
+                sum(_scenario_charges(r, m)[sc] for m in _MEASURES) for r in class_results.values()
+            )
             for sc in CorrelationScenario
         }
         binding = max(CorrelationScenario, key=lambda sc: scenario_totals[sc])
