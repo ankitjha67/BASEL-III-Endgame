@@ -244,7 +244,7 @@ def build_toc(doc):
         ("10", "CVA Risk: BA-CVA, SA-CVA & Exemptions"),
         ("11", "FRTB Market Risk: SBM Risk Weights, DRC, RRAO & IMA"),
         ("12", "Operational Risk: BI Components, BIC, ILM & Loss Data"),
-        ("13", "Securitization: SEC-SA, SEC-ERBA, STS & Risk Retention"),
+        ("13", "Securitization: SEC-SA (US), SEC-ERBA (UK/EU), STS & Risk Retention"),
         ("14", "IRB Comparison: PD/LGD Floors, Correlation & Output Floor"),
         ("15", "Pillar 2, Pillar 3, Large Exposures & Liquidity"),
         ("16", "Crypto-Assets, ESG Integration & Digital Assets"),
@@ -283,10 +283,14 @@ def build_executive_summary(doc):
         "",
         "KEY FINDINGS:",
         "",
-        "1. CAPITAL IMPACT DIVERGENCE: The US approach produces approximately 6-8% higher "
-        "aggregate RWA for a typical Category I G-SIB due to: (a) no IRB for credit risk, "
-        "(b) uniform 40% CCF for commitments, (c) 250% MSA risk weight vs deduction, and "
-        "(d) absence of STS securitization benefits.",
+        "1. CAPITAL IMPACT DIVERGENCE: The US approach is estimated (illustrative model "
+        "estimate, not an NPR figure) to produce approximately 6-8% higher aggregate RWA for a "
+        "typical Category I G-SIB due to: (a) no IRB for credit risk, (b) uniform 40% CCF for "
+        "commitments, (c) 250% MSA risk weight vs deduction, and (d) absence of STS "
+        "securitization benefits. The NPR's own aggregate estimate for the nine Category I/II "
+        "BHCs is +1.9% RWA ($7,673B -> $7,820B) and +1.4% CET1 requirement standalone "
+        "(-4.8% cumulative with the G-SIB surcharge and stress test proposals), data as of "
+        "June 30, 2025 (ERBA NPR Tables VII.1-VII.5).",
         "",
         "2. CREDIT RISK: The most significant divergence is in the off-balance sheet CCF "
         "treatment. US applies a uniform 40% CCF to all commitments regardless of maturity, "
@@ -296,8 +300,11 @@ def build_executive_summary(doc):
         "3. MARKET RISK (FRTB): Risk weights and correlations are largely harmonized. "
         "The threshold for mandatory FRTB diverges: US $5B (4Q avg), UK GBP 50M, EU EUR 500M.",
         "",
-        "4. OPERATIONAL RISK: All three jurisdictions set ILM=1.0, but EU mandates "
-        "loss data collection (EUR 20K threshold, 10Y) via COREP C16.02-04.",
+        "4. OPERATIONAL RISK: None of the three jurisdictions applies an ILM (the US rule has "
+        "no ILM term at all: RWA = 12.5 x BIC). The US nevertheless requires loss-event data "
+        "collection (>= $20,000 per event, 10 years) because total operational losses are added "
+        "to the BI noninterest component; the EU mandates loss data (EUR 20K threshold, 10Y) via "
+        "COREP C16.02-04.",
         "",
         "5. OVERALL CONSERVATISM: US is most conservative on 11 of 15 dimensions. "
         "EU most conservative on 2 (IRB floors, loss data). UK occupies middle ground.",
@@ -351,22 +358,22 @@ def build_section_1(doc):
     add_subsection(doc, "1.2 FRTB Implementation Dates")
     t2 = create_table(doc, HDRS, STD4)
     rows2 = [
-        ["FRTB SA Go-Live", "July 1, 2025 (ERBA P.1087)", "January 1, 2025 (PS1/26 Ch.16)",
+        ["FRTB SA Go-Live", "Final-rule effective date; not fixed in NPR text (rule text uses bracketed placeholders, e.g. [January 1, 2027] for the AOCI transition) (ERBA NPR §__.300, P.1151)", "January 1, 2025 (PS1/26 Ch.16)",
          "January 1, 2025 (CRR3 Art 325a)"],
-        ["FRTB IMA Go-Live", "July 1, 2025 (parallel with SA) (ERBA P.1088)",
+        ["FRTB IMA Go-Live", "Final-rule effective date, with desk-level approval; PLA test has a three-year transition with no automatic consequences (ERBA NPR §__.212-213, P.380-381)",
          "January 1, 2025 (PS1/26 Ch.16.3)", "January 1, 2025 (CRR3 Art 325az)"],
-        ["FRTB IMA Approval", "Fed pre-approval required (ERBA P.1090)",
+        ["FRTB IMA Approval", "Primary Federal supervisor approval per trading desk; 250 business days of backtesting (125 with demonstration) (ERBA NPR §__.212)",
          "PRA model approval (PS1/26 Ch.16.4)", "NCA model approval (CRR3 Art 325az(2))"],
-        ["Parallel Run Period", "Not specified - direct implementation",
+        ["Parallel Run Period", "Not specified in NPR",
          "2024 parallel reporting (PS1/26 Ch.16.2)", "2024 parallel reporting (CRR3 Art 325a(3))"],
-        ["FRTB Threshold", "$5B trading activity (4Q avg) (ERBA P.1085)",
+        ["FRTB Threshold", "$5B trading assets + liabilities (4-quarter average) OR >= 10% of total assets; Category I/II holding companies regardless of trading activity (ERBA NPR §__.201, P.19, P.23)",
          "GBP 50M or 5% total assets bilateral netting (PS1/26 Ch.16.1)",
          "EUR 500M or 10% total assets (CRR3 Art 325a(1))"],
         ["Simplified SA", "N/A for Cat I/II banks", "Small firms exemption (PS1/26 Ch.16.5)",
          "Simplified SA for small trading books (CRR3 Art 325a(2))"],
-        ["DRC Go-Live", "July 1, 2025 (ERBA P.1092)", "January 1, 2025 (PS1/26 Ch.16.6)",
+        ["DRC Go-Live", "With market risk framework on effective date (ERBA NPR §__.210)", "January 1, 2025 (PS1/26 Ch.16.6)",
          "January 1, 2025 (CRR3 Art 325bk)"],
-        ["RRAO Go-Live", "July 1, 2025 (ERBA P.1093)", "January 1, 2025 (PS1/26 Ch.16.7)",
+        ["RRAO Go-Live", "With market risk framework on effective date (ERBA NPR §__.211)", "January 1, 2025 (PS1/26 Ch.16.7)",
          "January 1, 2025 (CRR3 Art 325bp)"],
     ]
     for r in rows2:
@@ -376,13 +383,13 @@ def build_section_1(doc):
     add_subsection(doc, "1.3 Credit Risk SA Implementation Dates")
     t3 = create_table(doc, HDRS, STD4)
     rows3 = [
-        ["SA-CR Go-Live", "July 1, 2025 (ERBA P.8)", "January 1, 2025 (PS1/26 Ch.3)",
+        ["SA-CR Go-Live", "Final-rule effective date (not fixed in NPR text); only AOCI transition for ERBA electors is phased ([2027]-[2032]) (ERBA NPR §__.300)", "January 1, 2025 (PS1/26 Ch.3)",
          "January 1, 2025 (CRR3 Art 92)"],
-        ["Real Estate Valuation", "Current appraised value (ERBA P.156)",
+        ["Real Estate Valuation", "Value at origination (lower of acquisition cost and appraised/evaluated market value for purchases); no PMI or provision adjustments; downward revision only if supervisor requires, extraordinary event, or improvements (ERBA NPR P.67-69)",
          "Prudent market value (PS1/26 Ch.4.5)", "Prudent market value (CRR3 Art 229)"],
-        ["CCF Transition", "Immediate full application (ERBA P.210)",
+        ["CCF Transition", "Immediate full application (ERBA NPR §__.112)",
          "Immediate full application (PS1/26 Ch.5)", "Phase-in for certain CCFs (CRR3 Art 111)"],
-        ["CRM Recognition", "Immediate (ERBA P.240)", "Immediate (PS1/26 Ch.6)",
+        ["CRM Recognition", "Immediate (ERBA NPR §__.120-121)", "Immediate (PS1/26 Ch.6)",
          "Immediate (CRR3 Art 192-241)"],
     ]
     for r in rows3:
@@ -392,27 +399,27 @@ def build_section_1(doc):
     add_subsection(doc, "1.4 Operational Risk & Other Key Dates")
     t4 = create_table(doc, HDRS, STD4)
     rows4 = [
-        ["OpRisk SMA Go-Live", "July 1, 2025 (ERBA P.950)", "January 1, 2025 (PS1/26 Ch.14)",
+        ["OpRisk Go-Live", "Final-rule effective date (not fixed in NPR text) (ERBA NPR §__.150)", "January 1, 2025 (PS1/26 Ch.14)",
          "January 1, 2025 (CRR3 Art 312a)"],
-        ["Loss Data Collection", "Not required (ERBA P.952)",
+        ["Loss Data Collection", "REQUIRED: operational loss event data >= $20,000 per event (CPI-W indexed), 10 years; total operational losses are added to the BI noninterest component (no ILM) (ERBA NPR §__.150, P.204-207, P.216)",
          "Supervisory expectation only (PS1/26 Ch.14.3)",
          "Mandatory: EUR 20K threshold, 10Y history (CRR3 Art 316)"],
-        ["SA-CCR Go-Live", "July 1, 2025 (ERBA P.450)", "January 1, 2025 (PS1/26 Ch.8)",
+        ["SA-CCR Go-Live", "Already in force since 2020 (85 FR 4362); NPR adds extended SA-CCR for cross-product netting sets (ERBA NPR §__.113-114, P.110)", "January 1, 2025 (PS1/26 Ch.8)",
          "Already effective June 2021 (CRR2 Art 274)"],
-        ["CVA Go-Live", "July 1, 2025 (ERBA P.520)", "January 1, 2025 (PS1/26 Ch.9)",
+        ["CVA Go-Live", "Final-rule effective date; scope = Cat I/II HCs, their market-risk DI subsidiaries, and market-risk banks with >= $1T OTC derivative notional (ERBA NPR §__.201)", "January 1, 2025 (PS1/26 Ch.9)",
          "January 1, 2025 (CRR3 Art 382)"],
-        ["Pillar 3 Phase 1", "March 31, 2026 first filing (ERBA P.1200)",
+        ["Pillar 3 Phase 1", "From effective date: 13 qualitative tables, 12 quarters retained; top-tier consolidated entity only (ERBA NPR §__.160-162, P.21 fn 22)",
          "H1 2025 first filing (PS1/26 Ch.18)", "June 30, 2025 first filing (CRR3 Art 431a)"],
-        ["Pillar 3 Phase 2", "September 30, 2026 (ERBA P.1201)",
+        ["Pillar 3 Phase 2", "Not specified in NPR (no phased disclosure schedule)",
          "H2 2025 (PS1/26 Ch.18.2)", "December 31, 2025 (CRR3 Art 431a(2))"],
         ["CRD6 Transposition", "N/A (US uses NPR/Final Rule process)",
          "N/A (UK uses PS/SS process)", "January 10, 2026 Member State deadline (CRD6 Art 3)"],
-        ["G-SIB Surcharge", "Recalibrated effective July 1, 2025 (ERBA P.1150)",
+        ["G-SIB Surcharge", "Separate Board G-SIB surcharge NPR (cross-referenced at ERBA NPR P.21; not reviewed here)",
          "Maintained at current levels (PS1/26 Ch.17)", "Maintained per CRD5 buffers (CRD6 Art 131)"],
-        ["Leverage Ratio", "SLR maintained at 5%/3% (ERBA P.1160)",
+        ["Leverage Ratio", "SLR 3% for Cat I-III institutions (ERBA NPR §__.10(a)(1)(v)); eSLR revised by separate Nov 2025 final rule (90 FR 55248)",
          "3.25% + countercyclical buffer (PS1/26 Ch.17.3)",
          "3% + G-SIB add-on 50% of G-SIB buffer (CRR3 Art 92(1)(d))"],
-        ["Reporting Start", "FR Y-9C: Q3 2025 (ERBA P.1205)",
+        ["Reporting Start", "Not specified in NPR beyond the effective date (FR Y-9C / FFIEC 101 changes to follow)",
          "BoE statistical return: Q1 2025 (PS1/26 Ch.18.5)",
          "COREP: Q1 2025 (CRR3 Art 430)"],
     ]
@@ -439,7 +446,7 @@ def build_section_2(doc):
          "Ordinary shares (PS1/26 SS34/15 Ch.2)", "Common shares (CRR3 Art 26(1)(a))"],
         ["Retained Earnings", "Retained earnings net of distributions (12 CFR 217.20(b)(2))",
          "Retained earnings (PS1/26 SS34/15 Ch.2.2)", "Retained earnings (CRR3 Art 26(1)(c))"],
-        ["AOCI Treatment", "AOCI included with opt-out removed (ERBA P.28-30); full AOCI recognition for Cat I-IV",
+        ["AOCI Treatment", "AOCI fully included for Category I/II (mandatory ERBA) banks; banks ELECTING ERBA lose the AOCI opt-out with a five-year transition: 100/80/60/40/20/0% of the AOCI adjustment over [2027]-[2032] (ERBA NPR P.22-23; Table 1 to §__.300)",
          "AOCI fully included; no opt-out (PS1/26 SS34/15 Ch.2.3)",
          "AOCI included with transitional IFRS 9 provisions (CRR3 Art 473a)"],
         ["Minority Interests", "Included subject to surplus test (12 CFR 217.21)",
@@ -468,7 +475,7 @@ def build_section_2(doc):
         ["Software DTA Carve-Out", "NO carve-out - full deduction of software intangibles (ERBA P.34)",
          "NO carve-out - full deduction (PS1/26 SS34/15 Ch.3.2)",
          "YES - prudentially amortized software assets EXEMPTED from deduction (CRR3 Art 36(1)(b), Delegated Reg 2020/2176); max 3Y amortization"],
-        ["MSA Treatment", "NOT deducted; 250% risk weight instead (ERBA P.36-38); changed from 2023 NPR which proposed deduction",
+        ["MSA Treatment", "NOT deducted; 250% risk weight on ALL MSAs; MSAs also removed from the 15% aggregate threshold test (ERBA NPR P.14, P.20, P.40). The 2023 NPR retained the threshold deduction (P.544)",
          "Deducted above 10% CET1 threshold; 250% RW below threshold (PS1/26 SS34/15 Ch.3.3)",
          "Deducted above 10% CET1 threshold; 250% RW below threshold (CRR3 Art 36(1)(i), Art 48)"],
         ["DTA from Timing Diff", "Subject to 10%/15% threshold test (12 CFR 217.22(d)). Below threshold: 250% RW",
@@ -477,10 +484,10 @@ def build_section_2(doc):
         ["Significant Investments", "Subject to 10%/15% threshold; 250% RW below (12 CFR 217.22(d))",
          "Subject to 10%/15% threshold (PS1/26 SS34/15 Ch.3.5)",
          "Subject to 10%/15% threshold (CRR3 Art 36(1)(i), Art 48)"],
-        ["10% Individual Threshold", "Each of MSA/DTA/SI limited to 10% of CET1 (12 CFR 217.22(d)(1)). Formula: If item > 10% * CET1_before_deductions, deduct excess",
+        ["10% Individual Threshold", "Temporary-difference DTAs and significant investments (common stock) each limited to 10% of CET1 net of adjustments (12 CFR 217.22(d)(1)); MSAs NO LONGER a threshold item under the NPR (ERBA NPR P.40). Formula: If item > 10% * CET1_before_deductions, deduct excess",
          "Same 10% test per item (PS1/26 SS34/15 Ch.3.6). Note: MSA included in this test unlike US",
          "Same 10% test per item (CRR3 Art 48(1)). MSA included in threshold test"],
-        ["15% Aggregate Threshold", "Sum of below-threshold MSA+DTA+SI cannot exceed 15% of CET1 (12 CFR 217.22(d)(2)). Formula: If (MSA_bt + DTA_bt + SI_bt) > 15% * CET1_after_other_deductions, deduct excess pro rata",
+        ["15% Aggregate Threshold", "Sum of below-threshold DTA+SI cannot exceed 15% of CET1 (12 CFR 217.22(d)(2)); MSAs excluded from the aggregate calculation under the NPR (ERBA NPR P.40). Formula: If (DTA_bt + SI_bt) > 15% * CET1_after_other_deductions, deduct excess pro rata",
          "Same 15% aggregate test (PS1/26 SS34/15 Ch.3.6)",
          "Same 15% aggregate test (CRR3 Art 48(2))"],
         ["Defined Benefit Pension", "Net asset deducted (12 CFR 217.22(a)(4))",
@@ -574,7 +581,7 @@ def build_section_2(doc):
          "6.0% of RWA (PS1/26 SS34/15 Ch.1)", "6.0% of RWA (CRR3 Art 92(1)(b))"],
         ["Total Capital Minimum", "8.0% of RWA (12 CFR 217.10(a)(3))",
          "8.0% of RWA (PS1/26 SS34/15 Ch.1)", "8.0% of RWA (CRR3 Art 92(1)(c))"],
-        ["Leverage Ratio (SLR)", "5% for G-SIBs (eSLR) / 3% for others (12 CFR 217.10(a)(5))",
+        ["Leverage Ratio (SLR)", "3% SLR minimum for Cat I-III (ERBA NPR §__.10(a)(1)(v)); eSLR buffer for G-SIBs per separate Nov 2025 final rule (90 FR 55248), previously 2% (5% total) - not changed by the ERBA NPR",
          "3.25% + countercyclical leverage buffer (PS1/26 SS34/15 Ch.1.2)",
          "3% + G-SIB add-on = 50% of G-SIB buffer rate (CRR3 Art 92(1)(d))"],
     ]
@@ -603,13 +610,13 @@ def build_section_3(doc):
         ["Method 1 (BCBS)", "12 indicators across 5 categories. Score = sum of (bank indicator / aggregate indicator) * 10000. Buckets: 130-229=1%, 230-329=1.5%, etc. (12 CFR 217.404)",
          "12 indicators, BoE systemic buffer framework (PS1/26 Ch.17.1)",
          "12 indicators, same BCBS methodology (CRD6 Art 131(2))"],
-        ["Method 2 (US-Specific)", "Substitution approach: replaces substitutability category with short-term wholesale funding (STWF). Uses 1.2x downward coefficient adjustment (ERBA P.1155). Score ranges: 20bp bands / 0.1% surcharge increments",
+        ["Method 2 (US-Specific)", "Substitution approach: replaces substitutability category with short-term wholesale funding (STWF). 1.2x downward coefficient adjustment and 20bp bands / 0.1% increments are per the SEPARATE Board G-SIB surcharge NPR (cross-referenced at ERBA NPR P.21) - model assumptions, not verified in this review",
          "N/A - Method 2 not used in UK", "Method 2 available per CRD6 Art 131(2a) but coefficients not adjusted"],
-        ["1.2x Downward Factor", "Applied to Method 2 coefficients to recalibrate surcharge lower (ERBA P.1155-1157). Effect: reduces Method 2 scores by ~17%",
+        ["1.2x Downward Factor", "Applied to Method 2 coefficients to recalibrate surcharge lower (separate G-SIB surcharge NPR; not verified). Effect: reduces Method 2 scores by ~17%",
          "N/A", "N/A - no adjustment factor applied"],
-        ["STWF in Method 2", "20% weighting in Method 2 (replaces substitutability) (ERBA P.1156)",
+        ["STWF in Method 2", "20% weighting in Method 2 (replaces substitutability) (separate G-SIB surcharge NPR; not verified). ERBA NPR impact analysis uses an STWF scaling factor of 350 (P.552)",
          "N/A", "STWF not substituted; uses original substitutability category"],
-        ["Score Bands", "20bp score ranges / 0.1% surcharge increments (ERBA P.1158). Finer granularity than BCBS 100bp/0.5%",
+        ["Score Bands", "20bp score ranges / 0.1% surcharge increments (separate G-SIB surcharge NPR; not verified). ERBA NPR impact analysis linearizes the surcharge as 0.01 + 0.00005 x max(0, score - 180) (P.552). Finer granularity than BCBS 100bp/0.5%",
          "Systemic buffer set by FPC: 0/1/1.5/2/2.5/3% (PS1/26 Ch.17.2)",
          "100bp score ranges / 0.5% surcharge increments per BCBS (CRD6 Art 131(9))"],
         ["Empty Top Bucket", "Yes - 1% empty top bucket to discourage systemic growth (12 CFR 217.404(c))",
@@ -636,7 +643,7 @@ def build_section_3(doc):
          "No explicit floor for PRA buffer", "No explicit floor for P2G"],
         ["SCB Frequency", "Annual - set after CCAR/DFAST (12 CFR 225.8(d)(4))",
          "Annual via ICAAP/SREP process (PS1/26 Ch.17.4)", "Annual via SREP (CRD5 Art 97)"],
-        ["SCB vs CCB", "SCB replaces the 2.5% CCB for US G-SIBs (ERBA P.1162). Cannot be lower than CCB",
+        ["SCB vs CCB", "SCB replaces the 2.5% CCB for Category I/II holding companies (buffer = SCB + CCyB + G-SIB surcharge); subsidiary DIs keep the 2.5% CCB (ERBA NPR P.25). Cannot be lower than 2.5%",
          "CCB = 2.5% (separate from PRA buffer) (PS1/26 Ch.17.5)",
          "CCB = 2.5% (CRD6 Art 129)"],
     ]
@@ -705,29 +712,29 @@ def build_section_4(doc):
         ["Sovereign Risk Weights", "", "", ""],
         ["US Government", "0% (12 CFR 217.32(a)(1))", "0% - CQS 1 (PS1/26 Ch.3 Table 3.1)",
          "0% - CQS 1 (CRR3 Art 114(2))"],
-        ["CRC 0-1 / CQS 1", "0% (via CRC per OECD mapping) (ERBA P.60)",
+        ["CRC 0-1 / CQS 1", "0% (OECD CRC mapping; Table 1 to §__.111, identical to current §__.32 Table 1) (ERBA NPR P.54 fn 80)",
          "0% (S&P AAA to AA-) (PS1/26 Ch.3 Table 3.1)", "0% (CRR3 Art 114(2))"],
-        ["CRC 2 / CQS 2", "0% (ERBA P.60)", "20% (S&P A+ to A-) (PS1/26 Ch.3 Table 3.1)",
+        ["CRC 2 / CQS 2", "20% (Table 1 to §__.111)", "20% (S&P A+ to A-) (PS1/26 Ch.3 Table 3.1)",
          "20% (CRR3 Art 114(2))"],
-        ["CRC 3 / CQS 3", "20% (ERBA P.60)", "50% (S&P BBB+ to BBB-) (PS1/26 Ch.3 Table 3.1)",
+        ["CRC 3 / CQS 3", "50% (Table 1 to §__.111)", "50% (S&P BBB+ to BBB-) (PS1/26 Ch.3 Table 3.1)",
          "50% (CRR3 Art 114(2))"],
-        ["CRC 4-5 / CQS 4", "50% (ERBA P.60)", "100% (S&P BB+ to B-) (PS1/26 Ch.3 Table 3.1)",
+        ["CRC 4-6 / CQS 4", "100% (CRC 4, 5 and 6) (Table 1 to §__.111)", "100% (S&P BB+ to B-) (PS1/26 Ch.3 Table 3.1)",
          "100% (CRR3 Art 114(2))"],
-        ["CRC 6 / CQS 5", "100% (ERBA P.60)", "100% (S&P BB+ to B-) (PS1/26 Ch.3 Table 3.1)",
+        ["CRC 6 / CQS 5", "100% (Table 1 to §__.111)", "100% (S&P BB+ to B-) (PS1/26 Ch.3 Table 3.1)",
          "100% (CRR3 Art 114(2))"],
-        ["CRC 7 / CQS 6", "150% (ERBA P.60)", "150% (S&P below B-) (PS1/26 Ch.3 Table 3.1)",
+        ["CRC 7 / CQS 6", "150% (also 150% for sovereign in default) (Table 1 to §__.111)", "150% (S&P below B-) (PS1/26 Ch.3 Table 3.1)",
          "150% (CRR3 Art 114(2))"],
-        ["Unrated Sovereigns", "100% (ERBA P.62) unless OECD high-income (then 0%)",
+        ["Unrated Sovereigns", "OECD member with no CRC: 0%; non-OECD with no CRC: 100% (Table 1 to §__.111)",
          "100% (PS1/26 Ch.3 Table 3.1)", "100% (CRR3 Art 114(5))"],
-        ["Domestic Currency", "0% for US obligations in USD (12 CFR 217.32(a)(1))",
+        ["Domestic Currency", "0% for US government obligations; 20% for conditional US guarantees; PPP loans 0% (ERBA NPR §__.111(a))",
          "0% for UK sovereign in GBP (PS1/26 Ch.3.1)", "0% floor option for MS in domestic currency (CRR3 Art 114(4))"],
-        ["PSE (Government)", "Same as sovereign (20% for US GSEs) (ERBA P.64)",
+        ["PSE (Government)", "US GSE senior/guaranteed 20%; GSE subordinated 150% (FHLB/Farmer Mac subordinated and equity 20%) (ERBA NPR §__.111(b)-(c), P.49-50)",
          "Same as sovereign for central govt PSEs (PS1/26 Ch.3.2)",
          "Same as sovereign (CRR3 Art 115-116)"],
-        ["PSE (Sub-Sovereign)", "20% for US states/municipalities (ERBA P.64)",
+        ["PSE (Sub-Sovereign)", "US PSE general obligation 20% / revenue obligation 50%; foreign PSE by home CRC: GO 20/50/100/150%, revenue 50/100/150% (Tables 3-4 to §__.111)",
          "One step below sovereign CQS (PS1/26 Ch.3.2)",
          "One step below sovereign CQS (CRR3 Art 115(2))"],
-        ["MDB Risk Weight", "0% for qualifying MDBs (IBRD, IFC, ADB etc) (ERBA P.66)",
+        ["MDB Risk Weight", "0% for qualifying MDBs and specified supranationals (IBRD, IFC, ADB, BIS, ECB, IMF, ESM etc) (ERBA NPR P.47 fn 65-66)",
          "0% for qualifying MDBs (PS1/26 Ch.3.3)",
          "0% for qualifying MDBs (CRR3 Art 117(2)), rated MDBs per CQS"],
     ]
@@ -737,38 +744,40 @@ def build_section_4(doc):
     # 4.2 Banks
     add_subsection(doc, "4.2 Bank Exposures")
     add_body_text(doc, "CRITICAL DIVERGENCE: The US uses a capital-adequacy-based grading system "
-        "(Grade A-HC, A-Other, B, C) per Dodd-Frank 939A, while UK/EU use external credit ratings "
+        "(Grade A meeting §__.111(d)(2), Grade A, Grade B, Grade C) per Dodd-Frank 939A, while UK/EU use external credit ratings "
         "(CQS 1-6) or SCRA for unrated banks.")
     t2 = create_table(doc, HDRS, STD4)
     rows2 = [
         ["Bank Risk Weights", "", "", ""],
-        ["Top Grade (AAA-AA)", "Grade A (HC >=$3B): 40% / Grade A (Other): 30% (ERBA P.72-74). Based on capital adequacy, not ratings",
+        ["Top Grade (AAA-AA)", "Grade A meeting §__.111(d)(2) (CET1 >= 14% AND SLR/leverage ratio >= 5%, or CBLR bank): 30%; all other Grade A: 40% (Table 2 to §__.111; ERBA NPR P.51-55). Based on capital adequacy, not ratings",
          "CQS 1 (AAA to AA-): 20% (PS1/26 Ch.3 Table 3.3)",
          "CQS 1 (AAA to AA-): 20% (CRR3 Art 120(2))"],
-        ["High Grade (A)", "Grade A (HC >=$3B): 40% / Grade A (Other): 30% (ERBA P.72-74)",
+        ["High Grade (A)", "Grade A: 40% (30% only if §__.111(d)(2) criteria met) (Table 2 to §__.111)",
          "CQS 2 (A+ to A-): 30% (PS1/26 Ch.3 Table 3.3)",
          "CQS 2 (A+ to A-): 30% (CRR3 Art 120(2))"],
-        ["Upper Medium (BBB)", "Grade B: 80% (ERBA P.76). Criteria: does not meet Grade A but not in weak condition",
+        ["Upper Medium (BBB)", "Grade B: 75% (Table 2 to §__.111; ERBA NPR P.53). Criteria: speculative grade or IG with disclosed capital ratios >= higher of minimums / adequately-capitalized",
          "CQS 3 (BBB+ to BBB-): 50% (PS1/26 Ch.3 Table 3.3)",
          "CQS 3 (BBB+ to BBB-): 50% (CRR3 Art 120(2))"],
-        ["Lower Medium (BB)", "Grade B: 80% (ERBA P.76)",
+        ["Lower Medium (BB)", "Grade B: 75% (Table 2 to §__.111)",
          "CQS 4 (BB+ to BB-): 100% (PS1/26 Ch.3 Table 3.3)",
          "CQS 4 (BB+ to BB-): 100% (CRR3 Art 120(2))"],
-        ["Speculative (B-CCC)", "Grade C: 150% (ERBA P.78). FDIC non-viable or undercapitalized",
+        ["Speculative (B-CCC)", "Grade C: 150% (Table 2 to §__.111; ERBA NPR P.54). Any bank not qualifying as Grade A or B (incl. ratios not disclosed within 6 months, adverse audit opinion within 12 months)",
          "CQS 5 (B+ to B-): 100% (PS1/26 Ch.3 Table 3.3)",
          "CQS 5 (B+ to B-): 100% (CRR3 Art 120(2))"],
-        ["Default/Junk", "Grade C: 150% (ERBA P.78)",
+        ["Default/Junk", "Grade C: 150% (Table 2 to §__.111)",
          "CQS 6 (CCC+ and below): 150% (PS1/26 Ch.3 Table 3.3)",
          "CQS 6 (CCC+ and below): 150% (CRR3 Art 120(2))"],
-        ["Unrated Banks", "Graded per capital adequacy (ERBA P.72-78)",
+        ["Unrated Banks", "All banks graded per IG status and publicly disclosed capital ratios; foreign banks floored at home-sovereign RW unless local-currency exposure (ERBA NPR P.51-55)",
          "SCRA approach: Grade A 30%/40%, Grade B 50%/75%, Grade C 150% (PS1/26 Ch.3 Table 3.4)",
          "SCRA approach: Grade A 30%/40%, Grade B 50%/75%, Grade C 150% (CRR3 Art 121)"],
-        ["Short-Term Claims <3M", "Grade A: 20% / Grade B: 50% / Grade C: 150% (ERBA P.80)",
+        ["Short-Term Claims <3M", "NO general short-term preference. Only self-liquidating trade-related contingent items to FOREIGN banks with maturity <= 3 months: 20% (Grade A) / 50% (Grade B) / 150% (Grade C) (Table 2 to §__.111; ERBA NPR P.54)",
          "CQS-based: 20%/20%/20%/50%/50%/150% (PS1/26 Ch.3 Table 3.5)",
          "CQS-based: 20%/20%/20%/50%/50%/150% (CRR3 Art 120(3))"],
-        ["Grade A Criteria (US)", "Well-capitalized (CET1>=6.5%, T1>=8%, Total>=10%, Leverage>=5%) AND not subject to corrective action (ERBA P.73). HC>=$3B: 40%; Other: 30%",
+        ["Grade A Criteria (US)", "Investment grade AND most recent publicly disclosed capital ratios >= higher of (minimum + buffers to avoid distribution limits) and well-capitalized PCA thresholds; CBLR banks qualify (ERBA NPR P.51). 30% tier: CET1 >= 14% and SLR >= 5% (Cat I-III) / tier 1 leverage >= 5% (others) / credit union net worth >= 9%; 68.3% of US DIs qualify (P.52)",
          "N/A (rating-based)", "N/A (rating-based)"],
-        ["Covered Bond from Bank", "Grade A: 20%, Grade B: 50%, Grade C: 100% (ERBA P.82)",
+        ["Subordinated Bank Debt / TLAC", "150% for subordinated bank exposures and covered debt instruments not deducted (ERBA NPR P.50 fn 71)",
+         "Per CQS / CRR treatment (PS1/26)", "150% subordinated (CRR3 Art 128)"],
+        ["Covered Bond from Bank", "No covered-bond carve-out in credit risk SA: risk-weighted as a bank exposure by Grade (30/40/75/150%); 'covered bond' defined only for market risk (ERBA NPR §__.111, §__.202)",
          "CQS 1: 10%, CQS 2: 20%, CQS 3: 20%, CQS 4-5: 50%, CQS 6: 100% (PS1/26 Ch.3 Table 3.6)",
          "CQS 1: 10%, CQS 2: 20%, CQS 3: 20%, CQS 4-5: 50%, CQS 6: 100% (CRR3 Art 129)"],
     ]
@@ -807,18 +816,18 @@ def build_section_4(doc):
     add_subsection(doc, "4.4 SME Exposures")
     t4 = create_table(doc, HDRS, STD4)
     rows4 = [
-        ["SME Definition", "Annual revenue <= $75M (ERBA P.92)",
+        ["SME Definition", "Consolidated annual revenues or sales <= $50M (CPI-W indexed) (ERBA NPR §__.101; P.78 fn 114)",
          "Annual turnover <= GBP 6.5M (PS1/26 Ch.3.6)",
          "Annual turnover <= EUR 50M (CRR3 Art 501)"],
-        ["SME Corporate RW", "100% (no explicit SME support factor in US) (ERBA P.92)",
+        ["SME Corporate RW", "100% (65% if investment grade); NO Basel 85% SME weight in US (ERBA NPR §__.111)",
          "85% effective via SME support factor 0.7619 (PS1/26 Ch.3.6)",
          "85% effective via SME support factor (CRR3 Art 501): 0.7619 for first EUR 2.5M, then per Art 501(2)"],
-        ["SME Retail RW", "75% if meets regulatory retail criteria (ERBA P.94)",
+        ["SME Retail RW", "75% if meets regulatory retail criteria (SME obligor, aggregate exposure <= $1M) (ERBA NPR §__.101, §__.111; P.80-81)",
          "75% (PS1/26 Ch.3.6)", "75% (CRR3 Art 123)"],
-        ["SME Threshold (Retail)", "Total exposure <= $1M to counterparty (ERBA P.94)",
+        ["SME Threshold (Retail)", "Aggregate retail exposure to obligor and affiliates (on + off balance sheet, full notional) <= $1M, CPI-W indexed (ERBA NPR P.80 fn 115)",
          "Total exposure <= GBP 1M (PS1/26 Ch.3.6.2)",
          "Total exposure <= EUR 1M (CRR3 Art 123(2))"],
-        ["SME Support Factor", "None - not adopted in US rules (ERBA P.92)",
+        ["SME Support Factor", "None - not adopted in US rules (ERBA NPR §__.111)",
          "Maintained via 0.7619 factor (PS1/26 Ch.3.6)",
          "Maintained: 0.7619 for first EUR 2.5M, 0.85 above (CRR3 Art 501)"],
     ]
@@ -830,21 +839,21 @@ def build_section_4(doc):
     t5 = create_table(doc, HDRS, STD4)
     rows5 = [
         ["Specialized Lending", "", "", ""],
-        ["Project Finance (Pre-Op)", "130% (ERBA P.96)", "130% (PS1/26 Ch.3 Table 3.9)",
+        ["Project Finance (Pre-Op)", "130% pre-operational phase (ERBA NPR §__.111; P.82, P.88-89)", "130% (PS1/26 Ch.3 Table 3.9)",
          "130% (CRR3 Art 122(3))"],
-        ["Project Finance (Op, HQ)", "80% if high-quality criteria met (ERBA P.96). HQ criteria: contractual CF, experienced sponsors, strong covenants, adequate equity",
+        ["Project Finance (Op, HQ)", "NO 80% high-quality tier in the US proposal: operational-phase project finance is 100% (ERBA NPR §__.111; P.88-89)",
          "80% high-quality operational (PS1/26 Ch.3 Table 3.9)",
          "80% high-quality operational (CRR3 Art 122(3))"],
-        ["Project Finance (Op, Non-HQ)", "100% (ERBA P.96)", "100% (PS1/26 Ch.3 Table 3.9)",
+        ["Project Finance (Op, Non-HQ)", "100% (operational phase = positive net cash flow covering debt service and declining long-term debt) (ERBA NPR P.89)", "100% (PS1/26 Ch.3 Table 3.9)",
          "100% (CRR3 Art 122(3))"],
-        ["Object Finance", "100% (ERBA P.98)", "100% (PS1/26 Ch.3 Table 3.9)",
+        ["Object Finance", "100% (equipment / physical commodity finance where repayment depends on the physical assets) (ERBA NPR §__.111; P.82)", "100% (PS1/26 Ch.3 Table 3.9)",
          "100% (CRR3 Art 122(3))"],
-        ["Commodity Finance", "100% (ERBA P.98)", "100% (PS1/26 Ch.3 Table 3.9)",
+        ["Commodity Finance", "100% (ERBA NPR §__.111)", "100% (PS1/26 Ch.3 Table 3.9)",
          "100% (CRR3 Art 122(3))"],
-        ["Income-Producing RE", "Covered under CRE tables (ERBA P.150-170)",
+        ["Income-Producing RE", "Covered under regulatory CRE Tables 7-8 to §__.111 (cash-flow dependent)",
          "Covered under CRE tables (PS1/26 Ch.4)",
          "Covered under CRE tables (CRR3 Art 124-126)"],
-        ["High-Quality Criteria", "7 criteria including: CF predictability, refinancing risk mitigation, contractual protections, adequate equity cushion, step-in rights (ERBA P.97)",
+        ["High-Quality Criteria", "N/A - no high-quality project finance category in the US proposal",
          "Similar criteria (PS1/26 Ch.3.7)", "Similar criteria per CRR3 Art 122(3)(a)-(g)"],
     ]
     for i, r in enumerate(rows5):
@@ -855,17 +864,17 @@ def build_section_4(doc):
     t6 = create_table(doc, HDRS, STD4)
     rows6 = [
         ["Covered Bond RWs", "", "", ""],
-        ["CQS 1 / Grade A-HC", "20% (ERBA P.82)", "10% (PS1/26 Ch.3 Table 3.6)",
+        ["CQS 1 / Grade A (§__.111(d)(2))", "No covered-bond treatment in US credit risk SA: bank-exposure RW 30% (ERBA NPR §__.111)", "10% (PS1/26 Ch.3 Table 3.6)",
          "10% (CRR3 Art 129(4))"],
-        ["CQS 2 / Grade A-Other", "20% (ERBA P.82)", "20% (PS1/26 Ch.3 Table 3.6)",
+        ["CQS 2 / Grade A-Other", "Bank-exposure RW 40% (ERBA NPR §__.111)", "20% (PS1/26 Ch.3 Table 3.6)",
          "20% (CRR3 Art 129(4))"],
-        ["CQS 3", "N/A (binary Grade system)", "20% (PS1/26 Ch.3 Table 3.6)",
+        ["CQS 3", "N/A (Grade system)", "20% (PS1/26 Ch.3 Table 3.6)",
          "20% (CRR3 Art 129(4))"],
-        ["CQS 4-5 / Grade B", "50% (ERBA P.82)", "50% (PS1/26 Ch.3 Table 3.6)",
+        ["CQS 4-5 / Grade B", "Bank-exposure RW 75% (ERBA NPR §__.111)", "50% (PS1/26 Ch.3 Table 3.6)",
          "50% (CRR3 Art 129(4))"],
-        ["CQS 6 / Grade C", "100% (ERBA P.82)", "100% (PS1/26 Ch.3 Table 3.6)",
+        ["CQS 6 / Grade C", "Bank-exposure RW 150% (ERBA NPR §__.111)", "100% (PS1/26 Ch.3 Table 3.6)",
          "100% (CRR3 Art 129(4))"],
-        ["Unrated", "50% if issuer is Grade A (ERBA P.82)", "Issue-specific CQS (PS1/26 Ch.3 Table 3.6)",
+        ["Unrated", "N/A - 'covered bond' is defined only for market risk (CSR buckets 8/16; DRC LGD 25%) (ERBA NPR §__.202, §__.209-210)", "Issue-specific CQS (PS1/26 Ch.3 Table 3.6)",
          "Issuer-RW-based: 10%/20%/20%/50%/100% (CRR3 Art 129(5))"],
     ]
     for i, r in enumerate(rows6):
@@ -887,17 +896,17 @@ def build_section_5(doc):
     t = create_table(doc, HDRS, STD4)
     rows = [
         ["Resi Non-CF LTV Bands", "", "", ""],
-        ["LTV <= 50%", "20% (ERBA P.132, Table 2)", "20% (PS1/26 Ch.4 Table 4.1)",
+        ["LTV <= 50%", "20% (Table 5 to §__.111; ERBA NPR p.692)", "20% (PS1/26 Ch.4 Table 4.1)",
          "20% (CRR3 Art 125(1) Table 1)"],
-        ["50% < LTV <= 60%", "25% (ERBA P.132, Table 2)", "25% (PS1/26 Ch.4 Table 4.1)",
+        ["50% < LTV <= 60%", "25% (Table 5 to §__.111; ERBA NPR p.692)", "25% (PS1/26 Ch.4 Table 4.1)",
          "25% (CRR3 Art 125(1) Table 1)"],
-        ["60% < LTV <= 80%", "30% (ERBA P.132, Table 2)", "30% (PS1/26 Ch.4 Table 4.1)",
+        ["60% < LTV <= 80%", "30% (Table 5 to §__.111; ERBA NPR p.692)", "30% (PS1/26 Ch.4 Table 4.1)",
          "30% (CRR3 Art 125(1) Table 1)"],
-        ["80% < LTV <= 90%", "40% (ERBA P.132, Table 2)", "40% (PS1/26 Ch.4 Table 4.1)",
+        ["80% < LTV <= 90%", "40% (Table 5 to §__.111; ERBA NPR p.692)", "40% (PS1/26 Ch.4 Table 4.1)",
          "35% (CRR3 Art 125(1) Table 1) - DIVERGENCE: EU 5pp lower"],
-        ["90% < LTV <= 100%", "50% (ERBA P.132, Table 2)", "50% (PS1/26 Ch.4 Table 4.1)",
+        ["90% < LTV <= 100%", "50% (Table 5 to §__.111; ERBA NPR p.692)", "50% (PS1/26 Ch.4 Table 4.1)",
          "45% (CRR3 Art 125(1) Table 1) - DIVERGENCE: EU 5pp lower"],
-        ["LTV > 100%", "70% (ERBA P.132, Table 2)", "70% (PS1/26 Ch.4 Table 4.1)",
+        ["LTV > 100%", "70% (Table 5 to §__.111; ERBA NPR p.692)", "70% (PS1/26 Ch.4 Table 4.1)",
          "60% (CRR3 Art 125(1) Table 1) - DIVERGENCE: EU 10pp lower"],
     ]
     for i, r in enumerate(rows):
@@ -910,17 +919,17 @@ def build_section_5(doc):
     t2 = create_table(doc, HDRS, STD4)
     rows2 = [
         ["Resi CF LTV Bands", "", "", ""],
-        ["LTV <= 50%", "30% (ERBA P.134, Table 3)", "30% (PS1/26 Ch.4 Table 4.2)",
+        ["LTV <= 50%", "30% (Table 6 to §__.111; ERBA NPR p.693)", "30% (PS1/26 Ch.4 Table 4.2)",
          "30% (CRR3 Art 125(2) Table 2)"],
-        ["50% < LTV <= 60%", "35% (ERBA P.134, Table 3)", "35% (PS1/26 Ch.4 Table 4.2)",
+        ["50% < LTV <= 60%", "35% (Table 6 to §__.111; ERBA NPR p.693)", "35% (PS1/26 Ch.4 Table 4.2)",
          "35% (CRR3 Art 125(2) Table 2)"],
-        ["60% < LTV <= 80%", "45% (ERBA P.134, Table 3)", "45% (PS1/26 Ch.4 Table 4.2)",
+        ["60% < LTV <= 80%", "45% (Table 6 to §__.111; ERBA NPR p.693)", "45% (PS1/26 Ch.4 Table 4.2)",
          "45% (CRR3 Art 125(2) Table 2)"],
-        ["80% < LTV <= 90%", "60% (ERBA P.134, Table 3)", "60% (PS1/26 Ch.4 Table 4.2)",
+        ["80% < LTV <= 90%", "60% (Table 6 to §__.111; ERBA NPR p.693)", "60% (PS1/26 Ch.4 Table 4.2)",
          "55% (CRR3 Art 125(2) Table 2) - DIVERGENCE"],
-        ["90% < LTV <= 100%", "75% (ERBA P.134, Table 3)", "75% (PS1/26 Ch.4 Table 4.2)",
+        ["90% < LTV <= 100%", "75% (Table 6 to §__.111; ERBA NPR p.693)", "75% (PS1/26 Ch.4 Table 4.2)",
          "70% (CRR3 Art 125(2) Table 2) - DIVERGENCE"],
-        ["LTV > 100%", "105% (ERBA P.134, Table 3)", "105% (PS1/26 Ch.4 Table 4.2)",
+        ["LTV > 100%", "105% (Table 6 to §__.111; ERBA NPR p.693)", "105% (PS1/26 Ch.4 Table 4.2)",
          "90% (CRR3 Art 125(2) Table 2) - DIVERGENCE: EU 15pp lower"],
     ]
     for i, r in enumerate(rows2):
@@ -931,13 +940,13 @@ def build_section_5(doc):
     t3 = create_table(doc, HDRS, STD4)
     rows3 = [
         ["CRE Non-CF LTV Bands", "", "", ""],
-        ["LTV <= 60%", "Min(70%, counterparty RW) (ERBA P.138, Table 4)",
+        ["LTV <= 60%", "Lesser of 60% or obligor RW (Table 7 to §__.111; ERBA NPR P.75)",
          "Min(70%, counterparty RW) (PS1/26 Ch.4 Table 4.3)",
          "Min(60%, counterparty RW) (CRR3 Art 126(1) Table 3) - EU uses 60% not 70%"],
-        ["60% < LTV <= 80%", "Counterparty RW applies (ERBA P.138)",
+        ["60% < LTV <= 80%", "Obligor RW applies (100% if insufficient information to determine obligor RW) (Table 7 to §__.111; ERBA NPR P.74)",
          "Counterparty RW applies (PS1/26 Ch.4 Table 4.3)",
          "Counterparty RW applies (CRR3 Art 126(1) Table 3)"],
-        ["LTV > 80%", "Counterparty RW applies (ERBA P.138)",
+        ["LTV > 80%", "Obligor RW applies (100% if unknown; 150% if 90+ days past due) (Table 7 to §__.111)",
          "Counterparty RW applies (PS1/26 Ch.4 Table 4.3)",
          "Counterparty RW applies (CRR3 Art 126(1) Table 3)"],
     ]
@@ -949,15 +958,15 @@ def build_section_5(doc):
     t4 = create_table(doc, HDRS, STD4)
     rows4 = [
         ["CRE CF LTV Bands", "", "", ""],
-        ["LTV <= 60%", "70% (ERBA P.140, Table 5)", "70% (PS1/26 Ch.4 Table 4.4)",
+        ["LTV <= 60%", "70% (Table 8 to §__.111; ERBA NPR P.75)", "70% (PS1/26 Ch.4 Table 4.4)",
          "70% (CRR3 Art 126(2) Table 4)"],
-        ["60% < LTV <= 80%", "90% (ERBA P.140, Table 5)", "90% (PS1/26 Ch.4 Table 4.4)",
+        ["60% < LTV <= 80%", "90% (Table 8 to §__.111)", "90% (PS1/26 Ch.4 Table 4.4)",
          "90% (CRR3 Art 126(2) Table 4)"],
-        ["80% < LTV <= 90%", "110% (ERBA P.140, Table 5)", "110% (PS1/26 Ch.4 Table 4.4)",
+        ["80% < LTV <= 90%", "110% (US Table 8 has a single '> 80%' band at 110%)", "110% (PS1/26 Ch.4 Table 4.4)",
          "110% (CRR3 Art 126(2) Table 4)"],
-        ["90% < LTV <= 100%", "130% (ERBA P.140, Table 5)", "130% (PS1/26 Ch.4 Table 4.4)",
+        ["90% < LTV <= 100%", "110% (single '> 80%' band; no 130% tier in US) (Table 8 to §__.111)", "130% (PS1/26 Ch.4 Table 4.4)",
          "130% (CRR3 Art 126(2) Table 4)"],
-        ["LTV > 100%", "150% (ERBA P.140, Table 5)", "150% (PS1/26 Ch.4 Table 4.4)",
+        ["LTV > 100%", "110% (single '> 80%' band; no 150% tier in US; 150% only if 90+ days past due) (Table 8 to §__.111)", "150% (PS1/26 Ch.4 Table 4.4)",
          "150% (CRR3 Art 126(2) Table 4)"],
     ]
     for i, r in enumerate(rows4):
@@ -967,15 +976,15 @@ def build_section_5(doc):
     add_subsection(doc, "5.5 Loan-Splitting Approach")
     t5 = create_table(doc, HDRS, STD4)
     rows5 = [
-        ["Splitting Available", "Yes (ERBA P.144). Alternative to whole-loan approach",
+        ["Splitting Available", "NO - the US proposal provides only the whole-loan LTV approach (Tables 5-8 to §__.111); no loan-splitting option appears in §__.111",
          "Yes (PS1/26 Ch.4.3). Banks may choose per portfolio",
          "Yes (CRR3 Art 124(1)). Member State discretion may apply"],
-        ["Secured Portion LTV", "Up to 55% LTV for residential; 60% LTV for commercial (ERBA P.144-146)",
+        ["Secured Portion LTV", "N/A (whole-loan approach only)",
          "55% resi / 60% CRE (PS1/26 Ch.4.3)",
          "55% resi / 60% CRE (CRR3 Art 124(3))"],
-        ["Secured Portion RW", "Min applicable LTV-band RW (e.g., 20% for resi <=55%) (ERBA P.144)",
+        ["Secured Portion RW", "N/A (whole-loan approach only)",
          "Same mechanics (PS1/26 Ch.4.3)", "Same mechanics (CRR3 Art 124(3))"],
-        ["Unsecured Portion RW", "Counterparty risk weight (100% for unrated corp) (ERBA P.146)",
+        ["Unsecured Portion RW", "N/A; LTV includes undrawn committed amounts and is based on origination value (ERBA NPR P.67-69)",
          "Counterparty risk weight (PS1/26 Ch.4.3)", "Counterparty risk weight (CRR3 Art 124(4))"],
     ]
     for r in rows5:
@@ -985,22 +994,22 @@ def build_section_5(doc):
     add_subsection(doc, "5.6 ADC Exposures & Valuation Methodology")
     t6 = create_table(doc, HDRS, STD4)
     rows6 = [
-        ["ADC (Acq/Dev/Const)", "150% unless pre-sold/leased or substantial equity (ERBA P.148)",
+        ["ADC (Acq/Dev/Const)", "HVCRE exposures 150% (statutory definition retained); ADC exposures that are not HVCRE: 100% with no LTV or cash-flow test (ERBA NPR §__.111; P.76)",
          "150% unless pre-sold or substantial equity (PS1/26 Ch.4.4)",
          "150% standard (CRR3 Art 126a(1))"],
-        ["ADC Reduced RW", "100% if meets criteria: pre-sold/leased >50%, substantial equity by borrower (>35%) (ERBA P.148)",
+        ["ADC Reduced RW", "100% for non-HVCRE ADC; 50% for qualifying pre-sold 1-4 family construction loans (100% if purchase contract cancelled) and statutory multifamily mortgages (ERBA NPR P.58 fn 82-83, P.76)",
          "100% if pre-sold/substantial equity criteria met (PS1/26 Ch.4.4)",
          "100% if qualifying ADC criteria met (CRR3 Art 126a(2)) - DIVERGENCE: EU allows ADC residential reduction more broadly"],
-        ["Valuation Approach", "Current appraised value per FIRREA/USPAP (ERBA P.156). Independent appraisal required",
+        ["Valuation Approach", "Value at origination; purchases: lower of acquisition cost and market value (appraisal rule or independent prudently conservative valuation); excludes expected price increases (ERBA NPR P.67-69)",
          "Prudent market value (PS1/26 Ch.4.5). Independent valuation",
          "Prudent market value (CRR3 Art 229). Independent valuer meeting CRR3 Art 208 criteria"],
-        ["Revaluation Frequency", "At origination + when material deterioration (ERBA P.158)",
+        ["Revaluation Frequency", "Origination value retained; downward revision only if (1) supervisor requires, (2) extraordinary event causes permanent reduction, or (3) value-increasing modifications supported by new appraisal (ERBA NPR P.68)",
          "At origination + minimum every 3Y for resi, annually for CRE (PS1/26 Ch.4.5)",
          "At origination + annually for CRE, every 3Y for resi; statistical methods allowed (CRR3 Art 208(3))"],
-        ["PMI Recognition", "PMI recognized as CRM (ERBA P.160). Reduces exposure for LTV calculation",
+        ["PMI Recognition", "NOT recognized: LTV is calculated with no adjustment for private mortgage insurance or credit loss provisions (ERBA NPR P.67; Question 21 asks about recognizing e.g. 50% of PMI)",
          "Not explicitly addressed; CRM framework applies (PS1/26 Ch.6)",
          "Private insurance may qualify as CRM per CRR3 Art 213-215"],
-        ["CF Dependency Test", "Repayment >50% from property CF = CF-dependent (ERBA P.130). Rental income, property sales proceeds, etc.",
+        ["CF Dependency Test", "Qualitative: repayment materially dependent on cash flows generated by the real estate; no numerical threshold in the NPR (Question 20 floats a 5-50% range) (ERBA NPR P.66)",
          "Material dependence on property-generated CF (PS1/26 Ch.4.2). Qualitative assessment",
          "Material dependence test (CRR3 Art 124(2)). Quantitative: >50% of repayment capacity from property"],
     ]
@@ -1020,20 +1029,20 @@ def build_section_6(doc):
     t = create_table(doc, HDRS, STD4)
     rows = [
         ["Retail Risk Weights", "", "", ""],
-        ["Regulatory Retail", "75% (ERBA P.100). Criteria: individual/small business, product-based, granular, low value",
+        ["Regulatory Retail", "75% (ERBA NPR §__.111; P.81). Criteria: revolving, term loan or lease to an individual or SME; aggregate exposure to obligor and affiliates <= $1M; other retail 100%",
          "75% (PS1/26 Ch.3 Table 3.10)", "75% (CRR3 Art 123(1))"],
-        ["Transactor Portfolios", "45% (ERBA P.102). CHANGED from 55% in 2023 NPR. Criteria: balance paid in full each cycle for past 12 months; no past-due >30 days in trailing 12M",
+        ["Transactor Portfolios", "45% (ERBA NPR §__.111; P.81). 10pp lower than the 2023 NPR's 55% (P.534). Criteria: balance repaid in full at each scheduled repayment date for the previous 12 months, or overdraft with no drawdown for 12 months",
          "45% for qualifying transactors (PS1/26 Ch.3 Table 3.10)",
          "45% for qualifying transactors (CRR3 Art 123(1a))"],
-        ["Transactor Criteria", "Revolving credit facility (credit cards); balance paid in full by due date for trailing 12 months; no installment loans (ERBA P.102-104)",
+        ["Transactor Criteria", "Regulatory retail credit facility repaid in full at each scheduled date for 12 months (or overdraft with no drawdown for 12 months); not a transactor if the facility carries a balance or includes installment payments, even at 0% promotional rates (ERBA NPR §__.101; P.80)",
          "Similar: revolving unsecured, paid monthly, no arrears (PS1/26 Ch.3.8)",
          "Revolving unsecured, full repayment each month, granularity test (CRR3 Art 123(1a)(a)-(d))"],
-        ["Retail Threshold", "Total exposure to counterparty <= $1M (ERBA P.100)",
+        ["Retail Threshold", "Aggregate retail exposure to obligor and affiliates (on + off balance sheet, full notional) <= $1M, CPI-W indexed; if exceeded none of the exposures qualify (ERBA NPR P.80 fn 115)",
          "Total exposure <= GBP 1M (PS1/26 Ch.3.8)", "Total exposure <= EUR 1M (CRR3 Art 123(2))"],
-        ["Granularity Test", "No single exposure > 0.2% of retail portfolio (ERBA P.100)",
+        ["Granularity Test", "None - no 0.2% granularity criterion in the US proposal; the $1M aggregate limit is the only size test (ERBA NPR §__.101)",
          "No single exposure > 0.2% (PS1/26 Ch.3.8)",
          "Part of managed portfolio (CRR3 Art 123(2)(d))"],
-        ["Currency Mismatch (Revolving)", "No explicit currency mismatch add-on for retail revolving (ERBA P.106)",
+        ["Currency Mismatch (Revolving)", "No currency mismatch add-on for retail in the US proposal (ERBA NPR §__.111)",
          "20% add-on for unhedged FX retail (PS1/26 Ch.3.8.2)",
          "50% uplift for currency mismatch in retail revolving (CRR3 Art 123(3)) - SIGNIFICANT DIVERGENCE"],
     ]
@@ -1045,15 +1054,15 @@ def build_section_6(doc):
     t2 = create_table(doc, HDRS, STD4)
     rows2 = [
         ["Equity Risk Weights", "", "", ""],
-        ["Listed Equity", "250% (ERBA P.108)", "250% (PS1/26 Ch.3 Table 3.11)",
+        ["Listed Equity", "300% publicly traded - current rule retained; Basel 250% considered and not adopted (ERBA NPR §__.141; P.191 fn 203)", "250% (PS1/26 Ch.3 Table 3.11)",
          "250% (CRR3 Art 133(3))"],
-        ["Unlisted Equity", "400% (ERBA P.108)", "400% (PS1/26 Ch.3 Table 3.11)",
+        ["Unlisted Equity", "400% non-publicly traded (ERBA NPR §__.141)", "400% (PS1/26 Ch.3 Table 3.11)",
          "400% (CRR3 Art 133(4))"],
-        ["Speculative Equity", "400% (ERBA P.108)", "400% (PS1/26 Ch.3 Table 3.11)",
+        ["Speculative Equity", "No separate 'speculative' category: 400% non-public; 600% for equity in an investment firm with greater than immaterial leverage (ERBA NPR §__.141)", "400% (PS1/26 Ch.3 Table 3.11)",
          "400% (CRR3 Art 133(4))"],
-        ["Equity to Fed/Govt", "100% (12 CFR 217.32)", "100% (PS1/26 Ch.3.9)",
+        ["Equity to Fed/Govt", "0% sovereign, MDB and Federal Reserve Bank stock; 20% PSE, FHLB and Farmer Mac; 100% community development investments and non-significant equity (aggregate <= 10% of total capital); 250% significant investments in unconsolidated FIs not deducted (ERBA NPR §__.141; P.191)", "100% (PS1/26 Ch.3.9)",
          "100% (CRR3 Art 133(5))"],
-        ["Equity Phase-In", "Immediate application July 1, 2025 (ERBA P.110)",
+        ["Equity Phase-In", "Immediate application on the final-rule effective date; no phase-in (ERBA NPR §__.141)",
          "Immediate Jan 1, 2025 (PS1/26 Ch.3.9)",
          "Phase-in 2025-2030 per Art 495a: 100% from 2025, 250%/400% by 2030 (CRR3 Art 495a) - SIGNIFICANT EU DIVERGENCE"],
         ["EU Phase-In 2025", "N/A", "N/A", "100% for existing equity holdings (CRR3 Art 495a(1))"],
@@ -1064,7 +1073,7 @@ def build_section_6(doc):
         ["EU Phase-In 2030", "N/A", "N/A", "250% listed / 400% unlisted fully phased (CRR3 Art 495a(6))"],
         ["Qualifying Legislative Equity", "N/A", "N/A",
          "100% for legislatively mandated equity (CRR3 Art 133(6))"],
-        ["Strategic Equity <10%", "250% (same as listed) (ERBA P.108)",
+        ["Strategic Equity <10%", "Non-significant equity (aggregate adjusted carrying value <= 10% of total capital): 100%; above that 300%/400% by listing status (ERBA NPR §__.141; P.191)",
          "250% (PS1/26 Ch.3.9)", "250% (CRR3 Art 133(3)) - no strategic discount"],
     ]
     for i, r in enumerate(rows2):
@@ -1074,17 +1083,17 @@ def build_section_6(doc):
     add_subsection(doc, "6.3 Past Due Exposures")
     t3 = create_table(doc, HDRS, STD4)
     rows3 = [
-        ["Past Due Definition", ">90 days past due (ERBA P.112)",
+        ["Past Due Definition", "90 days or more past due or in nonaccrual (ERBA NPR §__.111; P.47-48 fn 68)",
          ">90 days past due (PS1/26 Ch.3.10)", ">90 days past due (CRR3 Art 127(1))"],
-        ["Unsecured Past Due RW", "150% (ERBA P.112)", "150% (PS1/26 Ch.3 Table 3.12)",
+        ["Unsecured Past Due RW", "150% for non-sovereign, non-real-estate exposures (ERBA NPR §__.111)", "150% (PS1/26 Ch.3 Table 3.12)",
          "150% standard (CRR3 Art 127(1))"],
-        ["Provisions >= 20%", "150% (no reduction in US) (ERBA P.112)",
+        ["Provisions >= 20%", "150% (no provision-based reduction in US) (ERBA NPR §__.111)",
          "150% (PS1/26 Ch.3 Table 3.12)",
          "100% if specific provisions >= 20% of unsecured portion (CRR3 Art 127(1)(a)) - EU MORE FAVORABLE"],
-        ["Provisions >= 50%", "150% (no further reduction) (ERBA P.112)",
+        ["Provisions >= 50%", "150% (no further reduction) (ERBA NPR §__.111)",
          "100% (PS1/26 Ch.3 Table 3.12)",
          "100% (CRR3 Art 127(1)(a))"],
-        ["RE-Secured Past Due", "Underlying LTV-table RW applies (ERBA P.114)",
+        ["RE-Secured Past Due", "150% for past-due real estate exposures, except residential mortgage exposures not dependent on property cash flows: 100% (ERBA NPR P.71 fn 106, P.74 fn 111)",
          "100% minimum for past-due RE (PS1/26 Ch.3.10)",
          "100% minimum (CRR3 Art 127(3))"],
     ]
@@ -1207,13 +1216,13 @@ def build_section_8(doc):
     add_subsection(doc, "8.1 Comprehensive Approach: E* Formula")
     t = create_table(doc, HDRS, STD4)
     rows = [
-        ["E* Formula", "E* = max(0, E*(1+He) - C*(1-Hc-Hfx)) (12 CFR 217.37(b)(2)). E=exposure, C=collateral, He=exposure haircut, Hc=collateral haircut, Hfx=FX haircut",
+        ["E* Formula", "NEW netting-set formula: E* = max(0, (sum E_i - sum C_i) + 0.4 x netexposure + 0.6 x grossexposure/sqrt(N) + sum E_fx x H_fx), netexposure = |sum E_s H_s|, grossexposure = sum E_s |H_s|, N = number of unique CUSIPs (excl. positions < 1/10 of largest); reverts to the current single-transaction form when N components are empty; own-estimate haircuts no longer permitted (ERBA NPR §__.115; P.102-105)",
          "Same formula (PS1/26 Ch.6.1)", "Same formula (CRR3 Art 223(5))"],
-        ["Currency Mismatch Hfx", "8% for 10-business-day holding period (12 CFR 217.37(c)(3)(iii))",
+        ["Currency Mismatch Hfx", "8% for 10-business-day holding period; scaled by sqrt(T_M/10) if revalued less than every 10 business days (ERBA NPR §__.115, §__.120; P.147)",
          "8% for 10-day holding (PS1/26 Ch.6.1)", "8% for 10-day holding (CRR3 Art 224(1) Table 1)"],
-        ["Maturity Mismatch Formula", "Pa = P * (t - 0.25) / (T - 0.25) (12 CFR 217.36(d)). t=residual maturity of protection, T=residual maturity of exposure. Min t=1Y",
+        ["Maturity Mismatch Formula", "Pm = E x (t - 0.25) / (T - 0.25) (ERBA NPR §__.120; P.146). t = lesser of T or residual maturity of the mitigant; T = lesser of 5 years or residual maturity of the exposure",
          "Same formula (PS1/26 Ch.6.2)", "Same formula (CRR3 Art 237-238)"],
-        ["Minimum Maturity", "Protection maturity >= 1Y for recognition (12 CFR 217.36(d)(1)). <1Y: zero recognition unless matched maturity",
+        ["Minimum Maturity", "Mitigant original maturity >= 1Y and residual maturity > 3 months for recognition (ERBA NPR §__.120; P.139)",
          "Same 1Y minimum (PS1/26 Ch.6.2)", "Same 1Y minimum (CRR3 Art 237(1))"],
     ]
     for r in rows:
@@ -1225,42 +1234,44 @@ def build_section_8(doc):
                       [2.5, 2.3, 2.3, 2.4])
     rows2 = [
         ["Supervisory Haircuts (10-Day Holding, Standard)", "", "", ""],
-        ["Sovereign AAA-AA / <=1Y", "0.5% (ERBA P.244 Table 6)", "0.5% (PS1/26 Ch.6 Table 6.1)",
+        ["Sovereign AAA-AA / <=1Y", "0.5% (issuer RW 0%) (Table 1 to §__.115; US keys haircuts to issuer risk weight, not rating)", "0.5% (PS1/26 Ch.6 Table 6.1)",
          "0.5% (CRR3 Art 224 Table 1)"],
-        ["Sovereign AAA-AA / 1-5Y", "2% (ERBA P.244)", "2% (PS1/26 Ch.6 Table 6.1)",
+        ["Sovereign AAA-AA / 1-5Y", "2% (issuer RW 0%; 1-3Y and 3-5Y) (Table 1 to §__.115)", "2% (PS1/26 Ch.6 Table 6.1)",
          "2% (CRR3 Art 224 Table 1)"],
-        ["Sovereign AAA-AA / >5Y", "4% (ERBA P.244)", "4% (PS1/26 Ch.6 Table 6.1)",
+        ["Sovereign AAA-AA / >5Y", "4% (issuer RW 0%; 5-10Y and >10Y) (Table 1 to §__.115)", "4% (PS1/26 Ch.6 Table 6.1)",
          "4% (CRR3 Art 224 Table 1)"],
-        ["Sovereign A-BBB / <=1Y", "1% (ERBA P.244)", "1% (PS1/26 Ch.6 Table 6.1)",
+        ["Sovereign A-BBB / <=1Y", "1% (issuer RW 20% or 50%) (Table 1 to §__.115)", "1% (PS1/26 Ch.6 Table 6.1)",
          "1% (CRR3 Art 224 Table 1)"],
-        ["Sovereign A-BBB / 1-5Y", "3% (ERBA P.244)", "3% (PS1/26 Ch.6 Table 6.1)",
+        ["Sovereign A-BBB / 1-5Y", "3% (issuer RW 20% or 50%) (Table 1 to §__.115)", "3% (PS1/26 Ch.6 Table 6.1)",
          "3% (CRR3 Art 224 Table 1)"],
-        ["Sovereign A-BBB / >5Y", "6% (ERBA P.244)", "6% (PS1/26 Ch.6 Table 6.1)",
+        ["Sovereign A-BBB / >5Y", "6% (issuer RW 20% or 50%) (Table 1 to §__.115)", "6% (PS1/26 Ch.6 Table 6.1)",
          "6% (CRR3 Art 224 Table 1)"],
-        ["Sovereign BB / all", "15% (ERBA P.244)", "15% (PS1/26 Ch.6 Table 6.1)",
+        ["Sovereign BB / all", "15% (issuer RW 100%); sovereign RW > 100%: 30% 'other' (Table 1 to §__.115)", "15% (PS1/26 Ch.6 Table 6.1)",
          "15% (CRR3 Art 224 Table 1)"],
-        ["Corp/Bank AAA-AA / <=1Y", "1% (ERBA P.244)", "1% (PS1/26 Ch.6 Table 6.1)",
+        ["Corp/Bank AAA-AA / <=1Y", "2% - all 'other investment grade' non-GSE, non-securitization debt (no rating split); GSE 1%; senior securitization RW<100% 4% (Table 1 to §__.115)", "1% (PS1/26 Ch.6 Table 6.1)",
          "1% (CRR3 Art 224 Table 1)"],
-        ["Corp/Bank AAA-AA / 1-5Y", "4% (ERBA P.244)", "4% (PS1/26 Ch.6 Table 6.1)",
+        ["Corp/Bank AAA-AA / 1-5Y", "4% (1-3Y) / 6% (3-5Y); GSE 4%; senior securitization 12% (Table 1 to §__.115)", "4% (PS1/26 Ch.6 Table 6.1)",
          "4% (CRR3 Art 224 Table 1)"],
-        ["Corp/Bank AAA-AA / >5Y", "8% (ERBA P.244)", "8% (PS1/26 Ch.6 Table 6.1)",
+        ["Corp/Bank AAA-AA / >5Y", "12% (5-10Y) / 20% (>10Y); GSE 8%; senior securitization 24% (Table 1 to §__.115)", "8% (PS1/26 Ch.6 Table 6.1)",
          "8% (CRR3 Art 224 Table 1)"],
-        ["Corp/Bank A-BBB / <=1Y", "2% (ERBA P.244)", "2% (PS1/26 Ch.6 Table 6.1)",
+        ["Corp/Bank A-BBB / <=1Y", "2% (same single IG column as above) (Table 1 to §__.115)", "2% (PS1/26 Ch.6 Table 6.1)",
          "2% (CRR3 Art 224 Table 1)"],
-        ["Corp/Bank A-BBB / 1-5Y", "6% (ERBA P.244)", "6% (PS1/26 Ch.6 Table 6.1)",
+        ["Corp/Bank A-BBB / 1-5Y", "4% (1-3Y) / 6% (3-5Y) (Table 1 to §__.115)", "6% (PS1/26 Ch.6 Table 6.1)",
          "6% (CRR3 Art 224 Table 1)"],
-        ["Corp/Bank A-BBB / >5Y", "12% (ERBA P.244)", "12% (PS1/26 Ch.6 Table 6.1)",
+        ["Corp/Bank A-BBB / >5Y", "12% (5-10Y) / 20% (>10Y) (Table 1 to §__.115)", "12% (PS1/26 Ch.6 Table 6.1)",
          "12% (CRR3 Art 224 Table 1)"],
-        ["Corp/Bank BB / all", "25% (ERBA P.244)", "25% (PS1/26 Ch.6 Table 6.1)",
+        ["Corp/Bank BB / all", "30% - non-investment-grade debt falls in 'other exposure types' (Table 1 to §__.115; ERBA NPR P.107 fn 137)", "25% (PS1/26 Ch.6 Table 6.1)",
          "25% (CRR3 Art 224 Table 1)"],
-        ["Main Index Equities", "15% (ERBA P.244)", "15% (PS1/26 Ch.6 Table 6.1)",
+        ["Main Index Equities", "20% (incl. convertible bonds) (Table 1 to §__.115; ERBA NPR P.107-108)", "15% (PS1/26 Ch.6 Table 6.1)",
          "15% (CRR3 Art 224 Table 1)"],
-        ["Other Listed Equities", "25% (ERBA P.244)", "25% (PS1/26 Ch.6 Table 6.1)",
+        ["Other Listed Equities", "30% (Table 1 to §__.115)", "25% (PS1/26 Ch.6 Table 6.1)",
          "25% (CRR3 Art 224 Table 1)"],
-        ["Cash / Same Currency", "0% (ERBA P.244)", "0% (PS1/26 Ch.6 Table 6.1)",
+        ["Cash / Same Currency", "0% (Table 1 to §__.115)", "0% (PS1/26 Ch.6 Table 6.1)",
          "0% (CRR3 Art 224 Table 1)"],
-        ["Gold", "15% (ERBA P.244)", "15% (PS1/26 Ch.6 Table 6.1)",
+        ["Gold", "20% (Table 1 to §__.115)", "15% (PS1/26 Ch.6 Table 6.1)",
          "15% (CRR3 Art 224 Table 1)"],
+        ["Mutual Funds / ETFs", "Highest haircut applicable to any security the fund may hold (weighted average if full look-through) (Table 1 to §__.115)", "Per look-through (PS1/26 Ch.6)",
+         "Per look-through (CRR3 Art 224)"],
     ]
     for i, r in enumerate(rows2):
         add_data_row(t2, r, is_subheader=(i == 0))
@@ -1269,17 +1280,17 @@ def build_section_8(doc):
     add_subsection(doc, "8.3 Holding Period Scaling & Credit Derivative Adjustments")
     t3 = create_table(doc, HDRS, STD4)
     rows3 = [
-        ["Holding Period Scaling", "H_adj = H_10 * sqrt(N/10) where N=holding period in days (12 CFR 217.37(c)(3)(i))",
+        ["Holding Period Scaling", "H_a = H_s x sqrt(T_m / T_s), T_s = 10 bd margin loans / 5 bd repo-style; repo-style haircuts may be scaled by sqrt(1/2) (ERBA NPR §__.115)",
          "Same formula (PS1/26 Ch.6.3)", "Same formula (CRR3 Art 224(2))"],
-        ["Repo Holding Period", "5 business days (12 CFR 217.37(c)(3)(ii))",
+        ["Repo Holding Period", "5 business days (ERBA NPR §__.115)",
          "5 business days (PS1/26 Ch.6.3)", "5 business days (CRR3 Art 224(2))"],
-        ["Other Capital Mkt", "10 business days (12 CFR 217.37(c)(3)(ii))",
+        ["Other Capital Mkt", "10 business days (margin loans; derivatives MPOR floor 10 bd) (ERBA NPR §__.114-115)",
          "10 business days (PS1/26 Ch.6.3)", "10 business days (CRR3 Art 224(2))"],
-        ["Secured Lending", "20 business days (12 CFR 217.37(c)(3)(ii))",
+        ["Secured Lending", "20 business days where netting set has > 5,000 trades or illiquid collateral; doubled if > 2 margin disputes in prior 2 quarters (ERBA NPR §__.114-115)",
          "20 business days (PS1/26 Ch.6.3)", "20 business days (CRR3 Art 224(2))"],
-        ["Credit Deriv Restructuring", "40% adjustment for credit derivatives where restructuring is a credit event (12 CFR 217.36(e)). RW of protection = max(protection RW, 40% * ref entity RW)",
+        ["Credit Deriv Restructuring", "Credit derivatives WITHOUT restructuring as a credit event: effective notional reduced by 40% (x 0.60), unless unanimous-consent amendment terms and US Bankruptcy Code-type regime apply (ERBA NPR §__.120; P.133)",
          "40% adjustment (PS1/26 Ch.6.4)", "40% adjustment (CRR3 Art 233(3))"],
-        ["Simple Approach Floor", "20% RW floor for collateralized exposures under simple approach (12 CFR 217.37(b)(1)(ii))",
+        ["Simple Approach Floor", "20% RW floor under simple approach; 0% for cash on deposit; 0% for sovereign RW-0 collateral discounted 20%; revalue at least every 6 months (ERBA NPR §__.121; P.136-140)",
          "20% floor (PS1/26 Ch.6.5)", "20% floor (CRR3 Art 222(5))"],
         ["Netting Agreement", "Must meet legal enforceability across all relevant jurisdictions (12 CFR 217.37(c)(1)). Master agreement (ISDA, GMRA) with close-out netting",
          "Legal enforceability + master agreement (PS1/26 Ch.6.6)",
@@ -1321,43 +1332,45 @@ def build_section_9(doc):
     t = create_table(doc, HDRS, STD4)
     rows = [
         ["Interest Rate SF", "", "", ""],
-        ["IR: 0-2Y", "0.50% (ERBA P.462)", "0.50% (PS1/26 Ch.8 Table 8.1)",
+        ["IR: 0-2Y", "0.50% - single IR supervisory factor for all maturity buckets (Table 2 to §__.114); maturity buckets enter via supervisory duration SD = max((e^(-0.05S/250) - e^(-0.05E/250))/0.05, 0.04)", "0.50% (PS1/26 Ch.8 Table 8.1)",
          "0.50% (CRR3 Art 280a)"],
-        ["IR: 2-5Y", "0.30% (ERBA P.462)", "0.30% (PS1/26 Ch.8 Table 8.1)",
+        ["IR: 2-5Y", "0.50% (Table 2 to §__.114; supervisory option volatility 50%)", "0.30% (PS1/26 Ch.8 Table 8.1)",
          "0.30% (CRR3 Art 280a)"],
-        ["IR: 5Y+", "0.60% (ERBA P.462)", "0.60% (PS1/26 Ch.8 Table 8.1)",
+        ["IR: 5Y+", "0.50% (Table 2 to §__.114)", "0.60% (PS1/26 Ch.8 Table 8.1)",
          "0.60% (CRR3 Art 280a)"],
         ["FX SF", "", "", ""],
-        ["FX: All", "4.0% (ERBA P.464)", "4.0% (PS1/26 Ch.8 Table 8.1)",
+        ["FX: All", "4.0% (volatility 15%) (Table 2 to §__.114)", "4.0% (PS1/26 Ch.8 Table 8.1)",
          "4.0% (CRR3 Art 280c)"],
         ["Credit SF", "", "", ""],
-        ["Credit: AAA-AA", "0.38% (ERBA P.464)", "0.38% (PS1/26 Ch.8 Table 8.1)",
+        ["Credit: AAA-AA", "Investment grade single-name 0.46% (no rating split; Dodd-Frank 939A) (Table 2 to §__.114)", "0.38% (PS1/26 Ch.8 Table 8.1)",
          "0.38% (CRR3 Art 280b)"],
-        ["Credit: A", "0.42% (ERBA P.464)", "0.42% (PS1/26 Ch.8 Table 8.1)",
+        ["Credit: A", "Investment grade single-name 0.46% (Table 2 to §__.114)", "0.42% (PS1/26 Ch.8 Table 8.1)",
          "0.42% (CRR3 Art 280b)"],
-        ["Credit: BBB", "0.54% (ERBA P.464)", "0.54% (PS1/26 Ch.8 Table 8.1)",
+        ["Credit: BBB", "Investment grade single-name 0.46% (Table 2 to §__.114)", "0.54% (PS1/26 Ch.8 Table 8.1)",
          "0.54% (CRR3 Art 280b)"],
-        ["Credit: BB", "1.06% (ERBA P.464)", "1.06% (PS1/26 Ch.8 Table 8.1)",
+        ["Credit: BB", "Speculative grade single-name 1.3% (Table 2 to §__.114)", "1.06% (PS1/26 Ch.8 Table 8.1)",
          "1.06% (CRR3 Art 280b)"],
-        ["Credit: B", "1.6% (ERBA P.464)", "1.6% (PS1/26 Ch.8 Table 8.1)",
+        ["Credit: B", "Speculative grade single-name 1.3% (Table 2 to §__.114)", "1.6% (PS1/26 Ch.8 Table 8.1)",
          "1.6% (CRR3 Art 280b)"],
-        ["Credit: CCC", "6.0% (ERBA P.464)", "6.0% (PS1/26 Ch.8 Table 8.1)",
+        ["Credit: CCC", "Sub-speculative grade single-name 6.0% (Table 2 to §__.114)", "6.0% (PS1/26 Ch.8 Table 8.1)",
          "6.0% (CRR3 Art 280b)"],
+        ["Credit: Index", "Investment grade index 0.38%; speculative grade index 1.06% (correlation 80%) (Table 2 to §__.114)", "0.38% IG / 1.06% SG (PS1/26 Ch.8 Table 8.1)",
+         "0.38% IG / 1.06% SG (CRR3 Art 280b)"],
         ["Equity SF", "", "", ""],
-        ["Equity: Single Name", "32% (ERBA P.466)", "32% (PS1/26 Ch.8 Table 8.1)",
+        ["Equity: Single Name", "32% (volatility 120%) (Table 2 to §__.114)", "32% (PS1/26 Ch.8 Table 8.1)",
          "32% (CRR3 Art 280d)"],
-        ["Equity: Index", "20% (ERBA P.466)", "20% (PS1/26 Ch.8 Table 8.1)",
+        ["Equity: Index", "20% (volatility 75%) (Table 2 to §__.114)", "20% (PS1/26 Ch.8 Table 8.1)",
          "20% (CRR3 Art 280d)"],
         ["Commodity SF", "", "", ""],
-        ["Commodity: Electricity", "40% (ERBA P.468)", "40% (PS1/26 Ch.8 Table 8.1)",
+        ["Commodity: Electricity", "40% (volatility 150%) (Table 2 to §__.114)", "40% (PS1/26 Ch.8 Table 8.1)",
          "40% (CRR3 Art 280e)"],
-        ["Commodity: Oil/Gas", "18% (ERBA P.468)", "18% (PS1/26 Ch.8 Table 8.1)",
+        ["Commodity: Oil/Gas", "18% (volatility 70%) (Table 2 to §__.114)", "18% (PS1/26 Ch.8 Table 8.1)",
          "18% (CRR3 Art 280e)"],
-        ["Commodity: Metals", "18% (ERBA P.468)", "18% (PS1/26 Ch.8 Table 8.1)",
+        ["Commodity: Metals", "18% (Table 2 to §__.114)", "18% (PS1/26 Ch.8 Table 8.1)",
          "18% (CRR3 Art 280e)"],
-        ["Commodity: Agricultural", "18% (ERBA P.468)", "18% (PS1/26 Ch.8 Table 8.1)",
+        ["Commodity: Agricultural", "18% (Table 2 to §__.114)", "18% (PS1/26 Ch.8 Table 8.1)",
          "18% (CRR3 Art 280e)"],
-        ["Commodity: Other", "18% (ERBA P.468)", "18% (PS1/26 Ch.8 Table 8.1)",
+        ["Commodity: Other", "18% (Table 2 to §__.114); basis hedging sets SF x 0.5; volatility hedging sets SF x 5", "18% (PS1/26 Ch.8 Table 8.1)",
          "18% (CRR3 Art 280e)"],
     ]
     for i, r in enumerate(rows):
@@ -1368,21 +1381,21 @@ def build_section_9(doc):
     add_subsection(doc, "9.2 Correlation Parameters")
     t2 = create_table(doc, HDRS, STD4)
     rows2 = [
-        ["IR Correlation (Same CCY)", "99.9% between tenors (ERBA P.472)", "99.9% (PS1/26 Ch.8.2)",
+        ["IR Correlation (Same CCY)", "Maturity-bucket aggregation within a currency: sqrt(D1^2 + D2^2 + D3^2 + 1.4 D1D2 + 1.4 D2D3 + 0.6 D1D3) (i.e. 70%/30% cross-bucket correlation), or |D1|+|D2|+|D3| (ERBA NPR §__.114)", "99.9% (PS1/26 Ch.8.2)",
          "99.9% (CRR3 Art 280a(3))"],
-        ["IR Correlation (Cross CCY)", "0% between currencies (ERBA P.472)", "0% (PS1/26 Ch.8.2)",
+        ["IR Correlation (Cross CCY)", "0% - separate hedging set per currency; add-ons summed (ERBA NPR §__.114)", "0% (PS1/26 Ch.8.2)",
          "0% (CRR3 Art 280a(3))"],
-        ["Credit: Single Name", "Correlation factor: 50% between entities (ERBA P.474)",
+        ["Credit: Single Name", "50% systematic correlation (Table 2 to §__.114)",
          "50% (PS1/26 Ch.8.2)", "50% (CRR3 Art 280b(3))"],
-        ["Credit: Index", "Correlation factor: 80% (ERBA P.474)", "80% (PS1/26 Ch.8.2)",
+        ["Credit: Index", "80% (Table 2 to §__.114)", "80% (PS1/26 Ch.8.2)",
          "80% (CRR3 Art 280b(3))"],
-        ["Equity: Single Name", "50% (ERBA P.476)", "50% (PS1/26 Ch.8.2)",
+        ["Equity: Single Name", "50% (Table 2 to §__.114)", "50% (PS1/26 Ch.8.2)",
          "50% (CRR3 Art 280d(3))"],
-        ["Equity: Index", "80% (ERBA P.476)", "80% (PS1/26 Ch.8.2)",
+        ["Equity: Index", "80% (Table 2 to §__.114)", "80% (PS1/26 Ch.8.2)",
          "80% (CRR3 Art 280d(3))"],
-        ["Commodity: Same Type", "40% (ERBA P.478)", "40% (PS1/26 Ch.8.2)",
+        ["Commodity: Same Type", "40% (all commodity hedging sets) (Table 2 to §__.114)", "40% (PS1/26 Ch.8.2)",
          "40% (CRR3 Art 280e(3))"],
-        ["FX Correlation", "N/A (single hedging set per pair) (ERBA P.474)",
+        ["FX Correlation", "N/A (single hedging set per currency pair) (ERBA NPR §__.114)",
          "N/A (PS1/26 Ch.8.2)", "N/A (CRR3 Art 280c)"],
     ]
     for r in rows2:
@@ -1392,28 +1405,28 @@ def build_section_9(doc):
     add_subsection(doc, "9.3 Replacement Cost & PFE Formulas")
     t3 = create_table(doc, HDRS, STD4)
     rows3 = [
-        ["RC (Unmargined)", "RC = max(V - C, 0) where V=MtM, C=net collateral (12 CFR 217.132(c)(6))",
+        ["RC (Unmargined)", "RC = max(V - C, 0) where V=MtM, C=net collateral (ERBA NPR §__.114)",
          "Same formula (PS1/26 Ch.8.3)", "Same formula (CRR3 Art 275(1))"],
-        ["RC (Margined)", "RC = max(V-C, TH+MTA-NICA, 0) (12 CFR 217.132(c)(7)). TH=threshold, MTA=min transfer amount, NICA=net independent collateral amount",
+        ["RC (Margined)", "RC = max(V-C, TH+MTA-NICA, 0) (ERBA NPR §__.114). TH=threshold, MTA=min transfer amount, NICA=net independent collateral amount; margined EAD capped at unmargined EAD",
          "Same formula (PS1/26 Ch.8.3)", "Same formula (CRR3 Art 275(2))"],
-        ["PFE Formula", "PFE = multiplier * AddOnAgg (12 CFR 217.132(c)(8))",
+        ["PFE Formula", "PFE = multiplier * AddOnAgg (ERBA NPR §__.114)",
          "Same (PS1/26 Ch.8.4)", "Same (CRR3 Art 278)"],
-        ["Multiplier", "mult = min(1, floor + (1-floor)*exp(V-C / (2*(1-floor)*AddOnAgg))) (12 CFR 217.132(c)(8)(ii)). floor=5%",
+        ["Multiplier", "mult = min(1, 0.05 + 0.95 * exp((V-C) / (1.9 * AddOnAgg))) (ERBA NPR §__.114). floor=5%",
          "Same formula, floor=5% (PS1/26 Ch.8.4)", "Same formula, floor=5% (CRR3 Art 278(1))"],
-        ["Alpha Parameter", "1.4 for financial counterparties (ERBA P.456). 1.0 for commercial end-users (ERBA P.458). CRITICAL DIVERGENCE: US bifurcates alpha",
+        ["Alpha Parameter", "1.4 unless the counterparty is a commercial end-user; 1.0 for commercial end-users (EAD = RC + PFE) (ERBA NPR §__.114(e)(4); P.110). CRITICAL DIVERGENCE: US bifurcates alpha",
          "1.4 for all counterparties (PS1/26 Ch.8.5). No commercial end-user reduction",
          "1.4 for all counterparties (CRR3 Art 274(2)). No commercial end-user reduction"],
-        ["EAD Formula", "EAD = alpha * (RC + PFE) (12 CFR 217.132(c)(5))",
+        ["EAD Formula", "EAD = alpha * (RC + PFE) (ERBA NPR §__.114)",
          "Same (PS1/26 Ch.8.5)", "Same (CRR3 Art 274(1))"],
-        ["Cross-Product Netting", "Allowed within same QMNA netting set (12 CFR 217.132(c)(2))",
+        ["Cross-Product Netting", "NEW extended SA-CCR: for a qualifying cross-product master netting agreement covering non-cleared derivatives and repo-style transactions, EAD = (1 - MR) x (EAD_repo haircut approach + EAD_deriv SA-CCR) + MR x EAD_SA-CCR(all), MR = maturity ratio (maturities floored at 10 bd, capped at 1Y); repos treated as forward derivatives (delta +1 / -1) (ERBA NPR §__.113; P.111-116)",
          "Allowed per netting agreement (PS1/26 Ch.8.6)",
          "Allowed per CRR3 Art 272(4) netting set definition"],
-        ["Netting Set Definition", "All OTC derivatives under same QMNA with same counterparty (12 CFR 217.132(c)(2))",
+        ["Netting Set Definition", "Derivatives under same QMNA with same counterparty; cross-product netting not available for eligible margin loans or cleared transactions (ERBA NPR §__.113; P.115-116)",
          "Same legal netting agreement (PS1/26 Ch.8.6)",
          "QMNA definition (CRR3 Art 272(4))"],
-        ["MPOR Standard", "10 business days for unmargined bilateral (12 CFR 217.132(c)(9))",
+        ["MPOR Standard", "Margined: floor 10 business days (+ remargining periodicity - 1); 5 bd for client-facing cleared transactions; MF = sqrt(1.5 x MPOR / 250). Unmargined: MF = sqrt(min(M, 250)/250), M >= 10 bd (ERBA NPR §__.114)",
          "10 days (PS1/26 Ch.8.7)", "10 days (CRR3 Art 285(2))"],
-        ["MPOR Disputed Trades", "20 business days (12 CFR 217.132(c)(9)(iv))",
+        ["MPOR Disputed Trades", "20 business days for netting sets with > 5,000 non-cleared trades or illiquid collateral; MPOR doubled if > 2 margin disputes in prior two quarters (ERBA NPR §__.114)",
          "20 days (PS1/26 Ch.8.7)", "20 days (CRR3 Art 285(2)(c))"],
     ]
     for r in rows3:
@@ -1431,20 +1444,20 @@ def build_section_10(doc):
     add_subsection(doc, "10.1 BA-CVA: Basic Approach")
     t = create_table(doc, HDRS, STD4)
     rows = [
-        ["BA-CVA Availability", "Available for all banks (ERBA P.520)", "Available (PS1/26 Ch.9)",
+        ["BA-CVA Availability", "Basic measure is the default for all CVA banks; scope = Cat I/II HCs, their market-risk DI subsidiaries, and market-risk banks with >= $1T OTC notional (ERBA NPR §__.201, §__.220)", "Available (PS1/26 Ch.9)",
          "Available (CRR3 Art 382a)"],
-        ["BA-CVA Reduced Version", "Available if no CVA hedges used (ERBA P.522). K_reduced = beta * K_full where beta=0.65",
+        ["BA-CVA Reduced Version", "With no eligible hedges K_hedged = K_unhedged so K = 0.65 x K_unhedged; K_unhedged = sqrt((rho sum SCVA_c)^2 + (1 - rho^2) sum SCVA_c^2), rho = 50% (ERBA NPR §__.222; P.457)",
          "Available (PS1/26 Ch.9.1)", "Available (CRR3 Art 385)"],
-        ["BA-CVA Full Version", "Recognizes index hedges ONLY (ERBA P.524). Single-name hedges NOT recognized in US BA-CVA - CRITICAL DIVERGENCE",
+        ["BA-CVA Full Version", "K = 0.65 x (0.25 K_unhedged + 0.75 K_hedged). Eligible hedges: index CDS, single-name CDS and single-name contingent CDS, INCLUDING indirect single-name hedges (r = 100% direct / 80% affiliate / 50% same sector & region); index hedge RW = Table 1 x 0.7 (ERBA NPR §__.222; P.443, P.464-467)",
          "Recognizes single-name + index hedges (PS1/26 Ch.9.1)",
          "Recognizes single-name + index hedges (CRR3 Art 386)"],
-        ["Beta (Hedging Discount)", "beta = 0.65 for reduced; full version uses hedge effectiveness formula (ERBA P.524)",
+        ["Beta (Hedging Discount)", "beta = 0.25 weight on K_unhedged (hedge effectiveness capped at 75%); 0.65 overall calibration scalar; SCVA_c = (1/alpha) x RW_c x sum(M x EAD x DF), alpha = 1.4 (1.0 commercial end-users) (ERBA NPR §__.222; P.456-457)",
          "beta = 0.65 (PS1/26 Ch.9.1)", "beta = 0.65 (CRR3 Art 385(2))"],
-        ["RW by CQS (IG)", "0.7% for AAA, 0.8% for AA, 1.0% for A (ERBA P.526)",
+        ["RW by CQS (IG)", "No ratings: RW by sector x credit quality. IG: sovereigns/MDB 0.5%; PSE/GSE/education 1.0%; financials 5.0%; basic materials/energy/industrials 3.0%; consumer/transport 3.0%; tech/telecom 2.0%; health/utilities 1.5%; other 5.0% (Table 1 to §__.222)",
          "Same RWs (PS1/26 Ch.9 Table 9.1)", "Same RWs (CRR3 Art 383(2) Table 1)"],
-        ["RW by CQS (HY)", "2.0% for BB, 3.0% for B, 10.0% for CCC (ERBA P.526)",
+        ["RW by CQS (HY)", "Speculative / sub-speculative: sovereigns 3.0% / 7.0%; PSE 4.0%; financials 12.0%; basic materials 7.0%; consumer 8.5%; tech 5.5%; health 5.0%; other 12.0% (Table 1 to §__.222)",
          "Same RWs (PS1/26 Ch.9 Table 9.1)", "Same RWs (CRR3 Art 383(2) Table 1)"],
-        ["Discount Factor", "DF = (1-exp(-0.05*M))/(0.05*M) (ERBA P.528)",
+        ["Discount Factor", "DF = (1-exp(-0.05*M))/(0.05*M), M = notional-weighted average remaining maturity (ERBA NPR §__.222)",
          "Same formula (PS1/26 Ch.9.2)", "Same formula (CRR3 Art 383(3))"],
     ]
     for r in rows:
@@ -1454,19 +1467,21 @@ def build_section_10(doc):
     add_subsection(doc, "10.2 SA-CVA: Standardized Approach")
     t2 = create_table(doc, HDRS, STD4)
     rows2 = [
-        ["SA-CVA Availability", "Available with supervisory approval (ERBA P.530)",
+        ["SA-CVA Availability", "Available with primary Federal supervisor approval (standardized measure = SA-CVA plus BA-CVA for carve-outs); m_CVA = 1.0 (agency may increase); hedging disallowance R = 0.01; MPoR >= 9 + N business days (ERBA NPR §__.220, §__.224)",
          "Available with PRA approval (PS1/26 Ch.9.3)",
          "Available with NCA approval (CRR3 Art 383a)"],
-        ["SA-CVA Structure", "Delta + vega components (ERBA P.530-536)",
+        ["SA-CVA Structure", "Delta: 6 risk classes (IR, FX, counterparty credit spread, reference credit spread, equity, commodity); vega: 5 (no counterparty CS); K_b = sqrt(sum WS^2 + sum rho WS WS + R sum (WS_hedge)^2); cross-bucket S_b capped (ERBA NPR §__.224)",
          "Delta + vega (PS1/26 Ch.9.3)", "Delta + vega (CRR3 Art 383a-383o)"],
-        ["Interest Rate Buckets", "Per currency (ERBA P.532)", "Per currency (PS1/26 Ch.9.3)",
+        ["Interest Rate Buckets", "Per currency; specified currencies (USD, AUD, CAD, EUR, JPY, SEK, GBP) tenors 1/2/5/10/30Y RW 1.11/0.93/0.74/0.74/0.74% + inflation 1.11%; other currencies parallel shift 1.58%; gamma 50% (ERBA NPR §__.224)", "Per currency (PS1/26 Ch.9.3)",
          "Per currency (CRR3 Art 383e)"],
-        ["Credit Spread Buckets", "18 sector buckets (ERBA P.532)", "18 buckets (PS1/26 Ch.9.3)",
+        ["Credit Spread Buckets", "Counterparty CS: 8 buckets (sovereign/PSE/gov-backed merged; financials; basic materials; consumer; tech; health; other; indices) with index-bucket correlation 70%; reference CS: 17 buckets (RW 0.5%-12.0%; indices 1.5%/5.0%) (Tables 3-7 to §__.224; P.491-493)", "18 buckets (PS1/26 Ch.9.3)",
          "18 buckets (CRR3 Art 383f)"],
-        ["Equity Buckets", "Per FRTB equity buckets (ERBA P.534)", "Same (PS1/26 Ch.9.3)",
+        ["Equity Buckets", "13 buckets = SBM Table 8 spot RWs (55/60/45/55/30/35/40/50/70/50/70/15/25%); vega 78% large cap / 100% other (Table 8 to §__.224)", "Same (PS1/26 Ch.9.3)",
          "Same (CRR3 Art 383g)"],
-        ["FX Buckets", "Per currency pair (ERBA P.534)", "Same (PS1/26 Ch.9.3)",
+        ["FX Buckets", "Per currency pair vs reporting currency; delta RW 11%; vega RW 100%; gamma 60% (ERBA NPR §__.224)", "Same (PS1/26 Ch.9.3)",
          "Same (CRR3 Art 383h)"],
+        ["Commodity Buckets", "12 buckets = SBM Table 9 RWs (30/35/60/80/40/45/20/35/25/35/50/30%); gamma 20% (0% with bucket 11) (Table 9 to §__.224)", "Same (PS1/26 Ch.9.3)",
+         "Same (CRR3 Art 383i)"],
     ]
     for r in rows2:
         add_data_row(t2, r)
@@ -1476,25 +1491,27 @@ def build_section_10(doc):
     t3 = create_table(doc, HDRS, STD4)
     rows3 = [
         ["CVA Exemptions", "", "", ""],
-        ["Client-Cleared Trades", "Exempt (ERBA P.540)", "Exempt (PS1/26 Ch.9.4)",
+        ["Client-Cleared Trades", "EXCLUDED: cleared transactions and client-facing derivative transactions are not CVA risk covered positions (ERBA NPR §__.202; P.439-441)", "Exempt (PS1/26 Ch.9.4)",
          "Exempt (CRR3 Art 382(3))"],
-        ["SFTs (Repos/SecLend)", "Exempt unless material CVA risk (ERBA P.540)",
+        ["SFTs (Repos/SecLend)", "Not CVA risk covered positions - the definition covers derivative contracts only; no 'material CVA risk' test (ERBA NPR P.440)",
          "Exempt unless material (PS1/26 Ch.9.4)",
          "Exempt (CRR3 Art 382(4)(a)) - broader exemption in EU"],
-        ["Intra-Group", "Exempt for US affiliated entities (ERBA P.542)",
+        ["Intra-Group", "No intra-group exemption in the NPR (ERBA NPR §__.202)",
          "Exempt per intra-group rules (PS1/26 Ch.9.4)",
          "Exempt per CRR3 Art 382(4)(b) with conditions"],
-        ["FX Transactions <=T+2", "Exempt (ERBA P.542)", "Exempt (PS1/26 Ch.9.4)",
+        ["FX Transactions <=T+2", "Not addressed in the NPR - no FX settlement exemption (ERBA NPR §__.202)", "Exempt (PS1/26 Ch.9.4)",
          "Exempt (CRR3 Art 382(4)(c))"],
-        ["Pension Fund Exemption", "No specific exemption (ERBA P.544)",
+        ["Pension Fund Exemption", "No pension fund exemption in the NPR (ERBA NPR §__.202)",
          "Temporary exemption until Jan 2026 (PS1/26 Ch.9.4)",
          "Permanent exemption for qualifying pension schemes (CRR3 Art 382(4)(d)) - EU DIVERGENCE"],
-        ["Small Portfolio Threshold", "N/A (ERBA P.544)", "N/A (PS1/26 Ch.9.4)",
+        ["Small Portfolio Threshold", "N/A - no simplified/small-portfolio method; basic measure (BA-CVA) is the default for all in-scope banks (ERBA NPR §__.220)", "N/A (PS1/26 Ch.9.4)",
          "EUR 100B aggregate notional (CRR3 Art 382(5)) - qualifies for simplified treatment"],
-        ["$1T Threshold (US)", "Simplified CVA if aggregate OTC notional < $1T (ERBA P.544). Can use BA-CVA reduced",
+        ["$1T Threshold (US)", "Scope threshold, not a simplified method: market-risk banks that are not Cat I/II HCs (or their DI subsidiaries) are subject to CVA capital only if OTC derivative gross notional >= $1 trillion (4-quarter average; CPI-W indexed); covers > 98% of DIHC OTC exposure (ERBA NPR §__.201; P.24)",
          "N/A", "N/A"],
-        ["Sovereign Exemption", "Exempt for sovereign/PSE counterparties (ERBA P.542)",
+        ["Sovereign Exemption", "No sovereign/PSE counterparty exemption in the NPR; sovereign counterparties carry BA-CVA RW 0.5% IG / 3.0% spec / 7.0% sub-spec (Table 1 to §__.222)",
          "Exempt for sovereign (PS1/26 Ch.9.4)", "Exempt for sovereign (CRR3 Art 382(4)(e))"],
+        ["Credit Derivatives Used as CRM", "Bank MAY exclude an eligible credit derivative recognized as credit risk mitigation from the CVA calculation (ERBA NPR P.439)",
+         "N/A", "N/A"],
     ]
     for i, r in enumerate(rows3):
         add_data_row(t3, r, is_subheader=(i == 0))
@@ -1518,87 +1535,105 @@ def build_section_11(doc):
         ("20Y", "1.1%"), ("30Y", "1.1%"),
     ]
     for tenor, rw in girr_rws:
-        add_data_row(t, [f"GIRR Delta {tenor}", f"{rw} (ERBA P.1090 Table 11.1)",
+        add_data_row(t, [f"GIRR Delta {tenor}", f"{rw} (Table 1 to §__.209; 10 vertices, no 7Y/25Y)",
                          f"{rw} (PS1/26 Ch.16 Table 16.1)", f"{rw} (CRR3 Art 325ae Table 3)"])
-    add_data_row(t, ["GIRR Inflation", "1.6% (ERBA P.1090)", "1.6% (PS1/26 Ch.16)",
+    add_data_row(t, ["GIRR Inflation", "1.6% (Table 1 to §__.209)", "1.6% (PS1/26 Ch.16)",
                      "1.6% (CRR3 Art 325ae(3))"])
-    add_data_row(t, ["GIRR Cross-Currency Basis", "1.6% (ERBA P.1090)", "1.6% (PS1/26 Ch.16)",
+    add_data_row(t, ["GIRR Cross-Currency Basis", "1.6% (Table 1 to §__.209)", "1.6% (PS1/26 Ch.16)",
                      "1.6% (CRR3 Art 325ae(4))"])
+    add_data_row(t, ["GIRR Liquid Currencies", "Risk weights may be divided by sqrt(2) for USD, AUD, CAD, EUR, JPY, SEK, GBP (and agency-specified currencies) (ERBA NPR §__.209)",
+                     "Same sqrt(2) treatment (PS1/26 Ch.16)", "Same sqrt(2) treatment (CRR3 Art 325ae(2))"])
 
-    # 11.2 CSR Non-Sec
-    add_subsection(doc, "11.2 CSR Non-Securitization Risk Weights (MAR21.45)")
-    t2 = create_table(doc, ["Bucket", "US RW (ERBA)", "UK RW (PS1/26)", "EU RW (CRR3)"], STD4)
+    # 11.2 CSR Non-Sec  (US Table 3 to §__.209 has 20 buckets keyed to IG / speculative /
+    # sub-speculative credit quality; UK/EU columns show the equivalent BCBS d457 MAR21.53 bucket)
+    add_subsection(doc, "11.2 CSR Non-Securitization Risk Weights (US Table 3 to §__.209 vs MAR21.53)")
+    t2 = create_table(doc, ["Bucket (US Table 3 to §__.209)", "US RW (ERBA)", "UK RW (PS1/26)", "EU RW (CRR3)"], STD4)
     csr_buckets = [
-        ("1: Sovereigns incl CB", "0.5%"), ("2: Sovereign (CRC >=5)", "1.0%"),
-        ("3: MDB", "1.0%"), ("4: Financials (IG)", "2.0%"),
-        ("5: Basic Materials (IG)", "3.0%"), ("6: Consumer (IG)", "2.0%"),
-        ("7: Tech/Telecom (IG)", "1.5%"), ("8: Health/Utilities (IG)", "2.0%"),
-        ("9: Industrial (IG)", "2.0%"), ("10: Covered Bonds", "1.5%"),
-        ("11: Financials (HY)", "4.0%"), ("12: Basic Materials (HY)", "5.0%"),
-        ("13: Consumer (HY)", "4.0%"), ("14: Tech/Telecom (HY)", "3.0%"),
-        ("15: Health/Utilities (HY)", "4.0%"), ("16: Industrial (HY)", "4.0%"),
-        ("17: Other Sector", "8.0%"), ("18: Index (IG/HY)", "1.5%/5.0%"),
+        ("1: Sovereigns, MDBs, supranationals (IG)", "0.5%", "0.5% (MAR21.53 bkt 1)"),
+        ("2: PSE, gov-backed non-fin, GSE debt, education, public admin (IG)", "1.0%", "1.0% (MAR21.53 bkt 2)"),
+        ("3: Financials incl gov-backed, real estate (IG)", "5.0%", "5.0% (MAR21.53 bkt 3)"),
+        ("4: Basic materials, energy, industrials, agri, manufacturing, mining (IG)", "3.0%", "3.0% (MAR21.53 bkt 4)"),
+        ("5: Consumer goods & services, transport, admin (IG)", "3.0%", "3.0% (MAR21.53 bkt 5)"),
+        ("6: Technology, telecom (IG)", "2.0%", "2.0% (MAR21.53 bkt 6)"),
+        ("7: Health care, utilities, professional services (IG)", "1.5%", "1.5% (MAR21.53 bkt 7)"),
+        ("8: Covered bonds (IG)", "1.5%", "1.5% (MAR21.53 bkt 8)"),
+        ("9: Sovereigns, MDBs (speculative)", "3.0%", "2.0% (MAR21.53 bkt 9, HY sovereign)"),
+        ("10: PSE etc (speculative)", "4.0%", "4.0% (MAR21.53 bkt 10)"),
+        ("11: Financials (speculative)", "12.0%", "12.0% (MAR21.53 bkt 11)"),
+        ("12: Basic materials etc (spec + sub-spec)", "7.0%", "7.0% (MAR21.53 bkt 12)"),
+        ("13: Consumer goods etc (spec + sub-spec)", "8.5%", "8.5% (MAR21.53 bkt 13)"),
+        ("14: Technology, telecom (spec + sub-spec)", "5.5%", "5.5% (MAR21.53 bkt 14)"),
+        ("15: Health care etc (spec + sub-spec)", "5.0%", "5.0% (MAR21.53 bkt 15)"),
+        ("16: Covered bonds (spec + sub-spec)", "2.5%", "No equivalent bucket (BCBS covered bonds IG only)"),
+        ("17: Sovereigns, MDBs (sub-speculative)", "7.0%", "No equivalent bucket (BCBS HY sovereign 2.0%)"),
+        ("18: Other sector (spec + sub-spec)", "12.0% (sum of |WS|)", "12.0% (MAR21.53 bkt 16)"),
+        ("19: IG indices", "1.5%", "1.5% (MAR21.53 bkt 17)"),
+        ("20: Spec + sub-spec indices", "5.0%", "5.0% (MAR21.53 bkt 18)"),
     ]
-    for bkt, rw in csr_buckets:
-        add_data_row(t2, [f"CSR {bkt}", f"{rw} (ERBA P.1094)",
-                          f"{rw} (PS1/26 Ch.16 Table 16.3)", f"{rw} (CRR3 Art 325ah Table 5)"])
+    for bkt, rw_us, rw_bcbs in csr_buckets:
+        add_data_row(t2, [f"CSR {bkt}", f"{rw_us} (Table 3 to §__.209)",
+                          f"{rw_bcbs} (PS1/26 Ch.16 Table 16.3)", f"{rw_bcbs} (CRR3 Art 325ah Table 5)"])
 
     # 11.3 CSR Securitization
     add_subsection(doc, "11.3 CSR Securitization CTP & Non-CTP")
     t3 = create_table(doc, HDRS, STD4)
     rows3 = [
-        ["CSR Sec CTP Buckets", "8 buckets mirroring CSR Non-Sec sectors (ERBA P.1098). RWs: 1.5%-16%",
-         "Same 8 buckets (PS1/26 Ch.16 Table 16.5)", "Same 8 buckets (CRR3 Art 325ak Table 9)"],
-        ["CSR Sec Non-CTP Buckets", "5 buckets by tranche seniority (ERBA P.1096). RWs: 0.8%-24%",
-         "Same 5 buckets (PS1/26 Ch.16 Table 16.4)", "Same 5 buckets (CRR3 Art 325aj Table 7)"],
-        ["Sec Non-CTP Bucket 1", "RMBS (Prime/Sub): 1.2%/1.6% (ERBA P.1096)",
+        ["CSR Sec CTP Buckets", "16 buckets by sector x credit quality (IG / spec / sub-spec) (Table 5 to §__.209). RWs: 2.0%-16.0% (e.g. IG sovereign 4.0%, IG financials 8.0%, spec+sub-spec financials 16.0%, sub-spec sovereign 16.0%, other 13.0%)",
+         "16 buckets (PS1/26 Ch.16 Table 16.5)", "16 buckets (CRR3 Art 325ak Table 9)"],
+        ["CSR Sec Non-CTP Buckets", "25 buckets: senior IG / non-senior IG / spec+sub-spec x 8 asset classes (RMBS prime/mid/sub-prime, CMBS, ABS student, cards, auto, CLO) + other sector (Table 7 to §__.209). RWs: 0.80%-3.50%; cross-bucket gamma = 0%",
+         "25 buckets (PS1/26 Ch.16 Table 16.4)", "25 buckets (CRR3 Art 325aj Table 7)"],
+        ["Sec Non-CTP Bucket 1", "Senior IG prime RMBS 0.90%; mid-prime 1.50%; sub-prime 2.00%; CMBS 2.00%; student ABS 0.80%; cards 1.20%; auto 1.20%; CLO 1.40% (Table 7 to §__.209)",
          "Same (PS1/26 Ch.16)", "Same (CRR3 Art 325aj)"],
-        ["Sec Non-CTP Bucket 25", "Other/Index: 5.0%/8.0% (ERBA P.1096)",
+        ["Sec Non-CTP Bucket 25", "Other sector 3.50% (sum of |WS|) (Table 7 to §__.209)",
          "Same (PS1/26 Ch.16)", "Same (CRR3 Art 325aj)"],
     ]
     for r in rows3:
         add_data_row(t3, r)
 
-    # 11.4 Equity
-    add_subsection(doc, "11.4 Equity Risk Weights (MAR21.77)")
+    # 11.4 Equity  (US Table 8 to §__.209 = BCBS d457 MAR21.77 values)
+    add_subsection(doc, "11.4 Equity Risk Weights (US Table 8 to §__.209 / MAR21.77)")
     t4 = create_table(doc, ["Bucket", "US RW (ERBA)", "UK RW (PS1/26)", "EU RW (CRR3)"], STD4)
     eq_buckets = [
-        ("1: Large Cap Emerging (Consumer)", "55%"), ("2: Large Cap Emerging (Telecom/Industrial)", "60%"),
-        ("3: Large Cap Emerging (Energy/Materials)", "45%"), ("4: Large Cap Developed (Consumer)", "25%"),
-        ("5: Large Cap Developed (Telecom/Industrial)", "25%"), ("6: Large Cap Developed (Energy)", "25%"),
-        ("7: Large Cap Developed (Financials)", "30%"), ("8: Large Cap Developed (Tech/Health)", "25%"),
-        ("9: Small Cap Emerging", "70%"), ("10: Small Cap Developed", "50%"),
-        ("11: Other/Indices", "70%"), ("12: Large Cap Index", "15%"),
-        ("13: Sector Index", "25%"),
+        ("1: Large Cap Emerging (Consumer/Transport/Admin/Health/Utilities)", "55%"),
+        ("2: Large Cap Emerging (Telecom/Industrials)", "60%"),
+        ("3: Large Cap Emerging (Basic Materials/Energy/Agri/Manufacturing/Mining)", "45%"),
+        ("4: Large Cap Emerging (Financials/Real Estate/Technology)", "55%"),
+        ("5: Large Cap Liquid Markets (Consumer/Transport/Admin/Health/Utilities)", "30%"),
+        ("6: Large Cap Liquid Markets (Telecom/Industrials)", "35%"),
+        ("7: Large Cap Liquid Markets (Basic Materials/Energy/Agri/Manufacturing/Mining)", "40%"),
+        ("8: Large Cap Liquid Markets (Financials/Real Estate/Technology)", "50%"),
+        ("9: Small Cap Emerging", "70%"), ("10: Small Cap Liquid Markets", "50%"),
+        ("11: Other Sector", "70%"), ("12: Large Cap Liquid-Market Indices", "15%"),
+        ("13: Other Indices", "25%"),
     ]
     for bkt, rw in eq_buckets:
-        add_data_row(t4, [f"Equity {bkt}", f"{rw} (ERBA P.1100)",
+        add_data_row(t4, [f"Equity {bkt}", f"{rw} spot / {rw[:-1]}bp repo (Table 8 to §__.209)",
                           f"{rw} (PS1/26 Ch.16 Table 16.7)", f"{rw} (CRR3 Art 325ap Table 10)"])
 
-    # 11.5 Commodity
-    add_subsection(doc, "11.5 Commodity Risk Weights (MAR21.82)")
+    # 11.5 Commodity  (US Table 9 to §__.209 = BCBS d457 MAR21.82 values)
+    add_subsection(doc, "11.5 Commodity Risk Weights (US Table 9 to §__.209 / MAR21.82)")
     t5 = create_table(doc, ["Bucket", "US RW (ERBA)", "UK RW (PS1/26)", "EU RW (CRR3)"], STD4)
     commod_buckets = [
-        ("1: Energy (Crude)", "20%"), ("2: Energy (Refined)", "20%"),
-        ("3: Energy (Natural Gas)", "20%"), ("4: Energy (Power/Carbon)", "20%"),
-        ("5: Freight/Dry Bulk", "20%"), ("6: Base Metals", "25%"),
-        ("7: Precious Metals (ex Gold)", "25%"), ("8: Grains/Oilseeds", "20%"),
-        ("9: Livestock/Dairy", "20%"), ("10: Softs/Tropicals", "35%"),
-        ("11: Other Commodity", "35%"),
+        ("1: Energy - Solid Combustibles", "30%"), ("2: Energy - Liquid Combustibles", "35%"),
+        ("3: Energy - Electricity & Carbon Trading", "60%"), ("4: Freight", "80%"),
+        ("5: Metals - Non-Precious", "40%"), ("6: Gaseous Combustibles", "45%"),
+        ("7: Precious Metals (incl Gold)", "20%"), ("8: Grains & Oilseed", "35%"),
+        ("9: Livestock & Dairy", "25%"), ("10: Softs & Other Agriculturals", "35%"),
+        ("11: Other Commodity", "50%"), ("12: Commodity Indices", "30%"),
     ]
     for bkt, rw in commod_buckets:
-        add_data_row(t5, [f"Commodity {bkt}", f"{rw} (ERBA P.1104)",
+        add_data_row(t5, [f"Commodity {bkt}", f"{rw} (Table 9 to §__.209)",
                           f"{rw} (PS1/26 Ch.16 Table 16.9)", f"{rw} (CRR3 Art 325as Table 13)"])
 
     # 11.6 FX
     add_subsection(doc, "11.6 FX Risk Weights")
     t6 = create_table(doc, HDRS, STD4)
     rows6 = [
-        ["FX Delta RW", "15% for all currency pairs (ERBA P.1106)", "15% (PS1/26 Ch.16 Table 16.11)",
+        ["FX Delta RW", "15% for all currency pairs (ERBA NPR §__.209)", "15% (PS1/26 Ch.16 Table 16.11)",
          "15% (CRR3 Art 325at(2))"],
-        ["Specified FX Pairs", "Reduced RW for specified liquid pairs: USD/EUR, USD/JPY, USD/GBP, USD/AUD, USD/CAD, USD/CHF, EUR/GBP, EUR/JPY = sqrt(2)/2 * 15% = 10.6% (ERBA P.1106)",
+        ["Specified FX Pairs", "RW divided by sqrt(2) (= 10.6%) for any pair formed from USD, EUR, JPY, GBP, AUD, CAD, CHF, MXN, CNY, NZD, HKD, SGD, TRY, KRW, SEK, ZAR, INR, NOK, BRL and agency-specified currencies (ERBA NPR §__.209; P.329 fn 376)",
          "Same specified pairs (PS1/26 Ch.16)", "Same specified pairs (CRR3 Art 325at(3))"],
-        ["FX Triangulation", "Triangulated pairs (e.g., EUR/JPY via USD) can use reduced correlation (ERBA P.1106)",
+        ["FX Triangulation", "Not separately addressed in the NPR: any pair of two specified currencies qualifies directly (ERBA NPR §__.209). Curvature CVR for options not referencing the reporting currency may be divided by 1.5",
          "Same (PS1/26 Ch.16)", "Same (CRR3 Art 325at(3))"],
     ]
     for r in rows6:
@@ -1608,9 +1643,9 @@ def build_section_11(doc):
     add_subsection(doc, "11.7 Correlation Scenarios & Aggregation")
     t7 = create_table(doc, HDRS, STD4)
     rows7 = [
-        ["Three Correlation Scenarios", "High (rho*1.25), Medium (rho), Low (rho*0.75). Capital = max of three (ERBA P.1108)",
+        ["Three Correlation Scenarios", "Medium = specified rho; High = rho x 1.25 capped at 100%; Low = max(2 x rho - 100%, 75% x rho). Capital = max of three (ERBA NPR §__.206)",
          "Same three scenarios (PS1/26 Ch.16.8)", "Same three scenarios (CRR3 Art 325g)"],
-        ["SBM Aggregation", "K_SBM = sum of max(K_high, K_medium, K_low) per risk class (ERBA P.1108)",
+        ["SBM Aggregation", "SBM = max over the three scenarios of the sum across the 7 risk classes of (delta + vega + curvature); K_b = sqrt(max(sum WS^2 + sum rho WS WS, 0)); across buckets sqrt(sum K_b^2 + sum gamma S_b S_c) with S_b = max(min(sum WS, K_b), -K_b) fallback (ERBA NPR §__.206)",
          "Same (PS1/26 Ch.16.8)", "Same (CRR3 Art 325h)"],
     ]
     for r in rows7:
@@ -1620,14 +1655,16 @@ def build_section_11(doc):
     add_subsection(doc, "11.8 DRC Parameters")
     t8 = create_table(doc, HDRS, STD4)
     rows8 = [
-        ["DRC Non-Sec RWs", "AAA: 0.5%, AA: 2%, A: 3%, BBB: 5%, BB: 10%, B: 15%, CCC: 25%, Unrated: 15%, Defaulted: 100% (ERBA P.1110)",
-         "Same RWs (PS1/26 Ch.16.9)", "Same RWs (CRR3 Art 325bp Table 2)"],
-        ["DRC Sec Non-CTP", "LGD=100%, no netting, rating+seniority-based RWs (ERBA P.1112). Senior AAA 0.5%, Other 1-12%",
+        ["DRC Non-Sec RWs", "By credit quality category, not external rating (Dodd-Frank 939A): IG 0.6% non-US sovereign / 2.1% PSE & GSE / 4.1% corporate; speculative 22.0%; sub-speculative 50.0%; defaulted 100% (Table 1 to §__.210). Four buckets: non-US sovereign, PSE & GSE, corporate, defaulted; US sovereign/MDB excluded",
+         "Rating-based RWs (PS1/26 Ch.16.9)", "Rating-based RWs (CRR3 Art 325bp Table 2)"],
+        ["DRC Sec Non-CTP", "Gross DE = market value; offsetting only within same pool and same tranche; buckets = corporate + asset class x region; RW = SEC-SA (§__.132) RW x 8%; cap at fair value for cash positions; same HBR formula (ERBA NPR §__.210)",
          "Same (PS1/26 Ch.16.9)", "Same (CRR3 Art 325bp(3))"],
-        ["DRC Sec CTP", "Same-tranche netting allowed, 50% hedge benefit ratio (ERBA P.1114)",
+        ["DRC Sec CTP", "Each index its own bucket; HBR computed across all CTP buckets; tranche RW = SEC RW x 8%; DRC_CTP = max(sum_b[max(DRC_b, 0) + 0.5 x min(DRC_b, 0)], 0) (ERBA NPR §__.210)",
          "Same (PS1/26 Ch.16.9)", "Same (CRR3 Art 325bp(4))"],
-        ["DRC LGD Non-Sec", "Senior: 75%, Non-senior: 100%, Equity: 100% (ERBA P.1110)",
-         "Same (PS1/26 Ch.16.9)", "Same (CRR3 Art 325bp(1))"],
+        ["DRC LGD Non-Sec", "Equity, non-senior debt and defaulted positions 100%; senior debt 75%; US PSE positions 50%; covered bonds and GSE-guaranteed debt 25%; GSE-issued non-guaranteed debt 75% (ERBA NPR §__.210)",
+         "100% / 75% / 25% (PS1/26 Ch.16.9)", "100% / 75% / 25% (CRR3 Art 325bp(1))"],
+        ["DRC HBR / Maturity", "HBR = sum net long / (sum net long + sum |net short|); positions < 1Y scaled by fraction of year with 3-month floor; unhedged cash equity may use 3 months or 1 year (ERBA NPR §__.210)",
+         "Same (PS1/26 Ch.16.9)", "Same (CRR3 Art 325bp)"],
     ]
     for r in rows8:
         add_data_row(t8, r)
@@ -1636,23 +1673,23 @@ def build_section_11(doc):
     add_subsection(doc, "11.9 RRAO & IMA Parameters")
     t9 = create_table(doc, HDRS, STD4)
     rows9 = [
-        ["RRAO Exotic", "1.0% of notional (ERBA P.1116). Instruments with exotic underlying: longevity, weather, gap risk",
+        ["RRAO Exotic", "1.0% of notional (ERBA NPR §__.211). Instruments with exotic underlying: longevity, weather, natural disasters, realized volatility",
          "1.0% (PS1/26 Ch.16.10)", "1.0% (CRR3 Art 325bp(1)(a))"],
-        ["RRAO Other Residual", "0.1% of notional (ERBA P.1116). Instruments bearing other residual risks not captured by SBM",
+        ["RRAO Other Residual", "0.1% of notional (ERBA NPR §__.211). CTP with >= 3 underlyings, non-replicable curvature/vega payoffs, no maturity, no/multiple strikes or barriers",
          "0.1% (PS1/26 Ch.16.10)", "0.1% (CRR3 Art 325bp(1)(b))"],
-        ["RRAO Exemptions", "Linear instruments in plain-vanilla underlyings exempt (ERBA P.1118)",
+        ["RRAO Exemptions", "Listed/cleared instruments, back-to-back positions, plain-vanilla options and other listed exclusions (ERBA NPR §__.211)",
          "Same (PS1/26 Ch.16.10)", "Same (CRR3 Art 325bp(2))"],
-        ["IMA ES", "ES at 97.5% confidence, base + stress period (ERBA P.1120)",
+        ["IMA ES", "ES at 97.5%, base liquidity horizon 10 days with ladder 10/20/40/60/120 days; stress period 12 months back to 2007; reduced factor set must explain >= 75%; IMA_G,A = max(IMCC_t-1 + SES_t-1, m_c x IMCC_avg60 + SES_avg60) + PLA add-on; IMA capped at SA (ERBA NPR §__.204, §__.215)",
          "Same (PS1/26 Ch.16.11)", "Same (CRR3 Art 325bb)"],
-        ["IMA NMRF", "Capital add-on for non-modellable risk factors at 97.5% stressed ES (ERBA P.1122)",
+        ["IMA NMRF", "SES = sqrt(sum SES_NM,k^2 + [(1-rho_b) sum SES_NM,j^2 + rho_b (sum SES_NM,j)^2]), rho_b = 0.36; modellability: 24 real prices (10/20-day LH) or 16 otherwise; NMRF LH >= max(assigned, 20 days); IMCC omega = 0.5 (ERBA NPR §__.214-215)",
          "Same (PS1/26 Ch.16.11)", "Same (CRR3 Art 325bk)"],
-        ["IMA Multiplier", "mc = 1.5 + k where k is 0 to 0.5 based on backtesting exceptions (ERBA P.1124). 250-day backtest, green/amber/red zones",
+        ["IMA Multiplier", "m_c = 1.5 base; backtesting ladder (99% 1-day VaR, 250 days, max of actual/hypothetical exceptions): 0-4 exceptions 1.50; 5: 1.70; 6: 1.76; 7: 1.83; 8: 1.88; 9: 1.92; >= 10: 2.00 (Table 1 to §__.204)",
          "Same formula (PS1/26 Ch.16.11)", "Same formula (CRR3 Art 325ba)"],
-        ["PLA Test", "Spearman correlation >= 0.7 AND KL divergence within threshold (ERBA P.1126)",
-         "Same tests (PS1/26 Ch.16.12)", "Same tests (CRR3 Art 325bg)"],
-        ["Backtesting", "250-day, 99% VaR. Green: 0-4 exceptions, Amber: 5-9, Red: 10+ (ERBA P.1128)",
+        ["PLA Test", "Kolmogorov-Smirnov metric ONLY (no Spearman correlation test): green KS < 0.09; amber 0.09 <= KS <= 0.12; red > 0.12; PLA add-on = 0.5 x (SA_amber / SA_G,A) x max(SA_G,A - IMA_G,A, 0); three-year transition with no automatic consequences (ERBA NPR §__.213; P.380-381, P.537)",
+         "Spearman + KS (PS1/26 Ch.16.12)", "Spearman + KS (CRR3 Art 325bg)"],
+        ["Backtesting", "Desk-level: 97.5% and 99% VaR over 250 business days; desk ineligible if > 12 exceptions at 99% or > 30 at 97.5% (actual or hypothetical P&L) (ERBA NPR §__.212)",
          "Same (PS1/26 Ch.16.12)", "Same (CRR3 Art 325bf)"],
-        ["Threshold Divergence", "$5B trading activity (4Q avg) for FRTB application (ERBA P.1085)",
+        ["Threshold Divergence", "$5B trading assets + liabilities (4Q avg) or >= 10% of total assets; Cat I/II holding companies regardless (ERBA NPR §__.201)",
          "GBP 50M bilateral netting set or 5% total assets (PS1/26 Ch.16.1)",
          "EUR 500M or 10% total assets (CRR3 Art 325a(1))"],
     ]
@@ -1672,17 +1709,17 @@ def build_section_12(doc):
     t = create_table(doc, HDRS, STD4)
     rows = [
         ["BI Components", "", "", ""],
-        ["ILDC Formula", "ILDC = min(abs(II-IE), 2.25% * IEA) + abs(LI-LE) (ERBA P.950-952). II=Interest Income, IE=Interest Expense, IEA=Interest Earning Assets. NII capped at 2.25% of IEA",
+        ["ILDC Formula", "ILDC = min(Avg3y|total interest income - total interest expense|, 2.25% x Avg3y interest-earning assets) + Avg3y dividend income (ERBA NPR §__.150). Interest income/expense include lease income/expense; IEA average = 12 quarter-ends / 12",
          "Same formula (PS1/26 Ch.14.1)", "Same formula (CRR3 Art 314(1))"],
-        ["NII Cap", "2.25% of interest-earning assets (ERBA P.952). Prevents distortion from high-rate environments",
+        ["NII Cap", "2.25% of interest-earning assets (ERBA NPR §__.150). Prevents distortion from high-rate environments",
          "2.25% of IEA (PS1/26 Ch.14.1)", "2.25% of IEA (CRR3 Art 314(1)(a))"],
-        ["SC Formula", "SC = max(OOI, OOE) + max(FI, FE) (ERBA P.954). OOI/OOE=Other Operating Income/Expense, FI/FE=Fee Income/Expense",
+        ["SC Formula", "N/A - no separate services component. US BI has TWO components: ILDC + noninterest component (ERBA NPR §__.150; P.535 'noninterest component replaces financial and services components')",
          "Same formula (PS1/26 Ch.14.1)", "Same formula (CRR3 Art 314(2))"],
-        ["FC Formula", "FC = abs(Net P&L Trading Book) + abs(Net P&L Banking Book) (ERBA P.954)",
+        ["FC Formula", "N/A - no separate financial component; trading and banking book results enter noninterest income. Noninterest component = Avg3y( |total noninterest income + realized gains/losses on HTM and AFS debt securities - noninterest expense for BI - 0.7 x (fee income from investment management, investment services and non-lending treasury services - related noninterest expense)| + total operational losses ) (ERBA NPR §__.150)",
          "Same formula (PS1/26 Ch.14.1)", "Same formula (CRR3 Art 314(3))"],
-        ["BI Calculation", "BI = ILDC + SC + FC. 3-year average of annual figures (ERBA P.956)",
+        ["BI Calculation", "BI = ILDC + noninterest component. Avg3y = average of the three most recent four-quarter periods (ERBA NPR §__.150). Noninterest expense for BI excludes salaries/benefits, premises, goodwill impairment, intangibles amortization and total operational losses (§__.101)",
          "Same 3Y average (PS1/26 Ch.14.1)", "Same 3Y average (CRR3 Art 314(4))"],
-        ["NIC Adjustment", "NET basis with 0.7x factor for investment management income (ERBA P.958). NIC = FC adjusted for fee-based investment management",
+        ["NIC Adjustment", "0.7x factor applied to NET fee income (income less related noninterest expense) from investment management, investment services AND non-lending treasury services, inside the noninterest component (ERBA NPR §__.150; P.205: op-loss/income ratio for these lines ~32% of the all-business average)",
          "Same (PS1/26 Ch.14.1)", "Same (CRR3 Art 314(3)(b))"],
     ]
     for i, r in enumerate(rows):
@@ -1692,11 +1729,11 @@ def build_section_12(doc):
     add_subsection(doc, "12.2 BIC Marginal Coefficients")
     t2 = create_table(doc, HDRS, STD4)
     rows2 = [
-        ["Bucket 1: BI <= $1B", "12% marginal coefficient (ERBA P.960). BIC = 12% * BI",
+        ["Bucket 1: BI <= $1B", "12% marginal coefficient (ERBA NPR §__.150). BIC = 0.12 x BI; thresholds CPI-W indexed",
          "12% for BI <= GBP 0.88B (PS1/26 Ch.14.2)", "12% for BI <= EUR 1B (CRR3 Art 315(1))"],
-        ["Bucket 2: $1B < BI <= $30B", "15% marginal coefficient (ERBA P.960). BIC = $120M + 15% * (BI - $1B)",
+        ["Bucket 2: $1B < BI <= $30B", "15% marginal coefficient (ERBA NPR §__.150). BIC = $120M + 0.15 x (BI - $1B)",
          "15% for GBP 0.88B-26.4B (PS1/26 Ch.14.2)", "15% for EUR 1B-30B (CRR3 Art 315(2))"],
-        ["Bucket 3: BI > $30B", "18% marginal coefficient (ERBA P.960). BIC = $120M + $4,350M + 18% * (BI - $30B)",
+        ["Bucket 3: BI > $30B", "18% marginal coefficient (ERBA NPR §__.150). BIC = $4.47B + 0.18 x (BI - $30B); operational RWA = 12.5 x BIC",
          "18% for BI > GBP 26.4B (PS1/26 Ch.14.2)", "18% for BI > EUR 30B (CRR3 Art 315(3))"],
         ["Worked Example: $50B BI", "BIC = 12%*1 + 15%*29 + 18%*20 = $0.12B + $4.35B + $3.6B = $8.07B",
          "Similar calculation in GBP", "Similar calculation in EUR"],
@@ -1708,20 +1745,20 @@ def build_section_12(doc):
     add_subsection(doc, "12.3 Internal Loss Multiplier (ILM)")
     t3 = create_table(doc, HDRS, STD4)
     rows3 = [
-        ["ILM Setting", "ILM = 1.0 (fixed, not applied) (ERBA P.962). US does not use internal loss data to modify OpRisk capital",
+        ["ILM Setting", "NO ILM term in the rule text: operational RWA = 12.5 x BIC (ERBA NPR §__.150). Internal loss data instead enters the BI directly (total operational losses added to the noninterest component); Question 84 asks whether an ILM with a factor between 5 and 15 should be added (P.198-199)",
          "ILM = 1.0 (fixed) (PS1/26 Ch.14.3). PRA supervisory expectation for loss data collection but no capital impact",
          "ILM = 1.0 (fixed) (CRR3 Art 315a). BUT mandatory loss data collection required"],
-        ["Loss Data Requirement", "NOT required for capital calculation (ERBA P.962)",
+        ["Loss Data Requirement", "REQUIRED: independent operational risk management function; operational loss event data collection processes; events >= $20,000 (CPI-W indexed) across 7 event types; total operational losses feed the BI (ERBA NPR §__.101, §__.150; P.204-207, P.216)",
          "Supervisory expectation only - qualitative requirement (PS1/26 Ch.14.3)",
          "MANDATORY: EUR 20K threshold, 10Y history, COREP C16.02-04 reporting (CRR3 Art 316-317). Must have loss data governance framework"],
-        ["Loss Data Threshold", "N/A", "N/A", "EUR 20,000 per-event threshold (CRR3 Art 316(1))"],
-        ["Loss Data History", "N/A", "N/A", "10 years minimum; 5 years transitional (CRR3 Art 316(2))"],
-        ["COREP Templates", "N/A", "N/A", "C16.02 (losses by event type), C16.03 (large losses), C16.04 (loss trends) (EBA ITS 2024/XXX)"],
-        ["ILM Formula (if applied)", "ILM = ln(exp(1)-1 + (LC/BIC)^0.8) where LC=Loss Component = 15*avg annual op losses. NOT currently applied in any jurisdiction",
+        ["Loss Data Threshold", "$20,000 per event, CPI-W indexed (ERBA NPR §__.150; P.35)", "N/A", "EUR 20,000 per-event threshold (CRR3 Art 316(1))"],
+        ["Loss Data History", "10 years, including loss data of acquired or merged entities (ERBA NPR §__.150)", "N/A", "10 years minimum; 5 years transitional (CRR3 Art 316(2))"],
+        ["COREP Templates", "N/A (FR Y-14Q operational loss data; Cat I/II HCs reported > $308B of >= $20,000 losses 2007Q1-2025Q2, P.195)", "N/A", "C16.02 (losses by event type), C16.03 (large losses), C16.04 (loss trends) (EBA ITS 2024/XXX)"],
+        ["ILM Formula (if applied)", "Basel ILM = ln(exp(1)-1 + (15 x avg annual losses / BIC)^0.8) quoted only in Question 84; NOT part of the proposed rule (ERBA NPR P.198-199)",
          "Same formula (not applied)", "Same formula (CRR3 Art 315a(2), not applied per Art 315a(1))"],
-        ["OpRisk Capital", "ORC = BIC * ILM = BIC * 1.0 = BIC (ERBA P.964)",
+        ["OpRisk Capital", "ORC = BIC; RWA_op = 12.5 x BIC (ERBA NPR §__.150)",
          "ORC = BIC (PS1/26 Ch.14.4)", "ORC = BIC (CRR3 Art 312a)"],
-        ["M&A Adjustment", "Acquired entity BI included from completion. Merged entity BI combined. Divestitures: removed after 3Y (ERBA P.966)",
+        ["M&A Adjustment", "BI and loss data of acquired or merged entities included (10-year loss history) (ERBA NPR §__.150)",
          "Similar approach (PS1/26 Ch.14.5)",
          "Acquired entity inclusion; NCA may allow exclusion of divested BI after separation (CRR3 Art 314(5))"],
     ]
@@ -1734,25 +1771,25 @@ def build_section_12(doc):
 # SECTION 13: Securitization
 # ═══════════════════════════════════════════════════════════════════
 def build_section_13(doc):
-    add_section_heading(doc, "13", "Securitization: SEC-SA, SEC-ERBA, STS & Risk Retention")
+    add_section_heading(doc, "13", "Securitization: SEC-SA (US), SEC-ERBA (UK/EU), STS & Risk Retention")
 
     # 13.1 Hierarchy
     add_subsection(doc, "13.1 Approach Hierarchy")
     t = create_table(doc, HDRS, STD4)
     rows = [
-        ["Primary Approach", "SEC-ERBA (External Ratings-Based) for rated tranches; SEC-SA for unrated (ERBA P.300-320). US allows external ratings for securitization only (Dodd-Frank 939A exception)",
+        ["Primary Approach", "SEC-SA ONLY. No SEC-ERBA (external ratings prohibited by Dodd-Frank 939A) and no SEC-IRBA; 'ERBA' in the NPR means the expanded risk-based approach, not the ratings-based securitization approach (ERBA NPR §__.132-133)",
          "SEC-IRBA > SEC-ERBA > SEC-SA hierarchy (PS1/26 Ch.10.1)",
          "SEC-IRBA > SEC-ERBA > SEC-SA hierarchy (CRR3 Art 254)"],
-        ["SEC-IRBA Availability", "N/A (no IRB in US) (ERBA P.300)",
+        ["SEC-IRBA Availability", "N/A (no IRB in US) (ERBA NPR §__.132)",
          "Available if IRB approved for underlying pool (PS1/26 Ch.10.1)",
          "Available if IRB approved (CRR3 Art 259)"],
-        ["SEC-SA Formula", "Ka formula: Ka = (1-W) * KA_SA + W * Kd. W = ratio of delinquent exposures (ERBA P.310)",
+        ["SEC-SA Formula", "K_A = (1-W) x K_G + W x 0.5; K_G = weighted-average capital requirement of underlying exposures (100% RW = 0.08); W = delinquent share (90+ dpd, bankruptcy, foreclosure, REO, deferred 90+, default); K_SSFA = (e^(au) - e^(al)) / (a(u-l)), a = -1/(p x K_A), p = 0.5 (1.5 resecuritization); straddle blend for A < K_A < D (ERBA NPR §__.133)",
          "Same formula (PS1/26 Ch.10.2)", "Same formula (CRR3 Art 261)"],
-        ["SEC-ERBA RWs", "AAA Senior: 15%, AAA Non-Senior: 25-40%, AA: 25-65%, A: 35-100%, BBB: 60-225%, BB: 250-650%, B: 425-1250%, CCC: 1250% (ERBA P.306)",
+        ["SEC-ERBA RWs", "N/A - US does not use the external ratings-based approach (ERBA NPR §__.132)",
          "Same RW tables (PS1/26 Ch.10.3)", "Same RW tables (CRR3 Art 263 Table 1-2)"],
-        ["RW Floor", "15% for all securitization exposures (ERBA P.302)",
+        ["RW Floor", "15%; 100% for resecuritizations and NPL securitizations; senior look-through floor 15%; NPL senior tranche 100% if non-refundable purchase price discount >= 50% (ERBA NPR §__.132-133; P.178-183)",
          "15% (PS1/26 Ch.10.4)", "15% (CRR3 Art 267)"],
-        ["1250% RW Cap", "Look-through deduction: 1250% RW = deduction from CET1 (ERBA P.302)",
+        ["1250% RW Cap", "1,250% risk weight (not a CET1 deduction) when D <= K_A, when SEC-SA cannot be applied, or when due diligence fails; CEIO strips (non-gain-on-sale portion) deducted from CET1 (ERBA NPR §__.131-133; P.162, P.180)",
          "Same (PS1/26 Ch.10.4)", "Same (CRR3 Art 267)"],
     ]
     for r in rows:
@@ -1762,19 +1799,19 @@ def build_section_13(doc):
     add_subsection(doc, "13.2 STS Framework (Simple, Transparent, Standardized)")
     t2 = create_table(doc, HDRS, STD4)
     rows2 = [
-        ["STS Framework", "NOT adopted in US (ERBA P.330). No STS-equivalent preferential treatment",
+        ["STS Framework", "NOT adopted in US (ERBA NPR §__.133: single p = 0.5 and 15% floor; no STC/STS preferential treatment)",
          "STS framework adopted (PS1/26 Ch.10.5). UK STS designation via FCA",
          "Full STS framework (CRR3 Art 242-270, Securitisation Reg 2017/2402). 10% RW floor for STS vs 15% for non-STS"],
-        ["STS RW Floor", "N/A (15% floor for all) (ERBA P.330)",
+        ["STS RW Floor", "N/A (15% floor for all non-resecuritization exposures) (ERBA NPR §__.133)",
          "10% for qualifying STS tranches (PS1/26 Ch.10.5)",
          "10% for qualifying STS tranches (CRR3 Art 260)"],
         ["STS Criteria", "N/A", "Simplicity (true sale, homogeneous pool, no active management), Transparency (investor reporting), Standardised (risk retention, documentation) (PS1/26 Ch.10.5)",
          "21 criteria across simplicity/transparency/standardization (Securitisation Reg Art 19-22)"],
         ["Capital Impact", "US banks face 5pp higher floor vs UK/EU for qualifying senior STS tranches",
          "5pp lower floor for STS tranches", "5pp lower floor for STS tranches"],
-        ["Risk Retention", "5% minimum retention by originator (ERBA P.332). Vertical slice, horizontal first-loss, or L-shaped",
+        ["Risk Retention", "5% minimum retention by sponsor per Regulation RR (Dodd-Frank §941) - not part of the capital NPR. Vertical slice, horizontal first-loss, or L-shaped",
          "5% retention (PS1/26 Ch.10.6)", "5% retention (Securitisation Reg Art 6)"],
-        ["SRT Assessment", "Significant risk transfer assessed by Fed (ERBA P.334)",
+        ["SRT Assessment", "Operational requirements for traditional and synthetic securitizations (transfer of credit risk, clean-up calls, due diligence) retained; failure => 1,250% RW (ERBA NPR §__.131)",
          "SRT assessed by PRA (PS1/26 Ch.10.7)", "SRT criteria per CRR3 Art 244-245"],
     ]
     for r in rows2:
@@ -2069,18 +2106,18 @@ def build_section_17(doc):
          "US", RED_HEX, GREEN_HEX, GREEN_HEX),
         ("8. SA-CCR Alpha", "1.4 fin / 1.0 comm", "1.4 all", "1.4 all",
          "UK/EU", GREEN_HEX, RED_HEX, RED_HEX),
-        ("9. CVA BA-CVA Hedges", "Index only", "Single-name + index", "Single-name + index",
-         "US", RED_HEX, GREEN_HEX, GREEN_HEX),
+        ("9. CVA BA-CVA Hedges", "Single-name (incl. indirect) + index", "Single-name + index", "Single-name + index",
+         "Aligned", AMBER_HEX, AMBER_HEX, AMBER_HEX),
         ("10. STS Securitization", "No STS (15% floor)", "STS (10% floor)", "STS (10% floor)",
          "US", RED_HEX, GREEN_HEX, GREEN_HEX),
         ("11. Past Due Provisions", "150% flat", "100% if prov>=50%", "100% if prov>=20%",
          "US", RED_HEX, AMBER_HEX, GREEN_HEX),
-        ("12. Equity Phase-In", "Immediate 250/400%", "Immediate 250/400%", "Phase-in to 2030",
-         "US/UK", RED_HEX, RED_HEX, GREEN_HEX),
+        ("12. Equity Phase-In", "Immediate 300/400%", "Immediate 250/400%", "Phase-in to 2030",
+         "US", RED_HEX, AMBER_HEX, GREEN_HEX),
         ("13. IRB PD/LGD Floors", "N/A (no IRB)", "BCBS floors", "BCBS floors",
          "N/A", AMBER_HEX, GREEN_HEX, GREEN_HEX),
-        ("14. OpRisk Loss Data", "Not required", "Supervisory expectation", "Mandatory EUR 20K/10Y",
-         "EU", GREEN_HEX, AMBER_HEX, RED_HEX),
+        ("14. OpRisk Loss Data", "Required ($20K, 10Y); losses enter BI", "Supervisory expectation", "Mandatory EUR 20K/10Y",
+         "US/EU", RED_HEX, GREEN_HEX, RED_HEX),
         ("15. Large Exp G-SIB", "15% T1 G-SIB-to-G-SIB", "25% T1", "25% T1",
          "US", RED_HEX, GREEN_HEX, GREEN_HEX),
     ]
@@ -2112,12 +2149,15 @@ def build_section_17(doc):
                      alignment=WD_ALIGN_PARAGRAPH.CENTER)
 
     doc.add_paragraph()
-    add_body_text(doc, "SUMMARY: US is most conservative on 11 of 15 dimensions (RED). "
-        "UK is most conservative on 2 dimensions (AT1 trigger, SA-CCR alpha for all). "
-        "EU is most conservative on 2 dimensions (loss data, SA-CCR alpha for all). "
-        "The US approach produces approximately 6-8% higher aggregate RWA for a typical "
-        "Category I G-SIB, primarily driven by the uniform 40% CCF, SA-only credit risk, "
-        "absence of STS securitization benefits, and finer G-SIB surcharge calibration.")
+    add_body_text(doc, "SUMMARY: US is most conservative on 11 of 15 dimensions (RED), including "
+        "operational-risk loss data (shared with the EU). UK is most conservative on 2 dimensions "
+        "(AT1 trigger, SA-CCR alpha for all). EU is most conservative on 2 dimensions (loss data, "
+        "SA-CCR alpha for all). BA-CVA hedge recognition is aligned across the three. "
+        "The US approach is estimated (illustrative model estimate, not an NPR figure) to produce "
+        "approximately 6-8% higher aggregate RWA for a typical Category I G-SIB, primarily driven "
+        "by the uniform 40% CCF, SA-only credit risk, absence of STS securitization benefits, and "
+        "300% publicly traded equity. The NPR's own aggregate estimate is +1.9% RWA for the nine "
+        "Category I/II BHCs versus the current US standardized approach (Table VII.5).")
     doc.add_page_break()
 
 
@@ -2154,7 +2194,9 @@ def build_section_18(doc):
         ["Residential Mtg 80-90% LTV", "40%", "40%", "35%"],
         ["CRE CF 60-80% LTV", "90%", "90%", "90%"],
         ["ADC", "150% / 100% reduced", "150% / 100% reduced", "150% / 100% reduced"],
-        ["Listed Equity", "250%", "250%", "100-250% (phased)"],
+        ["Listed Equity", "300%", "250%", "100-250% (phased)"],
+        ["Bank Grade A", "30% / 40%", "20-30% (CQS 1-2)", "20-30% (CQS 1-2)"],
+        ["SME Corporate", "100% (65% IG)", "85%", "85% (x0.7619 factor)"],
         ["Past Due (prov>=20%)", "150%", "150%", "100%"],
         ["Commitment <=1Y CCF", "40%", "20%", "20%"],
         ["SA-CCR Alpha (Financial)", "1.4", "1.4", "1.4"],

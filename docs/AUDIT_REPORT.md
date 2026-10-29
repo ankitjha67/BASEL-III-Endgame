@@ -241,7 +241,24 @@ code (40–90 %, the 2023 NPR schedule) was wrong.
 | CTP | 50 % hedge benefit applied to shorts within each bucket | single HBR across all indices; unfloored bucket amounts; **total = max(Σ[max(DRC_b,0) + 0.5·min(DRC_b,0)], 0)**; nth-to-default A/D = (N−1)/N over total names |
 
 ## 2.3 Project documents (`output/*.docx`, README, migration guide)
-(Populated from the document reconciliation.)
+The three generator scripts in `scripts/` were corrected and all three documents regenerated.
+Only the US 2026 column and the 2023-vs-2026 statements were changed; UK PRA, EU CRR3 and
+BCBS columns were left as written.
+
+| Claim (US 2026) | Was | Now |
+|---|---|---|
+| Residential mortgage LTV RWs (NPR comparison, Four-Way) | 40–90 % (2023 NPR values) | 20/25/30/40/50/70 %; cash-flow dependent 30/35/45/60/75/105 % — Tables 5–6 to § __.111 |
+| Bank Grade A (Deliverable 2) | "HC ≥ $3B 40 % / Other 30 %" | 30 % if § __.111(d)(2) met (CET1 ≥ 14 %, leverage ≥ 5 %, or CBLR), else 40 % |
+| Short-term bank claims | general ≤ 3-month preference | none; 20/50/150 % only for foreign-bank trade-related contingent items |
+| SME corporate | 85 % | 100 % (65 % IG); no SME weight |
+| Publicly traded equity | 250 % | 300 % — § __.141(b)(5) |
+| SA-CCR credit SF (IG single name) | 0.38 % / 0.54 % | 0.46 %; spec 1.3 %; sub-spec 6.0 %; index 0.38 % / 1.06 % |
+| Securitization approach | "SEC-ERBA Tables 2–5" in the US column | SEC-SA only; no external-ratings approach |
+| CVA / op risk / FRTB rows | BCBS values | NPR values as in § 2.2 |
+| "STWF coefficient 23.003" (NPR comparison) | stated as fact | removed; G-SIB surcharge parameters belong to the separate G-SIB NPR |
+| Residential table citations (Deliverable 2) | "ERBA P.132 Table 2 / P.134 Table 3" | Tables 5–6 to § __.111, pp. 692–693 |
+
+README.md and docs/migration_guide.md were updated for the same claims.
 
 ## 2.4 Items the NPR text does not settle (kept as `# TODO: VERIFY`)
 * Mapping of "unrated" internal grades: the NPR has no unrated category; the engine maps

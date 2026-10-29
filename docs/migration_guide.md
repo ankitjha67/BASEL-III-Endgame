@@ -104,7 +104,7 @@ basel-iii-endgame-engine/
 │   │   ├── __init__.py
 │   │   ├── business_indicator.py      # BI = ILDC + NIC (net basis, 0.7x)
 │   │   ├── bic_calculation.py         # BIC marginal coefficients
-│   │   ├── ilm.py                     # ILM (=1 for 2026, formula for comparison)
+│   │   ├── ilm.py                     # ILM (no ILM term in 2026 NPR: RWA = 12.5 x BIC; Basel formula for comparison only)
 │   │   ├── loss_data.py               # Operational loss database ($20K threshold)
 │   │   └── threshold_indexing.py      # CPI-W indexing mechanism
 │   │

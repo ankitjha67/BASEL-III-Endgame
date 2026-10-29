@@ -36,8 +36,8 @@ src/
 ├── credit_risk/             # SA-CR risk weights, exposure classification, CRM
 ├── counterparty_risk/       # SA-CCR (alpha=1.4/1.0), netting, margin
 ├── cva_risk/                # SA-CVA, BA-CVA capital charges
-├── operational_risk/        # SMA: BIC (12%/15%/18%), ILM=1.0 per US proposal
-├── securitization/          # SEC-ERBA, SEC-SA, tranche capital
+├── operational_risk/        # SMA: BIC (12%/15%/18%), no ILM term per US 2026 NPR (RWA = 12.5 x BIC)
+├── securitization/          # SEC-SA (US 2026 NPR: p=0.5, 15% floor); SEC-ERBA retained for UK/EU comparison only
 ├── capital/                 # CET1/AT1/T2 components, RWA aggregation, ratios
 │   └── gsib/               # G-SIB surcharge (20bp bands, 0.1% increments)
 ├── ecl/                     # Expected Credit Loss (CECL/IFRS 9)
@@ -64,16 +64,26 @@ These deviate from the BCBS standard and are implemented as specified:
 | Parameter | US 2026 Value | BCBS Standard |
 |---|---|---|
 | Output Floor (72.5%) | **NOT applied** | Applied |
-| ILM (Operational Risk) | **1.0** (not applied) | Calculated |
-| MSA Deduction | **250% RW** (not deducted) | Deducted |
-| Retail Transactor RW | **45%** | 75% |
-| Corporate IG RW | **65%** (self-assessment) | External rating based |
-| G-SIB Surcharge Bands | **20bp / 0.1%** | 100bp / 0.5% |
-| G-SIB Method 2 | **1.2x downward** factor | Standard |
-| SA-CCR Alpha | **1.4** (financial) / **1.0** (commercial) | 1.4 |
-| BIC Thresholds | **$1B / $30B** | Same |
+| ILM (Operational Risk) | **No ILM term** (RWA = 12.5 x BIC); operational losses enter the BI noninterest component; loss data >= $20K still collected | Calculated (national discretion to set 1.0) |
+| MSA Deduction | **250% RW** on all MSAs (not deducted; excluded from 15% aggregate test) | Deducted above thresholds |
+| Retail Transactor RW | **45%** (regulatory retail 75%, other retail 100%) | 45% (transactor) / 75% |
+| Corporate IG RW | **65%** (internal rating system) | External rating based (65% unrated IG where ratings not permitted) |
+| Bank Exposures | **Grade A 30%** (CET1 >= 14% and SLR/leverage >= 5%, or CBLR) / **40%**; Grade B 75%; Grade C 150% | ECAI / SCRA 20-150% |
+| Residential Mortgage RW | **20/25/30/40/50/70%** by LTV (not CF-dependent); 30-105% CF-dependent | Same |
+| Equity RW | **300%** publicly traded / 400% non-public / 600% leveraged investment firm; 100% non-significant (<= 10% total capital) | 250% / 400% |
+| Commitments CCF | **40%** regardless of maturity; 10% UCC | 40% / 20% (<= 1Y) |
+| G-SIB Surcharge Bands | **20bp / 0.1%** (separate G-SIB NPR; not verified against ERBA NPR) | 100bp / 0.5% |
+| G-SIB Method 2 | **1.2x downward** factor (separate G-SIB NPR; not verified) | Standard |
+| SA-CCR Alpha | **1.4** (financial) / **1.0** (commercial end-users) | 1.4 |
+| SA-CCR Credit SF | **0.46% / 1.3% / 6.0%** single-name IG / spec / sub-spec; index 0.38% / 1.06% | Rating-based 0.38%-6.0% |
+| BIC Thresholds | **$1B / $30B** (CPI-W indexed) | Same |
 | BIC Coefficients | **12% / 15% / 18%** | Same |
-| FRTB Threshold | **$5B** (4-quarter avg) | $1B |
+| FRTB Threshold | **$5B** trading assets + liabilities (4-quarter avg) or 10% of assets | n/a (current US rule: $1B point-in-time) |
+| CVA Scope | Cat I/II HCs, their market-risk DI subs, market-risk banks with **>= $1T** OTC notional; cleared and client-facing derivatives excluded | All banks with OTC derivatives |
+| BA-CVA | K = 0.65 x (0.25 K_unhedged + 0.75 K_hedged); single-name + index hedges; sector x IG/spec RWs | Same structure |
+| Securitization | **SEC-SA only** (p = 0.5; 15% floor; no SEC-ERBA / STC) | SEC-IRBA > SEC-ERBA > SEC-SA |
+| Output Floor | **Not adopted** | 72.5% |
+| Impact (NPR Tables VII.1-VII.5) | CET1 req. **+1.4%** standalone (Cat I/II BHCs), **-4.8%** cumulative with G-SIB & stress-test proposals; RWA **+1.9%** ($7,673B -> $7,820B); market RWA +20%; CVA req. +96% | n/a |
 
 ## Modules
 
