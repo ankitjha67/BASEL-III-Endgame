@@ -11,11 +11,11 @@ All amounts in $M. Synthetic, seeded portfolio; figures illustrate the engine an
 
 | # | Stage | Status | Time (s) | Headline |
 |---|---|---|---|---|
-| 1 | Portfolio generation | PASS | 0.02 | 565 credit exposures ($1,763,400M EAD), 130 trading positions |
-| 2 | SA credit risk (§ __.111) | PASS | 0.02 | EAD $1,924,996M  RWA $792,369M  density 41.2% |
+| 1 | Portfolio generation | PASS | 0.01 | 565 credit exposures ($1,763,400M EAD), 130 trading positions |
+| 2 | SA credit risk (§ __.111) | PASS | 0.01 | EAD $1,924,996M  RWA $792,369M  density 41.2% |
 | 3 | Off-balance sheet CCFs (§ __.112) | PASS | 0.01 | notional $903,275M  EAD $273,315M  RWA $168,602M |
 | 4 | SA-CCR (§ __.114) | PASS | 0.17 | 300 netting sets  notional $5,740,825M  EAD $230,659M  RWA $143,616M |
-| 5 | CVA (§ __.222) | PASS | 0.01 | BA-CVA-REDUCED K $10,113M  RWA $126,417M  (300 counterparties) |
+| 5 | CVA (§ __.222) | PASS | 0.00 | BA-CVA-REDUCED K $10,113M  RWA $126,417M  (300 counterparties) |
 | 6 | Securitization SEC-SA (§ __.133) | PASS | 0.00 | 15 tranches  exposure $48,500M  RWA $51,346M |
 | 7 | Operational risk (§ __.150) | PASS | 0.00 | BI $83,980M  BIC $14,186M  RWA $177,330M  ILM 1.0 |
 | 8 | FRTB SBM + DRC + RRAO | PASS | 0.61 | 167 sensitivities  SBM $16,142M  DRC $136M  RRAO $80M  RWA $204,466M |
@@ -28,7 +28,7 @@ All amounts in $M. Synthetic, seeded portfolio; figures illustrate the engine an
 | 15 | Large exposures (SCCL) | PASS | 0.00 | 30 counterparties, 23 reportable, 1 limit breaches, largest 18.4% of T1 |
 | 16 | Fed reports (Y-9C, 101, Y-15, Y-14) | PASS | 0.00 | reports: FR_Y_9C, FFIEC_101, FR_Y_15, FR_Y_14 | cross-validation 4/4 | DQ pass=True |
 | 17 | Pillar 3 disclosures | PASS | 0.00 | 5 templates: OV1, KM1, MR1, LR1, LR2 |
-| 18 | Multi-jurisdiction comparison | PASS | 0.47 | BCBS CET1 11.7% | US CET1 13.2% | UK CET1 12.8% | EU CET1 12.1% | SG CET1 11.7% | CA CET1 11.8% |
+| 18 | Multi-jurisdiction comparison | PASS | 0.65 | BCBS CET1 11.7% | US CET1 13.2% | UK CET1 12.8% | EU CET1 12.1% | SG CET1 11.7% | CA CET1 11.8% |
 
 ### Plausibility and regulatory checks
 
@@ -157,7 +157,7 @@ Generated: FR_Y_9C, FFIEC_101, FR_Y_15, FR_Y_14. Overall data-quality pass: True
 
 ## Multi-jurisdiction comparison (2027; end-state rules 2030)
 
-Same synthetic bank under each rulebook. Held common: capital resources (CET1, Tier 1, total capital); market risk RWA for SG (caller-supplied; no calculator).
+Same synthetic bank under each rulebook. Held common: capital resources (CET1, Tier 1, total capital).
 FX: ECB euro foreign exchange reference rates, 31 December 2024 (EUR/USD 1.0389, as used in FR Doc. 2025-22964). The bank uses standardised approaches, so no output floor binds; see the floor what-if below (US proposal: no floor).
 
 | Regime | SA credit RWA | CCR RWA | CVA RWA | Op RWA (ILM) | Market RWA | Sec. RWA | CCP RWA | Total RWA | Floor factor | CET1 | CET1 req. | Surplus |
@@ -166,7 +166,7 @@ FX: ECB euro foreign exchange reference rates, 31 December 2024 (EUR/USD 1.0389,
 | US | 871,269 | 127,420 | 127,321 | 190,350 (1.00) | 203,177 | 51,346 | 7,378 | 1,578,260 | none | 13.18% | 13.46% | -0.28% |
 | UK | 873,951 | 137,790 | 105,594 | 255,796 (1.00) | 206,391 | 34,554 | 7,378 | 1,621,453 | 60.0% | 12.83% | 9.00% | +3.83% |
 | EU | 884,032 | 172,165 | 127,321 | 256,348 (1.00) | 230,301 | 34,554 | 7,378 | 1,712,099 | 60.0% | 12.15% | 9.00% | +3.15% |
-| SG | 895,989 | 172,165 | 127,321 | 331,503 (1.30) | 204,466 | 35,554 | 7,378 | 1,774,376 | 65.0% | 11.72% | 11.00% | +0.72% |
+| SG | 895,989 | 172,165 | 127,321 | 331,503 (1.30) | 206,233 | 35,554 | 7,378 | 1,776,143 | 65.0% | 11.71% | 11.00% | +0.71% |
 | CA | 876,268 | 172,165 | 127,321 | 332,088 (1.30) | 206,233 | 35,554 | 7,778 | 1,757,407 | 67.5% | 11.84% | 9.00% | +2.84% |
 
 Market risk (FRTB standardised approach, $M capital; one regime-neutral trading book, USD reporting currency):
@@ -177,7 +177,7 @@ Market risk (FRTB standardised approach, $M capital; one regime-neutral trading 
 | US | 16,142 | LOW | 33 | 80 | 203,177 | 4,428 | 9,712 | 903 | 857 | 242 |
 | UK | 16,415 | LOW | 16 | 80 | 206,391 | 4,428 | 9,787 | 903 | 1,060 | 237 |
 | EU | 18,340 | LOW | 4 | 80 | 230,301 | 6,268 | 9,787 | 903 | 1,060 | 322 |
-| SG | 0 | - | 0 | 0 | 204,466 | 0 | 0 | 0 | 0 | 0 |
+| SG | 16,414 | LOW | 4 | 80 | 206,233 | 4,427 | 9,787 | 903 | 1,060 | 237 |
 | CA | 16,414 | LOW | 4 | 80 | 206,233 | 4,427 | 9,787 | 903 | 1,060 | 237 |
 
 Securitisation risk weights by tranche (approach / RW; US: SEC-SA only, other regimes use SEC-ERBA for rated tranches subject to their hierarchy):
@@ -219,7 +219,7 @@ End-state rules (2030: transitionals such as equity phase-ins and the EU UCC CCF
 | US | 1,578,260 | 13.18% | +0 |
 | UK | 1,630,174 | 12.76% | +8,721 |
 | EU | 1,722,341 | 12.08% | +10,242 |
-| SG | 1,780,190 | 11.68% | +5,814 |
+| SG | 1,781,957 | 11.67% | +5,814 |
 | CA | 1,757,407 | 11.84% | +0 |
 
 Output-floor what-if: floor add-on ($M) for a hypothetical internal-models bank whose modelled RWA is 50/60/70% of its standardised RWA (scenario grid, not model output):
@@ -230,13 +230,13 @@ Output-floor what-if: floor add-on ($M) for a hypothetical internal-models bank 
 | US | 2027 | none | 0 | 0 | 0 |
 | UK | 2027 | 60.0% | 162,145 | 0 | 0 |
 | EU | 2027 | 60.0% | 171,210 | 0 | 0 |
-| SG | 2027 | 65.0% | 266,156 | 88,719 | 0 |
+| SG | 2027 | 65.0% | 266,421 | 88,807 | 0 |
 | CA | 2027 | 67.5% | 307,546 | 131,806 | 0 |
 | BCBS | 2030 | 72.5% | 401,080 | 222,822 | 44,564 |
 | US | 2030 | none | 0 | 0 | 0 |
 | UK | 2030 | 72.5% | 364,827 | 202,682 | 40,536 |
 | EU | 2030 | 72.5% | 385,222 | 214,012 | 42,802 |
-| SG | 2030 | 72.5% | 399,235 | 221,797 | 44,359 |
+| SG | 2030 | 72.5% | 399,632 | 222,018 | 44,404 |
 | CA | 2030 | 67.5% | 307,546 | 131,806 | 0 |
 
 SA credit RWA by exposure class ($M):

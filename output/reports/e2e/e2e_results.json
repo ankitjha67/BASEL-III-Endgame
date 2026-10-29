@@ -6,7 +6,7 @@
     {
       "name": "Portfolio generation",
       "status": "PASS",
-      "seconds": 0.016,
+      "seconds": 0.01,
       "headline": "565 credit exposures ($1,763,400M EAD), 130 trading positions",
       "checks": [
         {
@@ -25,7 +25,7 @@
     {
       "name": "SA credit risk (\u00a7 __.111)",
       "status": "PASS",
-      "seconds": 0.019,
+      "seconds": 0.013,
       "headline": "EAD $1,924,996M  RWA $792,369M  density 41.2%",
       "checks": [
         {
@@ -49,7 +49,7 @@
     {
       "name": "Off-balance sheet CCFs (\u00a7 __.112)",
       "status": "PASS",
-      "seconds": 0.015,
+      "seconds": 0.01,
       "headline": "notional $903,275M  EAD $273,315M  RWA $168,602M",
       "checks": [
         {
@@ -68,7 +68,7 @@
     {
       "name": "SA-CCR (\u00a7 __.114)",
       "status": "PASS",
-      "seconds": 0.17,
+      "seconds": 0.168,
       "headline": "300 netting sets  notional $5,740,825M  EAD $230,659M  RWA $143,616M",
       "checks": [
         {
@@ -92,7 +92,7 @@
     {
       "name": "CVA (\u00a7 __.222)",
       "status": "PASS",
-      "seconds": 0.007,
+      "seconds": 0.005,
       "headline": "BA-CVA-REDUCED K $10,113M  RWA $126,417M  (300 counterparties)",
       "checks": [
         {
@@ -149,7 +149,7 @@
     {
       "name": "FRTB SBM + DRC + RRAO",
       "status": "PASS",
-      "seconds": 0.606,
+      "seconds": 0.611,
       "headline": "167 sensitivities  SBM $16,142M  DRC $136M  RRAO $80M  RWA $204,466M",
       "checks": [
         {
@@ -168,7 +168,7 @@
     {
       "name": "ECL / CECL",
       "status": "PASS",
-      "seconds": 0.009,
+      "seconds": 0.012,
       "headline": "530 loans  EAD $981,325M  ECL $16,624M  coverage 1.69%",
       "checks": [
         {
@@ -301,7 +301,7 @@
     {
       "name": "Fed reports (Y-9C, 101, Y-15, Y-14)",
       "status": "PASS",
-      "seconds": 0.001,
+      "seconds": 0.002,
       "headline": "reports: FR_Y_9C, FFIEC_101, FR_Y_15, FR_Y_14 | cross-validation 4/4 | DQ pass=True",
       "checks": [
         {
@@ -315,7 +315,7 @@
     {
       "name": "Pillar 3 disclosures",
       "status": "PASS",
-      "seconds": 0.0,
+      "seconds": 0.001,
       "headline": "5 templates: OV1, KM1, MR1, LR1, LR2",
       "checks": [
         {
@@ -329,7 +329,7 @@
     {
       "name": "Multi-jurisdiction comparison",
       "status": "PASS",
-      "seconds": 0.466,
+      "seconds": 0.654,
       "headline": "BCBS CET1 11.7% | US CET1 13.2% | UK CET1 12.8% | EU CET1 12.1% | SG CET1 11.7% | CA CET1 11.8%",
       "checks": [
         {
@@ -446,8 +446,7 @@
     "year": 2027,
     "fx_source": "ECB euro foreign exchange reference rates, 31 December 2024 (EUR/USD 1.0389, as used in FR Doc. 2025-22964)",
     "common_components": [
-      "capital resources (CET1, Tier 1, total capital)",
-      "market risk RWA for SG (caller-supplied; no calculator)"
+      "capital resources (CET1, Tier 1, total capital)"
     ],
     "rows": [
       {
@@ -619,30 +618,30 @@
         "op_business_indicator": 119300.0,
         "op_ilm": 1.2967820872746632,
         "op_rwa": 331502.8314298259,
-        "market_rwa": 204466.0667840441,
-        "market_sbm": 0.0,
-        "market_drc": 0.0,
-        "market_rrao": 0.0,
-        "market_binding_scenario": "",
+        "market_rwa": 206232.79539404897,
+        "market_sbm": 16414.448134742368,
+        "market_drc": 4.175496781551914,
+        "market_rrao": 80.0,
+        "market_binding_scenario": "LOW",
         "securitisation_exposure": 48500.0,
         "securitisation_rwa": 35554.0,
         "ccp_rwa": 7377.5,
-        "standardised_rwa": 1774376.0483154294,
+        "standardised_rwa": 1776142.7769254344,
         "modelled_rwa": null,
         "floor_applies": true,
         "floor_factor": 0.65,
         "floor_add_on": 0.0,
-        "total_rwa": 1774376.0483154294,
-        "cet1_ratio": 0.11722430552276257,
-        "tier1_ratio": 0.13075018692923518,
-        "total_capital_ratio": 0.15702672287135772,
+        "total_rwa": 1776142.7769254346,
+        "cet1_ratio": 0.11710770254633206,
+        "tier1_ratio": 0.13062012976321652,
+        "total_capital_ratio": 0.15687052844406488,
         "leverage_exposure": 3753092.761918609,
         "leverage_exclusions": 0.0,
         "leverage_ratio": 0.06181568501424406,
         "large_exposures_reportable": 15,
         "large_exposure_max_pct_tier1": 0.12352024482750508,
         "cet1_requirement": 0.11,
-        "cet1_surplus": 0.00722430552276257,
+        "cet1_surplus": 0.0071077025463320564,
         "leverage_requirement": 0.03
       },
       {
@@ -855,30 +854,30 @@
         "op_business_indicator": 119300.0,
         "op_ilm": 1.2967820872746632,
         "op_rwa": 331502.8314298259,
-        "market_rwa": 204466.0667840441,
-        "market_sbm": 0.0,
-        "market_drc": 0.0,
-        "market_rrao": 0.0,
-        "market_binding_scenario": "",
+        "market_rwa": 206232.79539404897,
+        "market_sbm": 16414.448134742368,
+        "market_drc": 4.175496781551914,
+        "market_rrao": 80.0,
+        "market_binding_scenario": "LOW",
         "securitisation_exposure": 48500.0,
         "securitisation_rwa": 35554.0,
         "ccp_rwa": 7377.5,
-        "standardised_rwa": 1780190.0848018152,
+        "standardised_rwa": 1781956.8134118202,
         "modelled_rwa": null,
         "floor_applies": true,
         "floor_factor": 0.725,
         "floor_add_on": 0.0,
-        "total_rwa": 1780190.0848018155,
-        "cet1_ratio": 0.11684145517704991,
-        "tier1_ratio": 0.1303231615436326,
-        "total_capital_ratio": 0.1565138792689211,
+        "total_rwa": 1781956.8134118204,
+        "cet1_ratio": 0.11672561222275256,
+        "tier1_ratio": 0.13019395209460863,
+        "total_capital_ratio": 0.1563587029221735,
         "leverage_exposure": 3753092.761918609,
         "leverage_exclusions": 0.0,
         "leverage_ratio": 0.06181568501424406,
         "large_exposures_reportable": 15,
         "large_exposure_max_pct_tier1": 0.12352024482750508,
         "cet1_requirement": 0.11,
-        "cet1_surplus": 0.006841455177049913,
+        "cet1_surplus": 0.006725612222752558,
         "leverage_requirement": 0.03
       },
       {
