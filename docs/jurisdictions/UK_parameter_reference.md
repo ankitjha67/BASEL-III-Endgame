@@ -7,8 +7,11 @@ instrument. Context only: PS1/26 Appendix 2 and the PS1/26 web page (implementat
 para 1.16 on the removal of Pillar 1 support factors, para 1.24 on FRTB-IMA from 1 January 2028).
 
 This file transcribes, table by table, every parameter implemented in `src/jurisdictions/uk/`.
-Text in quotation marks is copied from the instrument. Items the instrument does not settle are
-listed at the end under **Not in the instrument (TODO: VERIFY)**.
+Text in quotation marks is copied from the instrument. Sections 8-9 also transcribe the PRA Rulebook
+web text (in force 1 January 2027) of the Counterparty Credit Risk (CRR) Part and Capital Buffers
+Part, which the instrument only cross-references. Items still unsettled are listed at the end under
+**Not in the supplied texts (TODO: VERIFY)**; the Pillar 1 securitisation, SA-CVA, leverage, large
+exposure and CCP rules are in `UK_pillar1_reference.md`.
 
 Amounts stated in GBP in the rules are carried in GBP millions in code (e.g. GBP 880,000 = 0.88).
 
@@ -527,28 +530,66 @@ alpha add-on (EV at α = 1.4 less EV at α = 1, both as at 1 January 2027): 60% 
 20% (2029); not required once the firm ceases to apply CVA Part 7.1(1)/(2); not applied in the
 leverage ratio.
 
+### SA-CCR provisions not amended by the instrument (PRA Rulebook CCR (CRR) Part web text, 1 January 2027)
+- Art 275(1): "RC = max{ CMV – NICA , 0}"; 275(2): "RC = max{ CMV – VM – NICA , TH + MTA – NICA , 0}";
+  275(3) multiple netting sets under one margin agreement (image; form from CRR Art 275(3)):
+  max{Σ max{CMV_i, 0} − max{VM_MA + NICA_MA, 0}, 0} + max{Σ min{CMV_i, 0} − min{VM_MA + NICA_MA, 0}, 0}.
+- Art 278(1): "PFE = multiplier · AggAddOn"; 278(3): "Floor m = 5%; y = 2 . (1 – Floor m ) . AggAddOn".
+  The multiplier and z are images on the Rulebook page; form from CRR Art 278(3):
+  multiplier = 1 if z ≥ 0, else min{1; Floor_m + (1 − Floor_m) · exp(z / y)};
+  z = CMV − NICA (275(1) sets), CMV − VM − NICA (275(2)), Σ(CMV_i − NICA_i) (275(3)).
+- Art 279a(1)(a) Table 1 supervisory volatility: interest rate 50%; FX 15%; credit single-name 100%,
+  multiple names 80%; equity single-name 120%, multiple names 75%; commodity electricity 150%, other
+  70%; others 150%.
+- Art 279b(1)(a): "R = the supervisory discount rate; R = 5%" (duration formula is an image).
+- Art 279c(1): MF = √(min{max{M, 10/OneBusinessYear}, 1}) (unmargined); MF = 3/2 · √(MPOR /
+  OneBusinessYear) (margined); images, form from CRR Art 279c. Client/clearing member MPOR minimum
+  replaced by five business days.
+- Art 280: ε = 1 (Art 277a(1) hedging sets), 5 (277a(2)(a) volatility/correlation), 0.5 (277a(2)(b)
+  basis).
+- Art 280a(2): "SF IR ... 0.5%"; Table 2 maturity buckets (0,1], (1,5], > 5 years.
+- Art 280b(2): "SF FX ... 4%".
+- Art 280c: correlation 50% single-name / 80% multi-name entities; Table 3 single-name SF by CQS:
+  1 0.38%, 2 0.42%, 3 0.54%, 4 1.06%, 5 1.6%, 6 6.0%; SA firm, unrated issuer 0.54% (1.6% where
+  Art 128 applies); Table 4 quoted indices: investment grade 0.38%, non-investment grade 1.06%.
+- Art 280d: correlation 50% / 80%; SF 32% single-name, 20% multi-name.
+- Art 280e: correlation 40%; SF 18% (excluding electricity), 40% electricity.
+- Art 280f(2): "SF Other ... 8%".
+
 ---
 
-## 9. Capital Buffers Part amendments (Annex AA)
-Only the CCyB weighting is amended (rule 3.1(2)-(3), p. 491-492): the weighted-average CCyB uses own
-funds requirements for credit risk, default risk, specific risk and IDMR on relevant credit exposures
-under the new market-risk Parts. No buffer rate is set in the instrument.
+## 9. Capital Buffers Part (PRA Rulebook web text, 1 January 2027; Annex AA amends rule 3.1)
+- Rule 1.2 'combined buffer': "the sum of (a) the capital conservation buffer; (b) the
+  countercyclical capital buffer; (c) the G-SII buffer (if any); and (d) the O-SII buffer (if any)"
+  -- G-SII and O-SII buffers stack; no systemic risk buffer component.
+- Rule 2.1: "a capital conservation buffer of common equity tier 1 capital equal to 2.5% of its total
+  risk exposure amount".
+- Rule 3.1(1)-(3) (as amended by Annex AA, p. 491-492): CCyB = TREA × institution-specific rate, the
+  weighted average of FPC / third-country rates, weights = own funds requirements for credit risk,
+  default risk, specific risk and IDMR on relevant credit exposures. No rate or maximum is set.
+- Rule 4.3(6): MDA factor 0 / 0.2 / 0.4 / 0.6 for the first (lowest) to fourth quartile of the
+  combined buffer; 4.3(7): quartile bounds = combined buffer / 4 × (Q_n − 1) and × Q_n.
+- The PRA buffer (Pillar 2B) is not part of the combined buffer.
 
 ---
 
-## Not in the instrument (TODO: VERIFY)
+## Not in the supplied texts (TODO: VERIFY)
 
 | Item | Where it would be | Placeholder used |
 |---|---|---|
-| Capital conservation buffer rate | PRA Rulebook Capital Buffers Part | 2.5% (BCBS RBC30.2) |
-| CCyB rate | FPC / Capital Buffers Part | caller-supplied |
-| G-SII / O-SII rates and stacking | Capital Buffers Part / FPC O-SII framework | caller-supplied single rate |
-| Systemic risk buffer | Capital Buffers Part | 0 (not modelled) |
+| CCyB rate / maximum | FPC decisions (Capital Buffers Part rule 3.1(4)-(8)) | caller-supplied; 2.5% sanity cap |
+| G-SII / O-SII rates | firm-specific (outside the Capital Buffers Part) | caller-supplied; 3.5% sanity cap each |
 | Leverage ratio minimum | Leverage Ratio - Capital Requirements and Buffers Part 3.1 | 3% (BCBS LEV20) |
 | Additional leverage ratio buffer | same Part 4A.1 | 50% of systemic rate (BCBS LEV40.2) |
 | Countercyclical leverage ratio buffer | same Part 4.1 | not applied |
-| SA-CCR multiplier formula and floor; RC; supervisory factors | CCR (CRR) Part Arts 275, 278, 280a-280e (unamended, not reproduced) | BCBS CRE52.23 form, 5% floor |
+| SA-CCR OneBusinessYear convention | CCR Part Art 279c (business-day convention) | 250 business days |
 | SME / infrastructure lending adjustments | Pillar 2A (PS7/25) | none in Pillar 1 (support factor = 1) |
 | ECA Table 9 header (MEIP 0-7) | Art 137(2), p. 70 | eight categories 0-7 |
 | BA-CVA HMA exponent placement | CVA Part rule 4.9, p. 403 | (1 − r_hc²) |
 | CVA transitional discount scalar layout | CVA Part rules 7.1(2), 7.2, p. 423-424 | reconstruction above |
+
+Closed in the October 2026 update (sources: Capital Buffers Part, CCR (CRR) Part web text): the
+capital conservation buffer rate (2.5%, rule 2.1); G-SII / O-SII stacking (rule 1.2, summed);
+systemic risk buffer (no component in rule 1.2); SA-CCR multiplier floor (5%, Art 278(3)) and
+multiplier form; replacement cost (Art 275); supervisory factors, volatilities, correlations and
+ε (Arts 279a, 280-280f).

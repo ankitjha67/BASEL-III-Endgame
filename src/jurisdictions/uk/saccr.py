@@ -1,12 +1,23 @@
-"""UK SA-CCR exposure value -- Counterparty Credit Risk (CRR) Part Article 274.
+"""UK SA-CCR exposure value -- Counterparty Credit Risk (CRR) Part Arts 274-280f.
 
-PS1/26 Appendix 1 Annex R amends only Article 274(2) and inserts 274(2A)-(2B)
-of the PRA Counterparty Credit Risk (CRR) Part (p. 455-456):
+PS1/26 Appendix 1 Annex R amends Article 274(2) and inserts 274(2A)-(2B) (p. 455-456);
+the remaining provisions are taken from the PRA Rulebook CCR (CRR) Part web text in
+force on 1 January 2027:
 
     Exposure value = alpha * (RC + PFE)                                  (Art 274(2))
     alpha = 1.4, or 1 where the counterparty is a non-financial counterparty, a
     pension scheme arrangement, or an entity established to compensate members
     of a pension scheme arrangement on default.
+    RC = max{CMV - NICA, 0} (unmargined)                                (Art 275(1))
+    RC = max{CMV - VM - NICA, TH + MTA - NICA, 0} (margined)            (Art 275(2))
+    PFE = multiplier * AggAddOn, Floor_m = 5%, y = 2 (1 - Floor_m) AggAddOn  (Art 278)
+
+The Art 278(3) multiplier and z, Art 275(3) multi-netting-set RC and Art 279c
+maturity factor are images on the Rulebook page; their form is transcribed from
+the corresponding CRR articles (Regulation (EU) No 575/2013, consolidated
+09.07.2024), which carry the same Floor_m, y, NICA_i, VM_MA and MPOR definitions.
+Supervisory factors, volatilities, correlations and hedging-set coefficients
+(Arts 279a, 280-280f) are in :mod:`params`.
 
 Transitional 'alpha add-on' (Art 274(2A)): for transactions entered into before
 1 January 2027 with a counterparty in CVA Part 7.1(1)(a) or (b) (non-financial
@@ -15,14 +26,9 @@ counterparties below the clearing threshold, pension scheme arrangements), add
 1 January 2027, unless the firm ceases to apply CVA Part 7.1(1)/(2)
 (Art 274(2A)(2)). Not applied for the leverage ratio (Art 274(2B)).
 
-The remaining SA-CCR provisions (Art 275 RC, Art 278 PFE and multiplier, the
-supervisory factors of Art 280a-280e) are not reproduced in the instrument
-(Annex R shows '...' for unamended text). The multiplier below follows the BCBS
-CRE52.23 form with its stated 5% floor and is flagged ``TODO: VERIFY``.
-
 References:
-    - PRA Rulebook Counterparty Credit Risk (CRR) Part Art 274(2)-(2B) and 1.2 definitions
-    - BCBS Basel Framework CRE52.23 (multiplier; comparison source only)
+    - PRA Rulebook Counterparty Credit Risk (CRR) Part Arts 274-280f and 1.2 definitions
+    - Regulation (EU) No 575/2013 Arts 275(3), 278(3), 279c (formula layout only)
 """
 
 from __future__ import annotations
@@ -52,11 +58,12 @@ def alpha_for(netting_set: SACCRNettingSetInput) -> tuple[float, str]:
 
 
 def multiplier(mtm: float, net_collateral: float, aggregate_addon: float) -> float:
-    """PFE multiplier = min{1; F + (1 - F) exp((V - C) / (2 (1 - F) AddOn))}, F = 5%.
+    """PFE multiplier -- CCR Part Art 278(3): 1 if z >= 0, otherwise
+    min{1; Floor_m + (1 - Floor_m) exp(z / y)}, Floor_m = 5%, y = 2 (1 - Floor_m) AggAddOn.
 
-    # TODO: VERIFY -- Art 278 of the PRA Counterparty Credit Risk (CRR) Part is not
-    in the instrument; formula and 5% floor follow BCBS CRE52.23 (floor stated in
-    CRE52.23(2)).
+    ``mtm`` - ``net_collateral`` is z: CMV - NICA (Art 275(1) netting sets) or
+    CMV - VM - NICA (Art 275(2)). The formula image is not extractable from the Rulebook
+    page; its form follows CRR Art 278(3), which the rule corresponds to.
     """
     if aggregate_addon <= 0.0:
         return 1.0
@@ -64,6 +71,63 @@ def multiplier(mtm: float, net_collateral: float, aggregate_addon: float) -> flo
     x = (mtm - net_collateral) / (2.0 * (1.0 - floor) * aggregate_addon)
     # exp(x) >= 1 for x >= 0, so the min{1; .} binds; clamp to avoid overflow.
     return min(1.0, floor + (1.0 - floor) * math.exp(min(x, 0.0)))
+
+
+def replacement_cost_unmargined(cmv: float, nica: float) -> float:
+    """RC = max{CMV - NICA, 0} -- CCR Part Art 275(1) (also one-way margin where the firm
+    posts but does not receive VM, with VM included in NICA)."""
+    return max(cmv - nica, 0.0)
+
+
+def replacement_cost_margined(
+    cmv: float, vm: float, nica: float, threshold: float, mta: float
+) -> float:
+    """RC = max{CMV - VM - NICA, TH + MTA - NICA, 0} -- CCR Part Art 275(2)."""
+    return max(cmv - vm - nica, threshold + mta - nica, 0.0)
+
+
+def replacement_cost_multi_netting_sets(
+    cmvs: list[float], vm_ma: float, nica_ma: float
+) -> float:
+    """RC for netting sets under one margin agreement -- CCR Part Art 275(3):
+    max{sum max{CMV_i, 0} - max{VM_MA + NICA_MA, 0}, 0}
+    + max{sum min{CMV_i, 0} - min{VM_MA + NICA_MA, 0}, 0}
+    (image on the Rulebook page; form transcribed from CRR Art 275(3))."""
+    coll = vm_ma + nica_ma
+    pos = sum(max(c, 0.0) for c in cmvs) - max(coll, 0.0)
+    neg = sum(min(c, 0.0) for c in cmvs) - min(coll, 0.0)
+    return max(pos, 0.0) + max(neg, 0.0)
+
+
+def maturity_factor_unmargined(
+    remaining_maturity_years: float, one_business_year: int = p.SACCR_BUSINESS_DAYS_PER_YEAR
+) -> float:
+    """MF = sqrt(min{max{M; 10 / OneBusinessYear}; 1}) -- CCR Part Art 279c(1)(a)."""
+    floor = p.SACCR_MF_UNMARGINED_MIN_DAYS / one_business_year
+    return math.sqrt(min(max(remaining_maturity_years, floor), 1.0))
+
+
+def maturity_factor_margined(
+    mpor_days: float, one_business_year: int = p.SACCR_BUSINESS_DAYS_PER_YEAR
+) -> float:
+    """MF = 1.5 * sqrt(MPOR / OneBusinessYear) -- CCR Part Art 279c(1)(b)."""
+    return p.SACCR_MF_MARGINED_SCALAR * math.sqrt(mpor_days / one_business_year)
+
+
+def credit_supervisory_factor(
+    cqs: int | None = None, *, index_ig: bool | None = None, high_risk: bool = False
+) -> float:
+    """Credit supervisory factor -- CCR Part Art 280c(5).
+
+    Single name: Table 3 by CQS 1-6; unrated issuer for an SA firm 0.54%, or 1.6% where
+    Art 128 applies (280c(5)(a)(ii)). Quoted index (``index_ig`` given): Table 4,
+    investment grade 0.38%, non-investment grade 1.06%.
+    """
+    if index_ig is not None:
+        return p.SACCR_SF_CREDIT_INDEX["IG" if index_ig else "NON_IG"]
+    if cqs is None:
+        return p.SACCR_SF_CREDIT_UNRATED_HIGH_RISK if high_risk else p.SACCR_SF_CREDIT_UNRATED_SA
+    return p.SACCR_SF_CREDIT_SINGLE_NAME[cqs]
 
 
 def alpha_addon_share(year: int) -> float:
@@ -106,5 +170,5 @@ def saccr_exposure(
         multiplier=m,
         pfe=pfe,
         ead=ead,
-        citation=cite + "; multiplier per BCBS CRE52.23 (TODO: VERIFY Art 278)",
+        citation=cite + "; Art 275 RC, Art 278 multiplier (Floor_m 5%)",
     )

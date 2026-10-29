@@ -1,27 +1,32 @@
 """UK PRA Basel 3.1 capital requirements and buffer stack.
 
-What the PS1/26 instrument settles (Required Level of Own Funds (CRR) Part
-Article 92(1), p. 12): CET1 4.5%, Tier 1 6%, total capital 8% of TREA.
+Minimum ratios -- Required Level of Own Funds (CRR) Part Article 92(1) (PS1/26
+Appendix 1, p. 12): CET1 4.5%, Tier 1 6%, total capital 8% of TREA.
 
-What it does NOT settle -- the buffer rates and the leverage framework sit in
-other Parts of the PRA Rulebook (Capital Buffers Part; Leverage Ratio - Capital
-Requirements and Buffers Part), which the instrument only cross-references
-(Credit Risk: Standardised Approach (CRR) Part Art 121(1A), p. 42) or amends for
-the CCyB exposure weighting (Annex AA rule 3.1(2)-(3), p. 491-492). Those
-values are placeholders flagged ``TODO: VERIFY`` in :mod:`params`:
+Buffers -- PRA Rulebook Capital Buffers Part (web text in force 1 January 2027):
 
-* capital conservation buffer -- placeholder 2.5% (BCBS RBC30.2);
-* countercyclical buffer -- caller supplies the weighted rate (Annex AA rule 3.1);
-* G-SII / O-SII buffer -- caller supplies the firm-specific rate;
-* systemic risk buffer -- not modelled (0);
-* PRA buffer (Pillar 2B) -- caller may pass it as ``stress_buffer``; it is
-  firm-specific and confidential, not part of the published combined buffer;
-* leverage minimum -- placeholder 3% (BCBS LEV20); additional leverage ratio
-  buffer -- placeholder 50% of the systemic rate (BCBS LEV40.2).
+* rule 1.2 'combined buffer' = the sum of the capital conservation buffer, the
+  countercyclical capital buffer, the G-SII buffer (if any) and the O-SII buffer
+  (if any). The G-SII and O-SII buffers therefore stack, and the Part has no
+  systemic risk buffer component;
+* rule 2.1: capital conservation buffer = 2.5% of the total risk exposure amount;
+* rule 3.1(1)-(3): countercyclical buffer = TREA x the institution-specific rate,
+  the own-funds-weighted average of FPC-set rates (caller supplies the rate);
+* rule 4.3(4)-(7): MDA = distributable profits x a factor of 0 / 0.2 / 0.4 / 0.6
+  by quartile of the combined buffer (:func:`mda_factor`).
+
+Not settled by the supplied texts (``TODO: VERIFY`` in :mod:`params`): the G-SII
+and O-SII rates (firm-specific; caller-supplied, each capped at a 3.5% sanity
+bound), any CCyB maximum (2.5% sanity cap), the leverage ratio minimum and
+leverage buffers (Leverage Ratio - Capital Requirements and Buffers Part, not
+supplied; placeholders 3% and 50% of the systemic rate). The PRA buffer (Pillar
+2B) is firm-specific and confidential and is *not* part of the rule 1.2 combined
+buffer; it may be passed as ``pra_buffer`` (carried in ``stress_buffer``, which
+the base model adds to the combined buffer).
 
 References:
     - PRA Rulebook Required Level of Own Funds (CRR) Part, Article 92(1)
-    - PRA Rulebook Capital Buffers Part (amended by Annex AA) -- not reproduced
+    - PRA Rulebook Capital Buffers Part, rules 1.2, 2.1, 3.1, 4.3
 """
 
 from __future__ import annotations
@@ -32,32 +37,34 @@ from src.jurisdictions.base import CapitalRequirements, Jurisdiction
 from src.jurisdictions.uk import params as p
 
 ROF_PART: Final[str] = "PRA Rulebook Required Level of Own Funds (CRR) Part"
+CB_PART: Final[str] = "PRA Rulebook Capital Buffers Part"
 
 
 def capital_requirements(
     systemic_rate: float = 0.0,
     countercyclical_rate: float = 0.0,
     pra_buffer: float = 0.0,
+    *,
+    osii_rate: float = 0.0,
 ) -> CapitalRequirements:
     """Minimum ratios (Art 92(1)) and the buffer stack for a UK firm.
 
-    ``systemic_rate`` is the firm's G-SII or O-SII buffer rate as a decimal
-    (e.g. 0.01). The CCyB rate is the exposure-weighted average of applicable
-    national rates (Capital Buffers Part rule 3.1(1A)-(3) as amended by Annex AA).
-
-    # TODO: VERIFY -- whether the G-SII and O-SII buffers stack or the higher
-    applies is set in the Capital Buffers Part / FPC framework, not in this
-    instrument; a single caller-supplied rate is used.
+    ``systemic_rate`` is the firm's G-SII buffer rate (or, for a firm passing a single
+    rate, its O-SII rate) as a decimal; ``osii_rate`` is an O-SII buffer rate held in
+    addition -- the two are summed because the combined buffer is 'the sum of' both
+    (Capital Buffers Part rule 1.2(c)-(d)). The CCyB rate is the exposure-weighted
+    average of applicable rates (rule 3.1(1A)-(3)).
     """
-    if systemic_rate < 0.0 or countercyclical_rate < 0.0 or pra_buffer < 0.0:
+    rates = (systemic_rate, countercyclical_rate, pra_buffer, osii_rate)
+    if any(r < 0.0 for r in rates):
         raise ValueError("buffer rates must be non-negative")
-    if systemic_rate > p.SYSTEMIC_BUFFER_MAXIMUM_PLACEHOLDER:
+    if max(systemic_rate, osii_rate) > p.SYSTEMIC_BUFFER_MAXIMUM_PLACEHOLDER:
         raise ValueError(
             "systemic rate above the 3.5% sanity cap (pass a decimal rate, not a bucket)"
         )
     if countercyclical_rate > p.CCYB_MAXIMUM_PLACEHOLDER:
         raise ValueError("CCyB above the 2.5% sanity cap")
-    todo = "TODO: VERIFY -- not in PS1/26 Appendix 1; placeholder"
+    todo = "TODO: VERIFY -- not in the supplied texts; placeholder"
     return CapitalRequirements(
         jurisdiction=Jurisdiction.UK,
         cet1_minimum=p.CET1_MINIMUM,
@@ -65,7 +72,7 @@ def capital_requirements(
         total_capital_minimum=p.TOTAL_CAPITAL_MINIMUM,
         conservation_buffer=p.CAPITAL_CONSERVATION_BUFFER,
         countercyclical_buffer=countercyclical_rate,
-        systemic_buffer=systemic_rate,
+        systemic_buffer=systemic_rate + osii_rate,
         systemic_risk_buffer=0.0,
         stress_buffer=pra_buffer,
         leverage_minimum=p.LEVERAGE_RATIO_MINIMUM,
@@ -74,13 +81,19 @@ def capital_requirements(
             "cet1_minimum": f"{ROF_PART} Art 92(1)(a)",
             "tier1_minimum": f"{ROF_PART} Art 92(1)(b)",
             "total_capital_minimum": f"{ROF_PART} Art 92(1)(c)",
-            "conservation_buffer": f"Capital Buffers Part ({todo} BCBS RBC30.2 2.5%)",
+            "conservation_buffer": f"{CB_PART} rule 2.1 (2.5% of TREA)",
             "countercyclical_buffer": (
-                "Capital Buffers Part rule 3.1 as amended by PS1/26 Annex AA (rate supplied)"
+                f"{CB_PART} rule 3.1(1)-(3) (institution-specific weighted rate, supplied)"
             ),
-            "systemic_buffer": f"Capital Buffers Part G-SII/O-SII ({todo}: caller-supplied rate)",
-            "systemic_risk_buffer": f"{todo}: not modelled",
-            "stress_buffer": "PRA buffer (Pillar 2B), firm-specific, caller-supplied",
+            "systemic_buffer": (
+                f"{CB_PART} rule 1.2 'combined buffer' (c)-(d): G-SII + O-SII buffers summed "
+                f"(rates firm-specific, caller-supplied; {todo} 3.5% sanity cap)"
+            ),
+            "systemic_risk_buffer": f"{CB_PART} rule 1.2: no systemic risk buffer component",
+            "stress_buffer": (
+                "PRA buffer (Pillar 2B), firm-specific, caller-supplied; outside the rule 1.2 "
+                "combined buffer"
+            ),
             "leverage_minimum": (
                 f"Leverage Ratio - Capital Requirements and Buffers Part 3.1 ({todo} BCBS LEV20 3%)"
             ),
@@ -90,3 +103,20 @@ def capital_requirements(
             ),
         },
     )
+
+
+def mda_factor(cet1_above_requirements: float, combined_buffer: float) -> float:
+    """MDA factor -- Capital Buffers Part rule 4.3(6)-(7).
+
+    ``cet1_above_requirements`` is CET1 not used to meet Pillar 1 or Pillar 2A, and
+    ``combined_buffer`` the combined buffer, both as amounts (or both as ratios). Quartile
+    n spans [CB/4 x (n - 1), CB/4 x n]; factor 0 / 0.2 / 0.4 / 0.6 for quartiles 1-4. A firm
+    meeting the combined buffer is not restricted (returns 1.0).
+    """
+    if combined_buffer <= 0.0 or cet1_above_requirements >= combined_buffer:
+        return 1.0
+    quarter = combined_buffer / 4.0
+    for n, factor in enumerate(p.MDA_QUARTILE_FACTORS, start=1):
+        if cet1_above_requirements <= quarter * n:
+            return factor
+    return p.MDA_QUARTILE_FACTORS[-1]

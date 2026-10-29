@@ -16,6 +16,12 @@ article/rule and page ("p. N" = page N of 492) of that instrument:
 * Operational Risk Part (Annex L) -- rules 4.1, 5.2-5.9, 7.1.
 * Counterparty Credit Risk (CRR) Part amendments (Annex R) -- Article 274(2), (2A).
 
+Supplementary sources (PRA Rulebook web text as in force on 1 January 2027), used to close
+items the instrument only cross-references:
+
+* Capital Buffers Part -- rules 1.2 (combined buffer), 2.1, 3.1, 4.3.
+* Counterparty Credit Risk (CRR) Part -- Articles 275, 278, 279a, 280-280f (SA-CCR).
+
 Values stated in GBP in the rules are kept in GBP *millions* here (the engine
 is currency-agnostic: UK inputs are taken already expressed in GBP millions).
 
@@ -568,9 +574,75 @@ SACCR_ALPHA_ADDON_TRANSITIONAL: Final[Mapping[int, float]] = MappingProxyType(
 1 January 2027) added for pre-2027 trades with CVA Part 7.1(1)(a)/(b) counterparties:
 60% / 40% / 20% (p. 456)."""
 SACCR_MULTIPLIER_FLOOR: Final[float] = 0.05
-"""Multiplier floor. # TODO: VERIFY -- Article 278 of the Counterparty Credit Risk (CRR) Part
-is not reproduced in the instrument (Annex R shows only amended provisions). Placeholder is
-the BCBS CRE52.23(2) 'Floor is 5%'."""
+"""CCR Part Art 278(3): 'Floor_m = 5%'; y = 2 * (1 - Floor_m) * AggAddOn. The multiplier and z
+formulas are images on the Rulebook page; their form min{1; Floor_m + (1 - Floor_m) *
+exp(z / y)} for z < 0 (1 for z >= 0), z = CMV - NICA / CMV - VM - NICA / sum(CMV_i - NICA_i),
+is taken from CRR Art 278(3), to which the rule corresponds (same Floor_m, y and NICA_i
+definitions)."""
+SACCR_SUPERVISORY_DISCOUNT_RATE: Final[float] = 0.05
+"""CCR Part Art 279b(1)(a): 'R = the supervisory discount rate; R = 5%'."""
+SACCR_MF_MARGINED_SCALAR: Final[float] = 1.5
+"""CCR Part Art 279c(1)(b): MF = (3/2) * sqrt(MPOR / OneBusinessYear) (image on the Rulebook
+page; form transcribed from CRR Art 279c(1)(b))."""
+SACCR_MF_UNMARGINED_MIN_DAYS: Final[int] = 10
+SACCR_BUSINESS_DAYS_PER_YEAR: Final[int] = 250
+"""CCR Part Art 279c(1)(a): MF = sqrt(min{max{M; 10/OneBusinessYear}; 1}) (form transcribed from
+CRR Art 279c(1)(a)). OneBusinessYear (business days in a year) is taken as 250 here --
+TODO: VERIFY the firm's business-day convention."""
+SACCR_CLIENT_CM_MPOR_DAYS: Final[int] = 5
+"""CCR Part Art 279c(1)(b): client / clearing member MPOR minimum replaced by five business
+days."""
+
+SACCR_SUPERVISORY_VOLATILITY: Final[Mapping[str, float]] = MappingProxyType(
+    {
+        "INTEREST_RATE": 0.50,
+        "FX": 0.15,
+        "CREDIT_SINGLE": 1.00,
+        "CREDIT_MULTI": 0.80,
+        "EQUITY_SINGLE": 1.20,
+        "EQUITY_MULTI": 0.75,
+        "COMMODITY_ELECTRICITY": 1.50,
+        "COMMODITY_OTHER": 0.70,
+        "OTHER": 1.50,
+    }
+)
+"""CCR Part Art 279a(1)(a) Table 1: supervisory volatilities."""
+SACCR_HEDGING_SET_EPSILON: Final[Mapping[str, float]] = MappingProxyType(
+    {"STANDARD": 1.0, "VOLATILITY": 5.0, "BASIS": 0.5}
+)
+"""CCR Part Art 280: epsilon = 1 (Art 277a(1)); 5 (Art 277a(2)(a) volatility / correlation
+hedging sets); 0.5 (Art 277a(2)(b) basis hedging sets)."""
+SACCR_SF_INTEREST_RATE: Final[float] = 0.005
+"""CCR Part Art 280a(2): SF_IR = 0.5%."""
+SACCR_IR_MATURITY_BUCKETS: Final[tuple[float, float]] = (1.0, 5.0)
+"""CCR Part Art 280a(3) Table 2: bucket 1 (0, 1], bucket 2 (1, 5], bucket 3 > 5 years."""
+SACCR_SF_FX: Final[float] = 0.04
+"""CCR Part Art 280b(2): SF_FX = 4%."""
+SACCR_SF_CREDIT_SINGLE_NAME: Final[Mapping[int, float]] = _cqs_table(
+    (0.0038, 0.0042, 0.0054, 0.0106, 0.016, 0.06)
+)
+"""CCR Part Art 280c(5) Table 3: CQS 1-6 -> 0.38% / 0.42% / 0.54% / 1.06% / 1.6% / 6.0%."""
+SACCR_SF_CREDIT_UNRATED_SA: Final[float] = 0.0054
+SACCR_SF_CREDIT_UNRATED_HIGH_RISK: Final[float] = 0.016
+"""CCR Part Art 280c(5)(a)(ii): SA firm, unrated issuer 0.54%; 1.6% where Art 128 (high risk)
+applies to the issuer."""
+SACCR_SF_CREDIT_INDEX: Final[Mapping[str, float]] = MappingProxyType(
+    {"IG": 0.0038, "NON_IG": 0.0106}
+)
+"""CCR Part Art 280c(5) Table 4: quoted indices -- investment grade 0.38%, non-IG 1.06%."""
+SACCR_RHO_SINGLE: Final[float] = 0.50
+SACCR_RHO_MULTI: Final[float] = 0.80
+"""CCR Part Art 280c(3) / 280d(3): correlation 50% single-name, 80% multi-name entities."""
+SACCR_SF_EQUITY: Final[Mapping[str, float]] = MappingProxyType({"SINGLE": 0.32, "MULTI": 0.20})
+"""CCR Part Art 280d(4): 32% single-name, 20% multi-name equity reference entities."""
+SACCR_SF_COMMODITY: Final[Mapping[str, float]] = MappingProxyType(
+    {"ELECTRICITY": 0.40, "OTHER": 0.18}
+)
+"""CCR Part Art 280e(5): 18% (excluding electricity); 40% electricity."""
+SACCR_RHO_COMMODITY: Final[float] = 0.40
+"""CCR Part Art 280e(4): commodity correlation 40%."""
+SACCR_SF_OTHER: Final[float] = 0.08
+"""CCR Part Art 280f(2): SF_Other = 8%."""
 
 # =========================================================================
 #  Credit Valuation Adjustment Risk Part (p. 394-425)
@@ -635,27 +707,44 @@ CVA_TRANSITIONAL_END_YEAR: Final[int] = 2030
 """Rule 7.1: 'until 1 January 2030' (p. 423)."""
 
 # =========================================================================
-#  Capital buffers and leverage -- NOT in this instrument
+#  Capital Buffers Part (PRA Rulebook web text, in force 1 January 2027)
 # =========================================================================
 CAPITAL_CONSERVATION_BUFFER: Final[float] = 0.025
-"""# TODO: VERIFY -- the CCB rate sits in the PRA Rulebook Capital Buffers Part, which Annex AA
-amends only for the CCyB weighting; placeholder = BCBS RBC30.2 'capital conservation buffer
-of 2.5%'."""
+"""Capital Buffers Part rule 2.1: 'a capital conservation buffer of common equity tier 1 capital
+equal to 2.5% of its total risk exposure amount'."""
+COMBINED_BUFFER_COMPONENTS: Final[tuple[str, ...]] = (
+    "capital conservation buffer",
+    "countercyclical capital buffer",
+    "G-SII buffer (if any)",
+    "O-SII buffer (if any)",
+)
+"""Capital Buffers Part rule 1.2 'combined buffer' = the *sum* of (a)-(d): the G-SII and O-SII
+buffers stack, and there is no systemic risk buffer component."""
+MDA_QUARTILE_FACTORS: Final[tuple[float, float, float, float]] = (0.0, 0.2, 0.4, 0.6)
+"""Capital Buffers Part rule 4.3(6)(a)-(d): MDA factor by quartile of the combined buffer
+(first/lowest quartile 0; second 0.2; third 0.4; fourth/highest 0.6); quartile bounds per rule
+4.3(7): combined buffer / 4 x (Q_n - 1) and combined buffer / 4 x Q_n."""
+CCYB_MAXIMUM_PLACEHOLDER: Final[float] = 0.025
+"""# TODO: VERIFY -- Capital Buffers Part rule 3.1 makes the CCyB the exposure-weighted average of
+rates set by the FPC (UK and third countries, rule 3.1(4)-(8)); no maximum is stated in the
+Part. 2.5% is the BCBS RBC30 upper bound used only as a sanity cap."""
+SYSTEMIC_BUFFER_MAXIMUM_PLACEHOLDER: Final[float] = 0.035
+"""# TODO: VERIFY -- the G-SII and O-SII buffer rates are firm-specific (set outside the Capital
+Buffers Part); the caller passes them. 3.5% (BCBS RBC40 top bucket) is used only as a cap on
+each rate."""
+
+# =========================================================================
+#  Leverage ratio requirement -- NOT in the supplied texts
+# =========================================================================
 LEVERAGE_RATIO_MINIMUM: Final[float] = 0.03
 """# TODO: VERIFY -- the minimum leverage ratio requirement is in the Leverage Ratio - Capital
-Requirements and Buffers Part 3.1 (cross-referenced by SA Part Art 121(1A)(c), p. 42) and is
-not in this instrument; placeholder = BCBS LEV20 'a 3% leverage ratio minimum'."""
+Requirements and Buffers Part 3.1 (cross-referenced by SA Part Art 121(1A)(c), p. 42); neither
+the instrument nor the supplied Leverage Ratio (CRR) Part (which defines only the exposure
+measure, Arts 429-429g) contains it; placeholder = BCBS LEV20 'a 3% leverage ratio minimum'."""
 LEVERAGE_BUFFER_SHARE_OF_SYSTEMIC: Final[float] = 0.50
 """# TODO: VERIFY -- the additional leverage ratio buffer is in Leverage Ratio - Capital
-Requirements and Buffers Part 4A.1 (cross-referenced, p. 42), not in this instrument;
-placeholder = BCBS LEV40.2 'set at 50% of a G-SIB's higher loss-absorbency' requirement."""
+Requirements and Buffers Part 4A.1 (cross-referenced, p. 42), not supplied; placeholder = BCBS
+LEV40.2 'set at 50% of a G-SIB's higher loss-absorbency' requirement."""
 COUNTERCYCLICAL_LEVERAGE_BUFFER_SHARE: Final[float] = 0.0
 """# TODO: VERIFY -- countercyclical leverage ratio buffer (Leverage Ratio - Capital
-Requirements and Buffers Part 4.1, cross-referenced p. 42) is not in this instrument;
-not applied (0) pending the source text."""
-CCYB_MAXIMUM_PLACEHOLDER: Final[float] = 0.025
-"""# TODO: VERIFY -- no CCyB rate or range is in the instrument (Annex AA rule 3.1(2)-(3) only
-sets the exposure weighting); 2.5% is the BCBS RBC30 upper bound used only as a sanity cap."""
-SYSTEMIC_BUFFER_MAXIMUM_PLACEHOLDER: Final[float] = 0.035
-"""# TODO: VERIFY -- G-SII / O-SII rates are set by the PRA/FPC outside this instrument; the
-caller passes the firm-specific rate. 3.5% (BCBS RBC40 top bucket) is used only as a cap."""
+Requirements and Buffers Part 4.1, cross-referenced p. 42) is not supplied; not applied (0)."""

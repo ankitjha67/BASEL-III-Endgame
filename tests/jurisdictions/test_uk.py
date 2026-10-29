@@ -26,7 +26,7 @@ from src.jurisdictions.base import (
     ShortTermRating,
     rating_bucket_from_cqs,
 )
-from src.jurisdictions.uk import UKRegime, cva, saccr
+from src.jurisdictions.uk import UKRegime, capital_stack, cva, saccr
 from src.jurisdictions.uk import credit_risk as cr
 from src.jurisdictions.uk import operational_risk as orisk
 from src.jurisdictions.uk import output_floor as of
@@ -1101,11 +1101,35 @@ def test_capital_requirements() -> None:
     assert cap.combined_buffer == pytest.approx(0.025 + 0.02 + 0.01 + 0.005)
     assert cap.cet1_requirement == pytest.approx(0.045 + 0.06)
     assert cap.leverage_buffer == pytest.approx(0.005)
-    assert "TODO: VERIFY" in cap.citations["conservation_buffer"]
+    # Capital Buffers Part rule 2.1 now sources the 2.5% (previously a TODO placeholder).
+    assert "rule 2.1" in cap.citations["conservation_buffer"]
+    assert "TODO: VERIFY" not in cap.citations["conservation_buffer"]
+    assert "TODO: VERIFY" in cap.citations["leverage_minimum"]
     with pytest.raises(ValueError):
         R.capital_requirements(2.0)
     with pytest.raises(ValueError):
         R.capital_requirements(-0.01)
+
+
+def test_combined_buffer_stacks_gsii_and_osii() -> None:
+    """Capital Buffers Part rule 1.2: combined buffer is the sum of CCB, CCyB, G-SII, O-SII."""
+    cap = capital_stack.capital_requirements(0.015, 0.01, osii_rate=0.01)
+    assert cap.systemic_buffer == pytest.approx(0.025)
+    assert cap.systemic_risk_buffer == 0.0
+    assert cap.combined_buffer == pytest.approx(0.025 + 0.01 + 0.025)
+    assert p.COMBINED_BUFFER_COMPONENTS[2:] == ("G-SII buffer (if any)", "O-SII buffer (if any)")
+    with pytest.raises(ValueError):
+        capital_stack.capital_requirements(osii_rate=0.05)
+
+
+@pytest.mark.parametrize(
+    "surplus,expected",
+    [(0.0, 0.0), (0.005, 0.0), (0.0075, 0.2), (0.0125, 0.4), (0.015, 0.4), (0.019, 0.6),
+     (0.02, 1.0)],
+)
+def test_mda_factor_quartiles(surplus: float, expected: float) -> None:
+    """Capital Buffers Part rule 4.3(6)-(7): 0 / 0.2 / 0.4 / 0.6 by quartile of a 2% buffer."""
+    assert capital_stack.mda_factor(surplus, 0.02) == pytest.approx(expected)
 
 
 # =========================================================================
@@ -1133,6 +1157,50 @@ def test_saccr_multiplier() -> None:
     assert m == pytest.approx(0.05 + 0.95 * math.exp(-10.0 / (2 * 0.95 * 20.0)))
     assert saccr.multiplier(-1e9, 0.0, 1.0) == pytest.approx(0.05)
     assert saccr.multiplier(0.0, 0.0, 0.0) == 1.0
+
+
+def test_saccr_replacement_cost() -> None:
+    """CCR Part Art 275(1)-(3)."""
+    assert saccr.replacement_cost_unmargined(10.0, 4.0) == pytest.approx(6.0)
+    assert saccr.replacement_cost_unmargined(-3.0, 4.0) == 0.0
+    # max{CMV - VM - NICA, TH + MTA - NICA, 0} = max{20-12-2, 5+1-2, 0} = 6
+    assert saccr.replacement_cost_margined(20.0, 12.0, 2.0, 5.0, 1.0) == pytest.approx(6.0)
+    assert saccr.replacement_cost_margined(5.0, 12.0, 2.0, 5.0, 1.0) == pytest.approx(4.0)
+    # Art 275(3): max{(10+5) - 8, 0} + max{(-4) - min{8, 0}, 0} = 7 + 0
+    assert saccr.replacement_cost_multi_netting_sets([10.0, 5.0, -4.0], 6.0, 2.0) == 7.0
+
+
+def test_saccr_maturity_factor() -> None:
+    """CCR Part Art 279c(1)(a)-(b)."""
+    assert saccr.maturity_factor_unmargined(0.25) == pytest.approx(0.5)
+    assert saccr.maturity_factor_unmargined(3.0) == pytest.approx(1.0)
+    assert saccr.maturity_factor_unmargined(0.0) == pytest.approx(math.sqrt(10 / 250))
+    assert saccr.maturity_factor_margined(10) == pytest.approx(1.5 * math.sqrt(10 / 250))
+
+
+@pytest.mark.parametrize(
+    "cqs,sf", [(1, 0.0038), (2, 0.0042), (3, 0.0054), (4, 0.0106), (5, 0.016), (6, 0.06)]
+)
+def test_saccr_credit_sf_table_3(cqs: int, sf: float) -> None:
+    """CCR Part Art 280c(5) Table 3."""
+    assert saccr.credit_supervisory_factor(cqs) == pytest.approx(sf)
+
+
+def test_saccr_supervisory_parameters() -> None:
+    """CCR Part Arts 279a Table 1, 280, 280a-280f."""
+    assert saccr.credit_supervisory_factor() == pytest.approx(0.0054)
+    assert saccr.credit_supervisory_factor(high_risk=True) == pytest.approx(0.016)
+    assert saccr.credit_supervisory_factor(index_ig=True) == pytest.approx(0.0038)
+    assert saccr.credit_supervisory_factor(index_ig=False) == pytest.approx(0.0106)
+    assert (p.SACCR_SF_INTEREST_RATE, p.SACCR_SF_FX, p.SACCR_SF_OTHER) == (0.005, 0.04, 0.08)
+    assert dict(p.SACCR_SF_EQUITY) == {"SINGLE": 0.32, "MULTI": 0.20}
+    assert dict(p.SACCR_SF_COMMODITY) == {"ELECTRICITY": 0.40, "OTHER": 0.18}
+    assert (p.SACCR_RHO_SINGLE, p.SACCR_RHO_MULTI, p.SACCR_RHO_COMMODITY) == (0.5, 0.8, 0.4)
+    assert dict(p.SACCR_HEDGING_SET_EPSILON) == {"STANDARD": 1.0, "VOLATILITY": 5.0, "BASIS": 0.5}
+    assert p.SACCR_SUPERVISORY_VOLATILITY["EQUITY_SINGLE"] == 1.20
+    assert p.SACCR_SUPERVISORY_VOLATILITY["COMMODITY_ELECTRICITY"] == 1.50
+    assert p.SACCR_SUPERVISORY_DISCOUNT_RATE == 0.05
+    assert p.SACCR_MULTIPLIER_FLOOR == 0.05
 
 
 @pytest.mark.parametrize("year,share", [(2027, 0.60), (2028, 0.40), (2029, 0.20), (2030, 0.0)])
