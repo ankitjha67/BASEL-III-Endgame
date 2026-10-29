@@ -12,6 +12,10 @@ Sources (the text governs wherever this file and the text differ):
   pre-CRR3 text of several replaced articles (e.g. Article 122 Table 6, Article 133(2)); those
   old texts are cited only where CRR3 itself refers to "the risk weight applicable on 8 July
   2024" (Article 495a).
+- **CRD (consolidated)**: Directive 2013/36/EU, consolidated 02013L0036 as of 28.06.2021 ("CRD cons.
+  p." = page footer), for the combined buffer requirement (Articles 128-140), section 8.
+- **CRD VI**: Directive (EU) 2024/1619 of 31 May 2024, OJ L, 19.6.2024; amends CRD Articles 104a,
+  104b, 131 and 133 (output-floor interaction, buffer procedures); applies from 11 January 2026.
 - EBA Policy Advice on the Basel III reforms: Credit Risk (EBA-Op-2019-09, Aug 2019): context
   only, never a source of EU values.
 
@@ -107,8 +111,29 @@ below are as printed (the OJ uses a decimal comma).
 > securitisation to which Article 262 applies; (b) p = **0,5** for a position ... to which Article 261
 > applies.
 
-Not in the source texts: the CRD VI (Directive (EU) 2024/1619) transitional on the interaction of the
-floor with Pillar 2 / the combined buffer ("OF-ADJ" and CET1-based caps). **TODO: VERIFY.**
+**CRD VI (Directive (EU) 2024/1619, applicable from 11 January 2026, Article 2(1)).** The final Directive
+has no numerical output-floor phase-in of its own (the phase-in is CRR Art. 465(1)). It adds, in Article
+104a(6) CRD (CRD VI Art. 1 point (39)(b)):
+
+> 6. Where an institution becomes bound by the output floor laid down in Article 92(3) of Regulation (EU)
+> No 575/2013, the following shall apply: (a) the nominal amount of additional own funds required ... in
+> accordance with Article 104(1), point (a), to address risks other than the risk of excessive leverage is not
+> to increase as a result of the institution becoming bound by the output floor; (b) the institution's
+> competent authority shall, without delay, and in any event no later than the end date of the next review and
+> evaluation process, review the additional own funds ... and remove any parts thereof that would double-count
+> the risks that are already fully covered by the fact that the institution is bound by the output floor;
+> (c) as soon as the competent authority has completed the review ..., point (a) ... shall no longer apply.
+> For the purposes of this Article and Articles 131 and 133 ..., an institution shall be considered as bound by
+> the output floor when the institution's total risk exposure amount calculated in accordance with Article
+> 92(3), first subparagraph, ... exceeds its un-floored total risk exposure amount calculated in accordance
+> with Article 92(4) ...
+>
+> 8. ... as long as an institution is bound by the output floor, the institution's competent authority shall
+> not impose an additional own funds requirement that would double-count the risks ...
+
+plus Art. 104b(4a) (P2G review), Art. 131(6)(c) (O-SII review) and Art. 133(8)(d) (SyRB review) when the
+institution becomes bound. Implemented: `output_floor.bound_by_output_floor`, `output_floor.p2r_rate_freeze`
+(P2R rate scaled by U-TREA / TREA until the review is complete).
 
 ## 2. Credit risk -- standardised approach
 
@@ -577,25 +602,84 @@ related: parent/subsidiary or common parent, (a)(ii)); **50 %** (same sector and
 > ... may calculate the own funds requirements for CVA risk as the risk-weighted exposure amounts for
 > counterparty risk ... divided by **12,5**.
 
-## 8. Buffers (Directive 2013/36/EU -- not in the source texts)
+## 8. Buffers (Directive 2013/36/EU, consolidated 28.06.2021; Directive (EU) 2024/1619)
 
-| Item | Placeholder in engine | Status |
+"CRD cons. p." = page of the consolidated CRD PDF.
+
+> **128** (6) 'combined buffer requirement' means the total Common Equity Tier 1 capital required to meet the
+> requirement for the capital conservation buffer extended by the following, as applicable: (a) an
+> institution-specific countercyclical capital buffer; (b) a G-SII buffer; (c) an O-SII buffer; (d) a systemic
+> risk buffer; ... Institutions shall not use Common Equity Tier 1 capital that is maintained to meet one of the
+> elements of its combined buffer requirement to meet the other applicable elements ... (CRD cons. pp.121-122)
+>
+> **129**(1) ... a capital conservation buffer of Common Equity Tier 1 capital equal to **2,5 %** of their total
+> risk exposure amount calculated in accordance with Article 92(3) of that Regulation ... (p.123)
+>
+> **130**(1) ... institution-specific countercyclical capital buffer equivalent to their total risk exposure
+> amount ... multiplied by the weighted average of the countercyclical buffer rates calculated in accordance
+> with Article 140 ... (p.123)
+>
+> **131**(4) Each G-SII shall, on a consolidated basis, maintain a G-SII buffer which shall correspond to the
+> sub-category to which the G-SII is allocated. ... (5) ... may require each O-SII ... to maintain an O-SII
+> buffer of up to **3 %** of the total risk exposure amount ... (5a) ... Subject to the Commission
+> authorisation ... an O-SII buffer higher than 3 % ... (p.125)
+> (8) ... the buffer that applies on an individual or sub-consolidated basis for the O-SII shall not exceed the
+> lower of: (a) the sum of the higher of the G-SII or the O-SII buffer rate applicable to the group on a
+> consolidated basis and **1 %** of the total risk exposure amount ...; and (b) **3 %** ... or the rate the
+> Commission has authorised ... (pp.126-127)
+> (9) There shall be at least **five** sub-categories of G-SIIs. ... a constant linear increase of systemic
+> significance, between each sub-category resulting in a linear increase in the requirement of additional
+> Common Equity Tier 1 capital, with the exception of sub-category five and any added higher sub-category.
+> ... The lowest sub-category shall be assigned a G-SII buffer of **1 %** of the total risk exposure amount ...
+> and the buffer assigned to each sub-category shall increase in gradients of at least **0,5 %** ... (p.127)
+> (14) Where a group, on a consolidated basis, is subject to a G-SII buffer and to an O-SII buffer the higher
+> buffer shall apply. (15) Where an institution is subject to a systemic risk buffer ..., that buffer shall be
+> cumulative with the O-SII buffer or the G-SII buffer that is applied in accordance with this Article.
+> [Second subparagraph as replaced by CRD VI Art. 1 point (44)(c):] Where the sum of the systemic risk buffer
+> rate ... and the O-SII buffer rate or the G-SII buffer rate ... would be higher than **5 %**, the procedure
+> set out in paragraph 5a of this Article shall apply. ... (p.128)
+>
+> **133**(2) **B_SR = r_T · E_T + Σ_i r_i · E_i** (p.129); (7) ... set in steps of adjustment of **0,5**
+> percentage points or multiples thereof (p.130); (10)-(12) [as replaced by CRD VI point (45)(c)]: up to
+> **3 %** notification; above 3 % up to **5 %** Commission/ESRB opinions; above **5 %** Commission
+> authorisation.
+>
+> **136**(4) The countercyclical buffer rate ... shall be between **0 %** and **2,5 %**, calibrated in steps of
+> **0,25** percentage points ... a designated authority may set a countercyclical buffer rate in excess of
+> 2,5 % ... (p.135)
+>
+> **140**(1) ... weighted average of the countercyclical buffer rates that apply in the jurisdictions where the
+> relevant credit exposures of the institution are located ... apply to each applicable countercyclical
+> buffer rate its total own funds requirements for credit risk ... that relates to the relevant credit
+> exposures in the territory in question, divided by its total own funds requirements for credit risk that
+> relates to all of its relevant credit exposures. (2)(b) institutions that are authorised in another Member
+> State shall apply a countercyclical buffer rate of **2,5 %** ... if the designated authority in the Member
+> State in which they have been authorised has not recognised the buffer rate in excess of 2,5 % ... (p.139)
+
+| Item | Engine | Source |
 |---|---|---|
-| Capital conservation buffer (CRD Art. 129) | 2,5 % | **TODO: VERIFY** |
-| Countercyclical buffer (CRD Art. 130, 136, 140) | input rate | **TODO: VERIFY** range |
-| G-SII buffer by sub-category 1-5 (CRD Art. 131(4), (9)) | 1,0 / 1,5 / 2,0 / 2,5 / 3,5 % | **TODO: VERIFY** |
-| O-SII buffer ceiling (CRD Art. 131(5)) | 3 % cap on the input | **TODO: VERIFY** |
-| Systemic risk buffer (CRD Art. 133) | input rate, additive | **TODO: VERIFY** stacking |
-| Combination of G-SII / O-SII / SyRB (CRD Art. 131(14)-(15)) | max(G-SII, O-SII) + SyRB | **TODO: VERIFY** |
+| Capital conservation buffer | 2,5 % | CRD Art. 129(1) |
+| Institution-specific CCyB | input rate, or `capital_stack.institution_specific_ccyb` weighted average with the 2,5 % reciprocity cap | CRD Art. 130(1), 136(4), 140(1)-(3) |
+| G-SII buffer by sub-category | 1,0 / 1,5 / 2,0 / 2,5 % for sub-categories 1-4 (minimum the text allows); **3,5 % for 5: TODO: VERIFY** | CRD Art. 131(4), (9); 5th: Delegated Reg. (EU) 1222/2014 not supplied, BCBS SCO40.4 |
+| O-SII buffer | capped at 3 % unless `o_sii_commission_authorised` | CRD Art. 131(5), (5a) |
+| O-SII subsidiary cap | min(group rate + 1 %, 3 % or authorised rate) | CRD Art. 131(8) |
+| Systemic risk buffer | input rate, additive; B_SR formula | CRD Art. 131(15), 133(2) |
+| G-SII vs O-SII | higher of the two | CRD Art. 131(14) |
+| SyRB + G-SII/O-SII > 5 % | Art. 131(5a) procedure flagged in citations (not a cap) | CRD Art. 131(15) as replaced by CRD VI |
 
-The only buffer-related value in the sources is the G-SII leverage ratio buffer (Article 92(1a)).
+The G-SII leverage ratio buffer (50 % of the G-SII rate) is CRR Article 92(1a).
 
 ## 9. Register of `TODO: VERIFY` items
 
-1. CRD buffer rates and stacking (section 8) -- Directive text not supplied.
+1. G-SII buffer rate of sub-category 5 (CRD Art. 131(9) fixes only >= 3,0 %; 3,5 % used) -- Commission
+   Delegated Regulation (EU) No 1222/2014 not supplied. (Sub-categories 1-4, the conservation buffer, the
+   O-SII cap, the CCyB range and the buffer combination rules were closed from the CRD text on 2026-10-29.)
 2. Short-term rating -> CQS mapping for Article 131 / 120(3) (Implementing Regulation (EU) 2016/1799).
 3. Interaction of the Article 501 and 501a factors on one exposure (text silent; engine applies only 501a).
-4. CRD VI output-floor transitional (OF-ADJ, CET1 caps; Directive (EU) 2024/1619) -- not supplied.
+
+Closed on 2026-10-29: the CRD VI output-floor item -- the final Directive has no numerical transitional;
+Article 104a(6) (P2R nominal freeze, review) is implemented. Pillar 1 items for securitisation, SA-CVA,
+leverage, large exposures and CCPs are registered in `EU_pillar1_reference.md` section 6.
 
 ## 10. Material differences from the Basel Framework (BCBS)
 

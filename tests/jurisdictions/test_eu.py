@@ -996,6 +996,63 @@ def test_buffer_inputs_and_stress_buffer_not_stacked() -> None:
         capital_stack.capital_requirements(0.0, -0.01)
 
 
+def test_crd_buffer_rates_transcribed() -> None:
+    # CRD Art. 129(1) 2,5 %; 131(9) lowest G-SII sub-category 1 %, steps of at least 0,5 %
+    assert prm.CAPITAL_CONSERVATION_BUFFER == 0.025
+    gsii = prm.GSII_BUFFER_BY_SUBCATEGORY
+    assert gsii[1] == pytest.approx(0.010)
+    assert [gsii[i + 1] - gsii[i] for i in range(1, 5)] == pytest.approx([0.005] * 3 + [0.010])
+    # CRD Art. 131(5) O-SII up to 3 %; 136(4) CCyB 0-2,5 % in 0,25 pp steps
+    assert prm.OSII_BUFFER_CAP == 0.03
+    assert (prm.CCYB_MAX_STANDARD, prm.CCYB_STEP) == (0.025, 0.0025)
+
+
+def test_osii_cap_and_commission_authorisation() -> None:
+    assert capital_stack.capital_requirements(o_sii_rate=0.04).systemic_buffer == 0.03
+    c = capital_stack.capital_requirements(o_sii_rate=0.04, o_sii_commission_authorised=True)
+    assert c.systemic_buffer == pytest.approx(0.04)  # CRD Art. 131(5a)
+    # CRD Art. 131(8): subsidiary O-SII <= min(group rate + 1 %, 3 %)
+    assert capital_stack.osii_subsidiary_cap(0.015) == pytest.approx(0.025)
+    assert capital_stack.osii_subsidiary_cap(0.025) == pytest.approx(0.03)
+
+
+def test_gsii_osii_higher_and_syrb_cumulative() -> None:
+    # CRD Art. 131(14): higher of G-SII and O-SII; 131(15): SyRB cumulative
+    c = capital_stack.capital_requirements(systemic_bucket_or_rate=3, o_sii_rate=0.015,
+                                           systemic_risk_buffer_rate=0.035)  # fmt: skip
+    assert c.systemic_buffer == pytest.approx(0.02)
+    assert c.combined_buffer == pytest.approx(0.025 + 0.02 + 0.035)
+    assert "131(5a)" in c.citations["systemic_risk_buffer"]  # 2 % + 3,5 % > 5 %
+    assert capital_stack.systemic_risk_buffer_amount(0.01, 1000.0, [(0.02, 200.0)]) == (
+        pytest.approx(14.0)
+    )
+
+
+def test_institution_specific_ccyb_weighted_average() -> None:
+    # CRD Art. 140(1): weights = own funds requirements for credit risk per jurisdiction
+    rate = capital_stack.institution_specific_ccyb(
+        {"DE": 0.0075, "FR": 0.01, "XX": 0.035}, {"DE": 60.0, "FR": 30.0, "XX": 10.0}
+    )
+    # XX's 3,5 % not recognised -> 2,5 % (Art. 140(2)(b)/(3)(b))
+    assert rate == pytest.approx(0.6 * 0.0075 + 0.3 * 0.01 + 0.1 * 0.025)
+    rec = capital_stack.institution_specific_ccyb(
+        {"XX": 0.035}, {"XX": 1.0}, recognised_above_cap={"XX"}
+    )
+    assert rec == pytest.approx(0.035)
+    assert capital_stack.institution_specific_ccyb({}, {}) == 0.0
+
+
+def test_crd_vi_bound_by_floor_and_p2r_freeze() -> None:
+    # CRD Art. 104a(6) (CRD VI): bound where TREA > U-TREA; nominal P2R not to increase
+    assert output_floor.bound_by_output_floor(110.0, 100.0)
+    assert not output_floor.bound_by_output_floor(100.0, 100.0)
+    rate, notes = output_floor.p2r_rate_freeze(0.02, 100.0, 125.0)
+    assert rate == pytest.approx(0.016) and notes
+    assert rate * 125.0 == pytest.approx(0.02 * 100.0)
+    assert output_floor.p2r_rate_freeze(0.02, 100.0, 125.0, review_completed=True)[0] == 0.02
+    assert output_floor.p2r_rate_freeze(0.02, 100.0, 90.0)[0] == 0.02
+
+
 # =========================================================================
 #  SA-CCR -- Articles 274, 278
 # =========================================================================

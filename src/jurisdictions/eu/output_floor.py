@@ -12,14 +12,27 @@
   RRE 10 %/45 %..67,5 %, SA-CCR alpha = 1, SEC-SA p factors) -- the risk-weight
   parts are implemented in :func:`src.jurisdictions.eu.credit_risk.floor_transitional_rw`.
 
-The Directive-side transitional on the interaction of the floor with Pillar 2
-and the combined buffer (the "OF-ADJ" mechanism and the CET1-based caps that
-CRD VI introduced) is NOT in the source texts. # TODO: VERIFY -- the Directive
-(EU) 2024/1619 amendments to Articles 104a and 128-131 CRD are needed to model
-them; the engine reports the Regulation-level floor only.
+Directive side (CRD VI, Directive (EU) 2024/1619, applicable from 11 January 2026,
+Article 2(1)): the final Directive contains NO numerical output-floor phase-in of
+its own -- the phase-in is Article 465(1) CRR. What it adds is:
+
+* Article 104a(6) CRD (CRD VI Article 1 point (39)(b)): an institution is "bound by
+  the output floor" when TREA under Article 92(3) first subparagraph exceeds the
+  un-floored TREA under Article 92(4). When it becomes bound, (a) the NOMINAL amount
+  of the Pillar 2 requirement (other than for excessive leverage) shall not increase
+  as a result, (b) the competent authority reviews and removes double counting by the
+  next SREP, and (c) point (a) lapses once that review is complete; 104a(8): no P2R
+  that double-counts risks covered by the floor while bound.
+* Article 104b(4a): the competent authority may review P2G when the floor binds.
+* Articles 131(6)(c) and 133(8)(d): O-SII buffer (annual review) and SyRB on total
+  exposures (biennial review) to be re-calibrated when the institution becomes bound.
+
+:func:`bound_by_output_floor` and :func:`p2r_rate_freeze` implement 104a(6); the
+buffer reviews are supervisory acts with no formula and are reported as notes.
 
 References:
     - Regulation (EU) 2024/1623, Article 1 points (28) and (237); Article 2
+    - Directive (EU) 2024/1619, Article 1 points (39), (40), (44)(b), (45)(b); Article 2(1)
 """
 
 from __future__ import annotations
@@ -111,6 +124,31 @@ def saccr_alpha_for_s_trea(year: int, u_trea_uses_imm: bool) -> float:
     if u_trea_uses_imm and year <= prm.FLOOR_SA_CCR_ALPHA_END_YEAR:
         return prm.FLOOR_SA_CCR_ALPHA_TRANSITIONAL
     return prm.SACCR_ALPHA
+
+
+def bound_by_output_floor(trea: float, u_trea: float) -> bool:
+    """CRD Article 104a(6) last subparagraph (CRD VI): bound when TREA > un-floored TREA."""
+    return trea > u_trea
+
+
+def p2r_rate_freeze(
+    p2r_rate: float, u_trea: float, trea: float, review_completed: bool = False
+) -> tuple[float, list[str]]:
+    """P2R rate (non-leverage) once the floor binds -- CRD Article 104a(6)(a)-(c) (CRD VI).
+
+    Until the competent authority completes the 104a(6)(b) review, the nominal P2R
+    amount may not increase because the institution became bound: the rate applied to
+    the floored TREA is scaled to p2r_rate x U-TREA / TREA. After the review (104a(6)(c))
+    the rate the authority sets applies (returned unchanged here).
+    """
+    notes: list[str] = []
+    if not bound_by_output_floor(trea, u_trea) or review_completed:
+        return p2r_rate, notes
+    notes.append(
+        "CRD Art. 104a(6)(a): nominal P2R frozen at the un-floored amount pending the "
+        "104a(6)(b) review; O-SII (131(6)(c)) and SyRB (133(8)(d)) calibrations to be reviewed"
+    )
+    return p2r_rate * u_trea / trea, notes
 
 
 def sec_sa_p_factor_for_s_trea(article: str, year: int) -> float | None:

@@ -16,8 +16,9 @@ paragraph and table that states it. Two source texts are used:
   134(1)-(2)/(4), 223(2)-(5), 224(2), 274(2), 278, 382(4), 501(1)).
 
 Where neither text settles a value the constant carries ``# TODO: VERIFY``.
-The Capital Requirements Directive (2013/36/EU) buffer rates are NOT in
-either text and are flagged accordingly.
+The combined-buffer parameters come from the Capital Requirements Directive:
+Directive 2013/36/EU consolidated as of 28.06.2021 ("CRD cons." pages) and
+Directive (EU) 2024/1619 (CRD VI), which amends Articles 104a, 131 and 133.
 
 All monetary thresholds stated in EUR by the Regulation are kept in EUR
 millions; the engine is currency-agnostic and expects inputs already
@@ -596,7 +597,7 @@ FLOOR_SEC_P_END_YEAR: Final[int] = 2032
 """Article 465(13): 'until 31 December 2032'."""
 
 # =========================================================================
-#  Own funds requirements and buffers -- Article 92(1)-(1a); CRD (not in sources)
+#  Own funds requirements and buffers -- Article 92(1)-(1a); CRD Articles 128-140
 # =========================================================================
 
 CET1_MINIMUM: Final[float] = 0.045
@@ -613,26 +614,68 @@ rate."""
 OWN_FUNDS_TO_RWA: Final[float] = 12.5
 """Article 92(6)(b) (CRR3 p.31): own funds requirements for points (b)-(f) multiplied by 12,5."""
 
-# TODO: VERIFY -- capital conservation buffer rate is set by Article 129 of Directive 2013/36/EU
-# (CRD), which is not among the source texts. 2.5 % used as placeholder.
-CAPITAL_CONSERVATION_BUFFER: Final[float] = 0.025
+# ---- Combined buffer requirement -- Directive 2013/36/EU (CRD), consolidated 28.06.2021
+# ("CRD cons." pages), as amended by Directive (EU) 2024/1619 (CRD VI, OJ L 19.6.2024,
+# applicable from 11 January 2026, CRD VI Article 2(1)).
 
-# TODO: VERIFY -- G-SII buffer rates per sub-category are set by Article 131(4) and (9) of
-# Directive 2013/36/EU (not in the source texts). Placeholder values for sub-categories 1-5.
+CAPITAL_CONSERVATION_BUFFER: Final[float] = 0.025
+"""CRD Article 129(1) (CRD cons. p.123): 'a capital conservation buffer of Common Equity Tier 1
+capital equal to 2,5 % of their total risk exposure amount calculated in accordance with Article
+92(3)' of the CRR."""
+
+GSII_BUFFER_LOWEST_SUBCATEGORY: Final[float] = 0.010
+"""CRD Article 131(9) (CRD cons. p.127): 'The lowest sub-category shall be assigned a G-SII buffer
+of 1 % of the total risk exposure amount'."""
+GSII_BUFFER_MIN_GRADIENT: Final[float] = 0.005
+"""CRD Article 131(9): 'the buffer assigned to each sub-category shall increase in gradients of at
+least 0,5 %', with a linear increase between sub-categories except sub-category five."""
+GSII_MIN_SUBCATEGORIES: Final[int] = 5
+"""CRD Article 131(9): 'There shall be at least five sub-categories of G-SIIs'."""
+
 GSII_BUFFER_BY_SUBCATEGORY: Final[dict[int, float]] = {
-    1: 0.010,
-    2: 0.015,
-    3: 0.020,
-    4: 0.025,
+    1: GSII_BUFFER_LOWEST_SUBCATEGORY,
+    2: GSII_BUFFER_LOWEST_SUBCATEGORY + 1 * GSII_BUFFER_MIN_GRADIENT,
+    3: GSII_BUFFER_LOWEST_SUBCATEGORY + 2 * GSII_BUFFER_MIN_GRADIENT,
+    4: GSII_BUFFER_LOWEST_SUBCATEGORY + 3 * GSII_BUFFER_MIN_GRADIENT,
+    # TODO: VERIFY -- CRD Article 131(9) exempts sub-category five from the linear increase
+    # and sets only the 'at least 0,5 %' gradient, so the text fixes sub-category 5 only at
+    # >= 3,0 %. The exact rates are set by Commission Delegated Regulation (EU) No 1222/2014
+    # (not supplied); 3,5 % is used, equal to the empty top bucket of the Basel Framework
+    # (SCO40.4 Table 1), which is above the CRD minimum (conservative).
     5: 0.035,
 }
+"""CRD Article 131(4), (9): sub-categories 1-4 at the minimum the text allows (1 %, then linear
+0,5 % steps: 1,5 %, 2,0 %, 2,5 %); sub-category 5 see TODO."""
 
-# TODO: VERIFY -- O-SII buffer ceiling is set by Article 131(5)/(5a) CRD (not in the source texts).
 OSII_BUFFER_CAP: Final[float] = 0.03
+"""CRD Article 131(5) (CRD cons. p.125): O-SII buffer 'of up to 3 % of the total risk exposure
+amount'; a higher rate requires Commission authorisation under Article 131(5a)."""
+OSII_SUBSIDIARY_ADD_ON: Final[float] = 0.01
+"""CRD Article 131(8)(a) (CRD cons. p.127): O-SII subsidiary of a G-SII/O-SII -- individual or
+sub-consolidated O-SII buffer capped at the higher group rate + 1 %, and at 3 % (131(8)(b))."""
 
-# TODO: VERIFY -- CCyB range is set by Article 136 CRD (not in the source texts); the engine
-# takes the institution-specific CCyB rate as an input and only checks it is non-negative.
 CCYB_MAX_STANDARD: Final[float] = 0.025
+"""CRD Article 136(4) (CRD cons. p.135): 'between 0 % and 2,5 %, calibrated in steps of 0,25
+percentage points'; a designated authority may exceed 2,5 % (Article 140(2))."""
+CCYB_STEP: Final[float] = 0.0025
+"""CRD Article 136(4): steps of 0,25 percentage points or multiples thereof."""
+CCYB_RECIPROCITY_CAP: Final[float] = 0.025
+"""CRD Article 140(2)(b) / (3)(b): institutions authorised in another Member State apply 2,5 % to a
+rate above 2,5 % that their own designated authority has not recognised."""
+
+SYRB_STEP: Final[float] = 0.005
+"""CRD Article 133(7) (CRD cons. p.130): set in steps of 0,5 percentage points or multiples."""
+SYRB_NOTIFICATION_THRESHOLD: Final[float] = 0.03
+"""CRD Article 133(10): combined SyRB rate up to 3 % -> notification one month ahead."""
+SYRB_AUTHORISATION_THRESHOLD: Final[float] = 0.05
+"""CRD Article 133(11)-(12) as replaced by CRD VI Article 1 point (45)(c): above 3 % up to 5 %
+-> Commission and ESRB opinions; above 5 % -> Commission authorisation."""
+SYRB_PLUS_SYSTEMIC_AUTHORISATION_THRESHOLD: Final[float] = 0.05
+"""CRD Article 131(15) second subparagraph as replaced by CRD VI point (44)(c): SyRB + O-SII/G-SII
+above 5 % -> the Article 131(5a) procedure (not a cap on the rate)."""
+
+CRD_VI_APPLICATION_DATE: Final[str] = "2026-01-11"
+"""CRD VI Article 2(1): Member States apply the measures from 11 January 2026."""
 
 # =========================================================================
 #  Operational risk -- Articles 312-324 (CRR3 point (155))
