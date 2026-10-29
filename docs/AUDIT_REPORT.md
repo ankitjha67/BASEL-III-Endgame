@@ -316,5 +316,54 @@ the open `TODO: VERIFY` items. Points needing an owner decision:
   default; the flag `ca_apply_printed_transactor_rw` switches to the printed 15%.
 - **UK.** Buffer rates and leverage requirements sit outside the PS1/26 rule instrument. BCBS
   placeholders are used and flagged.
-- **FRTB and securitisation** are held common across regimes in the comparison (US engines);
-  jurisdiction-specific calibrations are not yet modelled.
+- **FRTB and securitisation** were held common across regimes in the comparison at this point; see
+  Part 4.
+
+# Part 4 — Per-jurisdiction FRTB and Pillar 1, engine fixes (2026-10-29)
+
+## 4.1 Engine defects found while building the regime packages
+
+| Defect | Effect | Fix (citation) |
+|---|---|---|
+| SEC-SA K_A used W in place of 0.5·W | Over-stated K_A, and so risk weights, for pools with delinquencies | K_A = (1 − W)·K_G + 0.5·W (CRE41.8; ERBA NPR § __.133(b)) |
+| SBM correlation scenario chosen per risk class and per measure | Mixed scenarios, so the charge exceeded every single-scenario total | One binding scenario chosen on the portfolio total (ERBA NPR § __.206; MAR21.7) |
+| `build_reference_book` lost the counterparty name (the keyword argument had been absorbed into a comment) | Large-exposure aggregation by counterparty was impossible | Field restored |
+| US FRTB adapter left `binding_scenario` empty | The comparison could not report the scenario | Scenario passed through from the engine |
+| Commodity sensitivities had no tenor | BCBS-structured engines need commodity tenors for correlation (MAR21.83) and refused to run | The generator tenor is mapped onto both the US and the neutral sensitivities |
+
+## 4.2 New packages
+
+Each package is built from its regulator's text with a verbatim reference in `docs/jurisdictions/`:
+
+- `<cc>/frtb/` for BCBS, UK, EU, Singapore and Canada (`<CC>_frtb_reference.md`): FRTB SA with DRC
+  (including securitisation non-CTP and CTP), RRAO and the IMA scalars. The UK and EU packages add the
+  simplified SA; Canada models MAR40 for comparison only.
+- `<cc>/pillar1/` for the same five regimes (`<CC>_pillar1_reference.md`): the securitisation
+  hierarchy, SA-CVA, the leverage exposure measure, large exposures and CCPs.
+- US adapters over the ERBA NPR calculators: `us/frtb.py` and `us/pillar1.py`.
+
+## 4.3 Comparison
+
+Stage 18 of `scripts/run_end_to_end.py` now computes every Pillar 1 component under each regime's own
+rules. Only capital resources are held common. What the run shows:
+
+- **Securitisation.** US investors must use SEC-SA (p = 0.5). Every other regime uses SEC-ERBA for the
+  rated tranches. Under the UK and EU Art 254 ordering, SEC-SA is kept where its risk weight is ≤ 25%
+  (the RMBS senior tranches, at 15%), and SEC-ERBA is forced where it is higher.
+- **Leverage.** The UK exposure measure excludes central bank claims (Art 429a(A1)-(A2)). No other
+  regime excludes them by default.
+- **CCPs.** Singapore treats a CCP that has not supplied K_CCP data as non-qualifying (MAS 637 para
+  7.7.3(c)). The synthetic CCP book therefore carries K_CCP for every qualifying CCP.
+
+## 4.4 Open items (`TODO: VERIFY`)
+
+- **EU most-liquid currencies** (EBA RTS under Art 325bd(7)(b), not supplied). The GIRR and FX √2
+  reductions apply only to the domestic currency, which is conservative. This is why the EU market-risk
+  RWA is the highest of the six.
+- **AAA versus AA DRC weight.** The two share a rating bucket in the contract (`flags['rating_aaa']`).
+- **UK CTP bucket floor.** The literal Art 325ad(3) floors DRC_b at zero; BCBS has no bucket floor.
+- **Canada.** The unrated non-qualifying CCP is placed in SCRA Grade C, and the B-2 large-exposure
+  guideline is still a consultation draft.
+- **Shared model.** `CapitalRequirements.combined_buffer` adds `stress_buffer`, but the UK PRA buffer
+  sits outside the combined buffer. The comparison passes a stress buffer only for the US.
+

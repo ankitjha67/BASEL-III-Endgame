@@ -225,9 +225,15 @@ leverage stack, SA-CCR EAD, BA-CVA. Verbatim parameter references in `docs/juris
 - `eu` — CRR3, Regulation (EU) 2024/1623 (+ consolidated CRR for unchanged articles)
 - `sg` — MAS Notice 637 (version effective 1 January 2026)
 - `ca` — OSFI CAR 2026
+- `<cc>/frtb/` — `MarketRiskCalculator` (`frtb_base.py`): FRTB SA (SBM, DRC incl. securitisation
+  non-CTP / CTP, RRAO), IMA scalars, simplified SA where the regime has one (`docs/jurisdictions/
+  <CC>_frtb_reference.md`); `us/frtb.py` adapts the ERBA NPR engine
+- `<cc>/pillar1/` — `pillar1_base.py` protocols: securitisation hierarchy, SA-CVA, leverage exposure,
+  large exposures, CCP (`<CC>_pillar1_reference.md`); `us/pillar1.py` adapts the NPR engines
 - `comparison.py` — one bank through all six rulebooks (ECB 31 Dec 2024 FX for local-currency
-  thresholds) plus an output-floor what-if; e2e stage 18. Market-risk and securitisation RWA are
-  held common (US engines) — jurisdictional FRTB / securitisation calibrations are not yet modelled.
+  thresholds) plus an output-floor what-if; e2e stage 18. Every Pillar 1 component is per regime
+  (FRTB on one regime-neutral trading book from `trading_positions_to_neutral_frtb`; 15 rated
+  securitisation tranches; CCP; leverage; large exposures); only capital resources are held common.
 
 ### Gap Analysis Summary (Reconciled to the March 2026 ERBA NPR text, 2026-10-28 — actual `wc -l` counts)
 | Module | Src Lines | Target | Status |
