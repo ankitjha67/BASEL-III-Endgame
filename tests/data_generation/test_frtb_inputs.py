@@ -55,3 +55,16 @@ def test_master_calculator_sums_drc_components(positions: list[object]) -> None:
     assert withsec.drc_sec_nonctp > 0
     assert withsec.drc_nonsec == pytest.approx(base.drc_nonsec)
     assert withsec.drc_total == pytest.approx(base.drc_nonsec + withsec.drc_sec_nonctp)
+
+
+def test_neutral_mapping_reproduces_us(positions: list[object]) -> None:
+    """Neutral descriptors -> US adapter gives the same SBM / DRC as the direct US mapping."""
+    from src.data_generation.frtb_inputs import trading_positions_to_neutral_frtb
+    from src.jurisdictions.us import USMarketRisk
+
+    s, d = trading_positions_to_neutral_frtb(positions, np.random.default_rng(3))
+    s2, d2 = trading_positions_to_frtb_inputs(positions, np.random.default_rng(3))
+    r = USMarketRisk().market_risk(s, d, [])
+    r2 = FRTBCalculator().calculate(sensitivities=s2, drc_positions=d2)
+    assert r.sbm_total == pytest.approx(r2.sbm_total)
+    assert r.drc_total == pytest.approx(r2.drc_total)
