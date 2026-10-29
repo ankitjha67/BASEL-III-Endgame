@@ -110,14 +110,15 @@ class STWFScore:
     """Short-Term Wholesale Funding score for Method 2.
 
     Per G-SIB NPR pp.30-35 / 12 CFR 217.406:
-    STWF score = (weighted_stwf_amount / avg_total_assets) * adjusted_coefficient * 10,000
+    STWF score = (weighted_stwf_amount / average RWA) * adjusted_coefficient
 
     Attributes:
         buckets: Breakdown by maturity bucket
         total_wholesale_funding: Sum of all bucket amounts ($M)
         total_weighted_funding: Sum of all weighted amounts ($M)
-        avg_total_assets: Average total consolidated assets ($M)
-        stwf_ratio: weighted_funding / avg_total_assets
+        avg_total_assets: Denominator used for the STWF ratio ($M) -- average
+            risk-weighted assets when supplied, else average total assets
+        stwf_ratio: weighted_funding / denominator
         stwf_score_bps: Final STWF contribution to Method 2 score
     """
     buckets: list[STWFBucketValue] = field(default_factory=list)
@@ -181,6 +182,9 @@ class GSIBIndicatorData:
     stwf_91_180_days: float = 0.0  # Wholesale funding maturing in 91-180 days
     stwf_181_365_days: float = 0.0  # Wholesale funding maturing in 181-365 days
     avg_total_assets: float = 0.0  # Average total consolidated assets
+    # 12 CFR 217.406(c): the STWF ratio is taken over average risk-weighted
+    # assets. Falls back to avg_total_assets (with a warning) when not supplied.
+    avg_risk_weighted_assets: float = 0.0
 
     def get_indicator_value(self, indicator_name: str) -> float:
         """Get the raw value for a named indicator.
@@ -404,8 +408,10 @@ def calculate_stwf_score(
     Per G-SIB NPR pp.30-35 / 12 CFR 217.406(b)-(c):
     1. Allocate wholesale funding to maturity buckets
     2. Apply maturity-based weights
-    3. Calculate STWF ratio = weighted_funding / avg_total_assets
-    4. STWF score = ratio * adjusted_coefficient * 10,000
+    3. Calculate STWF ratio = weighted_funding / average RWA
+    4. STWF score = ratio * adjusted_coefficient (the coefficient of 350
+       already converts the ratio into score points; there is no further
+       x10,000 scaling)
 
     The adjusted coefficient applies the 1.2x downward factor per
     the 2026 Re-Proposal / CLAUDE.md.
@@ -438,11 +444,19 @@ def calculate_stwf_score(
         total_wholesale += amount
         total_weighted += weighted
 
-    # Calculate STWF ratio
-    avg_assets = indicator_data.avg_total_assets
+    # Calculate STWF ratio -- denominator is average RWA (12 CFR 217.406(c))
+    avg_assets = indicator_data.avg_risk_weighted_assets
+    if avg_assets <= 0:
+        # TODO: VERIFY -- fallback to total assets understates the STWF score
+        avg_assets = indicator_data.avg_total_assets
+        logger.warning(
+            "avg_risk_weighted_assets not supplied; STWF ratio uses average "
+            "total assets (%.2f) instead.",
+            avg_assets,
+        )
     if avg_assets <= 0:
         logger.warning(
-            "Average total assets is non-positive (%.2f). "
+            "STWF denominator is non-positive (%.2f). "
             "Cannot calculate STWF ratio.",
             avg_assets,
         )
@@ -457,7 +471,7 @@ def calculate_stwf_score(
 
     # Calculate STWF score using adjusted coefficient
     # Per CLAUDE.md: Method 2 coefficients adjusted by 1.2x downward factor
-    stwf_score = stwf_ratio * METHOD_2_ADJUSTED_COEFFICIENT * METHOD_1_SCALING_FACTOR
+    stwf_score = stwf_ratio * METHOD_2_ADJUSTED_COEFFICIENT
 
     logger.info(
         "STWF score: ratio=%.6f, adjusted_coeff=%.3f, score=%.2f bps",

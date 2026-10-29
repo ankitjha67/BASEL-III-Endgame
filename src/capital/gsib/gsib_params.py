@@ -345,7 +345,8 @@ STWF_MATURITY_BUCKETS: Final[list[STWFBucketSpec]] = [
 METHOD_2_DOWNWARD_FACTOR: Final[float] = 1.2  # Per CLAUDE.md / G-SIB NPR p.34
 
 # Base Method 2 coefficient for converting STWF amount to score contribution.
-# The STWF score = (STWF_weighted_amount / avg_total_assets) * coefficient * 10,000
+# The STWF score = (STWF_weighted_amount / average RWA) * coefficient (12 CFR 217.406(c));
+# the coefficient already yields score points -- no x10,000 scaling.
 # Per G-SIB NPR p.34
 METHOD_2_BASE_COEFFICIENT: Final[float] = 350.0  # G-SIB NPR p.34
 METHOD_2_ADJUSTED_COEFFICIENT: Final[float] = METHOD_2_BASE_COEFFICIENT / METHOD_2_DOWNWARD_FACTOR

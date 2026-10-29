@@ -148,6 +148,10 @@ METHOD_2_DOWNWARD_FACTOR: float = 1.0 / 1.2
 """Method 2 coefficients adjusted by 1.2x downward factor.
 Reference: G-SIB NPR p. 24, CLAUDE.md."""
 
+METHOD_2_STWF_COEFFICIENT: float = 350.0
+"""STWF coefficient: score = (weighted STWF / average RWA) x 350.
+Reference: 12 CFR 217.406(c)."""
+
 
 def score_to_surcharge(
     score_bps: float,
@@ -370,6 +374,7 @@ def compute_method2_score(
     stwf_values: dict[str, float],
     avg_total_assets: float,
     denomination_factors: Optional[dict[str, float]] = None,
+    avg_risk_weighted_assets: float = 0.0,
 ) -> FRY15MethodScore:
     """Compute Method 2 G-SIB score from indicator and STWF values.
 
@@ -378,14 +383,17 @@ def compute_method2_score(
     Method 2 coefficients adjusted by 1.2x downward factor per 2026
     Re-Proposal (CLAUDE.md).
 
-    STWF score = (weighted_funding / avg_total_assets) * adjusted_coeff * 10,000
+    STWF score = (weighted_funding / average RWA) * 350 / 1.2
+    (12 CFR 217.406(c); the coefficient yields score points directly).
 
     Args:
         indicator_values: Dict mapping indicator names to values in $M.
         stwf_values: Dict with keys stwf_0_30_days, stwf_31_90_days,
             stwf_91_180_days, stwf_181_365_days — all in $M.
-        avg_total_assets: Average total consolidated assets in $M.
+        avg_total_assets: Average total consolidated assets in $M (STWF
+            denominator fallback when average RWA is not supplied).
         denomination_factors: Global aggregates for normalization.
+        avg_risk_weighted_assets: Average RWA in $M -- the STWF denominator.
 
     Returns:
         FRY15MethodScore with full breakdown.
@@ -412,12 +420,12 @@ def compute_method2_score(
 
     # STWF score contribution
     stwf_score = 0.0
-    if avg_total_assets > 0:
-        stwf_ratio = total_weighted_stwf / avg_total_assets
-        # Apply Method 2 downward factor
-        adjusted_coefficient = METHOD_2_DOWNWARD_FACTOR
-        stwf_score = stwf_ratio * adjusted_coefficient * 10_000.0 * 0.20
-        # 0.20 is the category weight for STWF replacing Substitutability
+    # TODO: VERIFY -- fallback to total assets understates the STWF score
+    stwf_denominator = avg_risk_weighted_assets if avg_risk_weighted_assets > 0 else avg_total_assets
+    stwf_coefficient = METHOD_2_STWF_COEFFICIENT * METHOD_2_DOWNWARD_FACTOR
+    if stwf_denominator > 0:
+        stwf_ratio = total_weighted_stwf / stwf_denominator
+        stwf_score = stwf_ratio * stwf_coefficient
 
     # Categories for Method 2 (same as Method 1 except Substitutability -> STWF)
     categories_m2: dict[str, list[str]] = {
@@ -495,8 +503,8 @@ def compute_method2_score(
             description=stwf_def.description if stwf_def else bucket_name,
             category="STWF (Method 2)",
             amount=amount,
-            denomination_factor=avg_total_assets,
-            score_contribution=amount * weight / avg_total_assets * METHOD_2_DOWNWARD_FACTOR * 10_000.0 * 0.20 / len(stwf_weights) if avg_total_assets > 0 else 0.0,
+            denomination_factor=stwf_denominator,
+            score_contribution=amount * weight / stwf_denominator * stwf_coefficient if stwf_denominator > 0 else 0.0,
             regulatory_reference=(
                 stwf_def.regulatory_reference if stwf_def else ""
             ),
@@ -739,7 +747,8 @@ def generate_fr_y15(
     }
     avg_total_assets = indicator_values.get("avg_total_assets", 0.0)
     method2 = compute_method2_score(
-        indicator_values, stwf_values, avg_total_assets, denomination_factors
+        indicator_values, stwf_values, avg_total_assets, denomination_factors,
+        avg_risk_weighted_assets=indicator_values.get("avg_risk_weighted_assets", 0.0),
     )
 
     # Surcharge determination: higher of Method 1 and Method 2

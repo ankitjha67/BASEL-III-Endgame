@@ -23,7 +23,7 @@ import plotly.graph_objects as go
 import plotly.express as px
 
 np.random.seed(20260319)
-OUT = "/mnt/user-data/outputs"
+OUT = os.environ.get("BASEL_OUTPUT_DIR", os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "output", "reports"))
 os.makedirs(OUT, exist_ok=True)
 TS = datetime.now()
 

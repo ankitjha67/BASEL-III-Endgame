@@ -1,0 +1,361 @@
+{
+  "entity": "First National Banking Corp (synthetic)",
+  "reporting_date": "2026-06-30",
+  "seed": 20260319,
+  "stages": [
+    {
+      "name": "Portfolio generation",
+      "status": "PASS",
+      "seconds": 0.01,
+      "headline": "565 credit exposures ($1,763,400M EAD), 130 trading positions",
+      "checks": [
+        {
+          "check": "credit EAD $M",
+          "ok": true,
+          "detail": "1,763,400 in [1,000,000, 3,000,000]"
+        },
+        {
+          "check": "trading positions",
+          "ok": true,
+          "detail": "130 in [50, 1,000]"
+        }
+      ],
+      "error": ""
+    },
+    {
+      "name": "SA credit risk (\u00a7 __.111)",
+      "status": "PASS",
+      "seconds": 0.013,
+      "headline": "EAD $1,924,996M  RWA $792,369M  density 41.2%",
+      "checks": [
+        {
+          "check": "on-balance RWA density",
+          "ok": true,
+          "detail": "0.41 in [0.20, 0.70]"
+        },
+        {
+          "check": "resi LTV<=50% RW (Table 5)",
+          "ok": true,
+          "detail": "0.20 in [0.20, 0.20]"
+        },
+        {
+          "check": "bank Grade B RW (Table 2)",
+          "ok": true,
+          "detail": "0.75 in [0.75, 0.75]"
+        }
+      ],
+      "error": ""
+    },
+    {
+      "name": "Off-balance sheet CCFs (\u00a7 __.112)",
+      "status": "PASS",
+      "seconds": 0.008,
+      "headline": "notional $903,275M  EAD $273,315M  RWA $168,602M",
+      "checks": [
+        {
+          "check": "OBS CCF-weighted EAD / notional",
+          "ok": true,
+          "detail": "0.30 in [0.10, 0.60]"
+        },
+        {
+          "check": "commitment <=1y CCF = 40% (\u00a7 __.112(b)(3))",
+          "ok": true,
+          "detail": "0.40 in [0.40, 0.40]"
+        }
+      ],
+      "error": ""
+    },
+    {
+      "name": "SA-CCR (\u00a7 __.114)",
+      "status": "PASS",
+      "seconds": 0.129,
+      "headline": "300 netting sets  notional $5,740,825M  EAD $230,659M  RWA $143,616M",
+      "checks": [
+        {
+          "check": "EAD / notional",
+          "ok": true,
+          "detail": "0.040 in [0.002, 0.200]"
+        },
+        {
+          "check": "alpha of commercial end-user sets = 1.0",
+          "ok": true,
+          "detail": "1.0 in [1.0, 1.0]"
+        },
+        {
+          "check": "alpha of financial sets = 1.4",
+          "ok": true,
+          "detail": "1.4 in [1.4, 1.4]"
+        }
+      ],
+      "error": ""
+    },
+    {
+      "name": "CVA (\u00a7 __.222)",
+      "status": "PASS",
+      "seconds": 0.005,
+      "headline": "BA-CVA-REDUCED K $10,113M  RWA $126,417M  (300 counterparties)",
+      "checks": [
+        {
+          "check": "CVA RWA / CCR EAD",
+          "ok": true,
+          "detail": "0.55 in [0.05, 1.50]"
+        },
+        {
+          "check": "RWA = 12.5 x K",
+          "ok": true,
+          "detail": "12.50 in [12.50, 12.50]"
+        }
+      ],
+      "error": ""
+    },
+    {
+      "name": "Securitization SEC-SA (\u00a7 __.133)",
+      "status": "PASS",
+      "seconds": 0.0,
+      "headline": "15 tranches  exposure $48,500M  RWA $64,780M",
+      "checks": [
+        {
+          "check": "senior tranche RW floor 15%",
+          "ok": true,
+          "detail": "0.15 in [0.15, 0.30]"
+        },
+        {
+          "check": "only SEC-SA used (US rule)",
+          "ok": true,
+          "detail": "1 in [1, 1]"
+        }
+      ],
+      "error": ""
+    },
+    {
+      "name": "Operational risk (\u00a7 __.150)",
+      "status": "PASS",
+      "seconds": 0.0,
+      "headline": "BI $83,980M  BIC $14,186M  RWA $177,330M  ILM 1.0",
+      "checks": [
+        {
+          "check": "BIC = $4.47B + 18% x (BI - $30B)",
+          "ok": true,
+          "detail": "14,186 in [14,186, 14,187]"
+        },
+        {
+          "check": "RWA = 12.5 x BIC (no ILM)",
+          "ok": true,
+          "detail": "12.50 in [12.50, 12.50]"
+        }
+      ],
+      "error": ""
+    },
+    {
+      "name": "FRTB SBM + DRC + RRAO",
+      "status": "PASS",
+      "seconds": 0.525,
+      "headline": "167 sensitivities  SBM $16,260M  DRC $136M  RRAO $80M  RWA $205,949M",
+      "checks": [
+        {
+          "check": "FRTB capital $M",
+          "ok": true,
+          "detail": "16,476 in [1,000, 60,000]"
+        },
+        {
+          "check": "RRAO = 1.0% exotic + 0.1% other",
+          "ok": true,
+          "detail": "80 in [80, 80]"
+        }
+      ],
+      "error": ""
+    },
+    {
+      "name": "ECL / CECL",
+      "status": "PASS",
+      "seconds": 0.009,
+      "headline": "530 loans  EAD $981,325M  ECL $16,624M  coverage 1.69%",
+      "checks": [
+        {
+          "check": "allowance coverage",
+          "ok": true,
+          "detail": "0.0169 in [0.0020, 0.0600]"
+        }
+      ],
+      "error": ""
+    },
+    {
+      "name": "RWA aggregation",
+      "status": "PASS",
+      "seconds": 0.001,
+      "headline": "total RWA $1,701,564M  (credit 70%, market 12%, op 10%, CVA 7%)",
+      "checks": [
+        {
+          "check": "total RWA $M",
+          "ok": true,
+          "detail": "1,701,564 in [800,000, 2,500,000]"
+        },
+        {
+          "check": "output floor not applied",
+          "ok": true,
+          "detail": "0 in [0, 0]"
+        }
+      ],
+      "error": ""
+    },
+    {
+      "name": "Capital stack",
+      "status": "PASS",
+      "seconds": 0.0,
+      "headline": "CET1 $208,000M  T1 $232,000M  Total $278,624M",
+      "checks": [
+        {
+          "check": "CET1 $M",
+          "ok": true,
+          "detail": "208,000 in [120,000, 280,000]"
+        },
+        {
+          "check": "MSAs not deducted (250% RW instead)",
+          "ok": true,
+          "detail": "0 in [0, 0]"
+        }
+      ],
+      "error": ""
+    },
+    {
+      "name": "G-SIB surcharge",
+      "status": "PASS",
+      "seconds": 0.0,
+      "headline": "Method 1 512bp (2.9%) | Method 2 386bp (2.2%) -> 2.9% (METHOD_1)",
+      "checks": [
+        {
+          "check": "surcharge between 1.0% and 5.0%",
+          "ok": true,
+          "detail": "0.029 in [0.010, 0.050]"
+        }
+      ],
+      "error": ""
+    },
+    {
+      "name": "Ratios, buffers, PCA",
+      "status": "PASS",
+      "seconds": 0.0,
+      "headline": "CET1 12.22%  T1 13.63%  Total 16.37%  SLR 5.91%  PCA WELL_CAPITALIZED",
+      "checks": [
+        {
+          "check": "CET1 ratio (CLAUDE.md 10-15%)",
+          "ok": true,
+          "detail": "0.1222 in [0.1000, 0.1500]"
+        },
+        {
+          "check": "SLR (CLAUDE.md 5-7%)",
+          "ok": true,
+          "detail": "0.0591 in [0.0500, 0.0700]"
+        }
+      ],
+      "error": ""
+    },
+    {
+      "name": "Large exposures (SCCL)",
+      "status": "PASS",
+      "seconds": 0.001,
+      "headline": "30 counterparties, 23 reportable, 1 limit breaches, largest 18.4% of T1",
+      "checks": [
+        {
+          "check": "counterparties assessed",
+          "ok": true,
+          "detail": "40 in [40, 40]"
+        }
+      ],
+      "error": ""
+    },
+    {
+      "name": "CCAR stress test",
+      "status": "PASS",
+      "seconds": 0.0,
+      "headline": "severely adverse min CET1 6.71% (Q9), SCB 5.51%, pass=True",
+      "checks": [
+        {
+          "check": "severely adverse min CET1 >= 4.5%",
+          "ok": true,
+          "detail": "0.0671 in [0.0450, 0.2000]"
+        },
+        {
+          "check": "SCB floor 2.5%",
+          "ok": true,
+          "detail": "0.0551 in [0.0250, 0.1000]"
+        }
+      ],
+      "error": ""
+    },
+    {
+      "name": "Fed reports (Y-9C, 101, Y-15, Y-14)",
+      "status": "PASS",
+      "seconds": 0.001,
+      "headline": "reports: FR_Y_9C, FFIEC_101, FR_Y_15, FR_Y_14 | cross-validation 3/4 | DQ pass=False",
+      "checks": [
+        {
+          "check": "four Fed reports generated",
+          "ok": true,
+          "detail": "4 in [4, 10]"
+        }
+      ],
+      "error": ""
+    },
+    {
+      "name": "Pillar 3 disclosures",
+      "status": "PASS",
+      "seconds": 0.0,
+      "headline": "5 templates: OV1, KM1, MR1, LR1, LR2 | not produced: MR2, MR3, MR4",
+      "checks": [
+        {
+          "check": "Pillar 3 templates produced",
+          "ok": true,
+          "detail": "5 in [4, 40]"
+        }
+      ],
+      "error": ""
+    }
+  ],
+  "rwa": {
+    "credit_risk_rwa": 1191868.0111048662,
+    "credit_risk_exposure": 2477470.634118896,
+    "threshold_250rw_rwa": 22500.0,
+    "market_risk_rwa": 205948.60179119706,
+    "market_risk_capital_charge": 16475.888143295764,
+    "operational_risk_rwa": 177330.0,
+    "operational_risk_capital_charge": 14186.4,
+    "cva_risk_rwa": 126417.0688337919,
+    "cva_risk_capital_charge": 10113.365506703352,
+    "total_rwa": 1701563.681729855,
+    "standardized_total_rwa": 1701563.681729855,
+    "output_floor_rwa": 1233633.669254145,
+    "output_floor_applied": false,
+    "output_floor_surplus": 467930.01247571013
+  },
+  "ratios": {
+    "cet1_ratio": 0.1222405027994848,
+    "tier1_ratio": 0.13634517619942535,
+    "total_capital_ratio": 0.16374612305144212,
+    "leverage_ratio": 0.05912372751928002
+  },
+  "buffers": {
+    "capital_conservation_buffer": 0.032,
+    "countercyclical_buffer": 0.0,
+    "gsib_surcharge": 0.029000000000000005,
+    "stress_capital_buffer": 0.032,
+    "combined_buffer_requirement": 0.061000000000000006,
+    "effective_cet1_minimum": 0.10600000000000001,
+    "effective_tier1_minimum": 0.121,
+    "effective_total_capital_minimum": 0.14100000000000001
+  },
+  "pca": "WELL_CAPITALIZED",
+  "capital": {
+    "cet1": 208000.0,
+    "at1": 24000.0,
+    "tier1": 232000.0,
+    "tier2": 46624.456008401765,
+    "total": 278624.45600840176
+  },
+  "gsib": {
+    "method1_bps": 511.7224127980279,
+    "method2_bps": 386.3788165227413,
+    "surcharge": 2.9000000000000004,
+    "binding": "GSIBMethod.METHOD_1"
+  }
+}

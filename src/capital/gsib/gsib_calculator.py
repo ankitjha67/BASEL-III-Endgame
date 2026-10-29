@@ -808,6 +808,7 @@ def create_indicator_data_from_dict(
         stwf_91_180_days=data.get("stwf_91_180_days", 0.0),
         stwf_181_365_days=data.get("stwf_181_365_days", 0.0),
         avg_total_assets=data.get("avg_total_assets", 0.0),
+        avg_risk_weighted_assets=data.get("avg_risk_weighted_assets", 0.0),
     )
 
 
