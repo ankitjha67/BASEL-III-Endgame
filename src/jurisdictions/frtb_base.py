@@ -70,7 +70,8 @@ class CreditSector(str, Enum):  # noqa: UP042
         "LOCAL_GOVERNMENT"  # local govt, govt-backed non-financials, education, public admin
     )
     FINANCIAL = "FINANCIAL"  # financials incl. government-backed financials
-    BASIC_MATERIALS = "BASIC_MATERIALS"  # basic materials, energy, industrials, agriculture, manufacturing, mining
+    # basic materials, energy, industrials, agriculture, manufacturing, mining
+    BASIC_MATERIALS = "BASIC_MATERIALS"
     CONSUMER = "CONSUMER"  # consumer goods/services, transportation, admin & support
     TECHNOLOGY = "TECHNOLOGY"  # technology, telecommunications
     HEALTH_CARE = "HEALTH_CARE"  # health care, utilities, professional & technical
