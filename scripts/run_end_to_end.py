@@ -66,13 +66,19 @@ from src.jurisdictions.base import Jurisdiction, OpRiskInputs  # noqa: E402
 from src.jurisdictions.comparison import (  # noqa: E402
     ComparisonResult,
     FloorSensitivityRow,
+    banking_book_large_exposures,
     build_reference_book,
     floor_sensitivity,
+    reference_securitisations,
     run_comparison,
 )
+from src.jurisdictions.frtb_base import RRAOCategory as NeutralRRAOCategory  # noqa: E402
+from src.jurisdictions.frtb_base import RRAOPositionInput  # noqa: E402
+from src.jurisdictions.pillar1_base import CCPExposureInput, LeverageInputs  # noqa: E402
 from src.data_generation.frtb_inputs import (  # noqa: E402
     DEFAULT_NET_FRACTION,
     trading_positions_to_frtb_inputs,
+    trading_positions_to_neutral_frtb,
 )
 from src.capital.gsib.gsib_calculator import (  # noqa: E402
     calculate_gsib_surcharge,
@@ -150,6 +156,30 @@ TRADING_NET_FRACTION = DEFAULT_NET_FRACTION
 # Derivative trade maturities: lognormal around this median (years), which
 # mirrors the short-dated skew of dealer books (most notional < 5y).
 DERIV_MEDIAN_MATURITY_YEARS = 2.5
+
+# Synthetic securitisation book (investor positions; NOT regulatory parameters):
+# (deal, pool size $M, pool K_SA, delinquent share W) and
+# (tranche, attachment, detachment, senior, external rating).
+SEC_DEALS = [("RMBS-1", 15_000.0, 0.035, 0.02), ("RMBS-2", 10_000.0, 0.030, 0.03),
+             ("CMBS-1", 8_000.0, 0.080, 0.04), ("CLO-1", 10_000.0, 0.080, 0.03),
+             ("CLO-2", 7_000.0, 0.080, 0.05)]
+SEC_TRANCHES = [("SNR", 0.20, 1.00, True, "AAA"), ("MEZ", 0.08, 0.20, False, "A"),
+                ("JNR", 0.03, 0.08, False, "BB")]
+SEC_POOL_N_EFFECTIVE = 500.0
+SEC_TRANCHE_MATURITY_YEARS = 5.0
+
+# Residual-risk positions (gross notional $M): one exotic, one book of other residual risks.
+RRAO_BOOK = [("WEATHER-1", 2_000.0, "EXOTIC"), ("BERMUDAN-BOOK", 60_000.0, "OTHER")]
+
+# Synthetic balance-sheet items for the multi-jurisdiction leverage and CCP comparison.
+TOTAL_ASSETS = 3_200_000.0
+SFT_GROSS_ASSETS = 220_000.0
+CENTRAL_BANK_RESERVES = 320_000.0
+# (CCP, qualifying, trade exposure, client-cleared via member, default fund contribution,
+#  K_CCP, total prefunded default fund) -- $M
+CCP_BOOK = [("CCP-A", True, 45_000.0, False, 2_500.0, 6_000.0, 40_000.0),
+            ("CCP-B", True, 12_000.0, True, 0.0, 4_000.0, 30_000.0),
+            ("CCP-C", False, 800.0, False, 60.0, None, None)]
 
 # --------------------------------------------------------------------------
 #  Smoke-test bookkeeping
@@ -407,15 +437,14 @@ def run_cva(p: Pipeline, st: StageResult) -> None:
 
 
 def run_securitization(p: Pipeline, st: StageResult) -> None:
-    deals = [("RMBS-1", 15_000.0, 0.035, 0.02), ("RMBS-2", 10_000.0, 0.030, 0.03),
-             ("CMBS-1", 8_000.0, 0.080, 0.04), ("CLO-1", 10_000.0, 0.080, 0.03), ("CLO-2", 7_000.0, 0.080, 0.05)]
-    tranches_spec = [("SNR", 0.20, 1.00, True), ("MEZ", 0.08, 0.20, False), ("JNR", 0.03, 0.08, False)]
+    deals = SEC_DEALS
+    tranches_spec = [(n, a, d, sr) for n, a, d, sr, _ in SEC_TRANCHES]
     calc = SecuritizationCalculator()
     total_rwa = total_exp = 0.0
     rows = []
     for deal, size, kg, w in deals:
         pool = SecuritizationPool(pool_id=deal, total_ead=size, pool_rwa=size * kg * 12.5,
-                                  delinquency_ratio=w, effective_number_of_obligors=500)
+                                  delinquency_ratio=w, effective_number_of_obligors=SEC_POOL_N_EFFECTIVE)
         trs = [SecuritizationTranche(tranche_id=f"{deal}-{n}", pool_id=deal, attachment_point=a,
                                      detachment_point=d, notional=size * (d - a), is_senior=sr)
                for n, a, d, sr in tranches_spec]
@@ -474,8 +503,7 @@ def run_frtb(p: Pipeline, st: StageResult) -> None:
     """
     sens, drc = trading_positions_to_frtb_inputs(p.data["gen_trading"].positions, p.data["rng"],
                                                  TRADING_NET_FRACTION)
-    rrao = [RRAOPosition(instrument_id="WEATHER-1", notional=2_000.0, category=RRAOCategory.EXOTIC),
-            RRAOPosition(instrument_id="BERMUDAN-BOOK", notional=60_000.0, category=RRAOCategory.OTHER)]
+    rrao = [RRAOPosition(instrument_id=i, notional=n, category=RRAOCategory[c]) for i, n, c in RRAO_BOOK]
     res = FRTBCalculator().calculate(sensitivities=sens, drc_positions=drc, rrao_positions=rrao)
     p.data["frtb_result"] = res
     p.data["frtb_counts"] = {"sensitivities": len(sens), "drc_positions": len(drc), "rrao_positions": len(rrao)}
@@ -556,8 +584,8 @@ def run_capital(p: Pipeline, st: StageResult) -> None:
     rwa = p.data["rwa"]
     cap = compute_total_capital(equity, deductions, at1, t2, thresholds,
                                 total_allowance=p.data["ecl_result"].total_ecl, sa_rwa=rwa.total_rwa)
-    lev = LeverageExposureInputs(total_on_balance_sheet=3_200_000.0, derivative_exposures=sum(r["ead"] for r in p.data["saccr_rows"]),
-                                 sft_exposures=220_000.0, off_balance_sheet_items=p.data["obs_result"].total_ead)
+    lev = LeverageExposureInputs(total_on_balance_sheet=TOTAL_ASSETS, derivative_exposures=sum(r["ead"] for r in p.data["saccr_rows"]),
+                                 sft_exposures=SFT_GROSS_ASSETS, off_balance_sheet_items=p.data["obs_result"].total_ead)
     p.data.update(capital=cap, leverage_inputs=lev)
     st.headline = (f"CET1 ${cap.cet1.net_cet1:,.0f}M  T1 ${cap.tier1_capital:,.0f}M  "
                    f"Total ${cap.total_capital:,.0f}M")
@@ -744,32 +772,72 @@ def _comparison_op_inputs() -> OpRiskInputs:
     )
 
 
+def _comparison_leverage_inputs(p: Pipeline) -> LeverageInputs:
+    """Leverage-ratio inputs shared by every regime (LEV30 structure).
+
+    On-balance assets exclude the derivative replacement cost and SFT assets,
+    which enter through their own lines; off-balance items carry the CCF of
+    stage 7 (US § __.112), which each regime then applies (LEV30.43-30.47).
+    """
+    sac = p.data["saccr_rows"]
+    rc = sum(r["rc"] for r in sac)
+    by_ccf: dict[float, float] = {}
+    for v in p.data["obs_result"].exposures_by_category.values():
+        by_ccf[float(v["ccf"])] = by_ccf.get(float(v["ccf"]), 0.0) + float(v["notional"])
+    return LeverageInputs(
+        on_balance_sheet_assets=TOTAL_ASSETS - SFT_GROSS_ASSETS - rc,
+        derivative_rc=rc,
+        derivative_pfe_addon=sum(r["pfe"] / (r["multiplier"] or 1.0) for r in sac),
+        sft_gross_assets=SFT_GROSS_ASSETS,
+        obs_notional_by_ccf=by_ccf,
+        central_bank_reserves=CENTRAL_BANK_RESERVES,
+    )
+
+
 def run_jurisdictions(p: Pipeline, st: StageResult) -> None:
     """Run the bank through the BCBS, US, UK, EU, Singapore and Canada rulebooks.
 
-    Uses src.jurisdictions.comparison. Market-risk and securitisation RWA are
-    held common (US engines); everything else is computed under each regime's
-    own parameters. The bank uses standardised approaches, so the floor cannot
-    bind; the floor what-if applies each regime's schedule to hypothetical
-    modelled/SA ratios (50/60/70%) in 2027 and 2030. The US proposal has no floor.
+    Uses src.jurisdictions.comparison. Every Pillar 1 component is computed under
+    each regime's own rules: credit, CCR, CVA, op risk, FRTB (one regime-neutral
+    trading book), securitisation (SEC-SA only in the US; SEC-ERBA for rated
+    tranches elsewhere, subject to each regime's hierarchy), CCP exposures, the
+    leverage exposure measure and large-exposure limits. Capital resources are
+    held common. The bank uses standardised approaches, so the floor cannot bind;
+    the floor what-if applies each regime's schedule to hypothetical modelled/SA
+    ratios (50/60/70%) in 2027 and 2030. The US proposal has no floor.
     """
     book = build_reference_book(p.data["gen_credit"].exposures, p.data["saccr_rows"],
                                 _comparison_op_inputs(), seed=SEED)
+    sens, drc = trading_positions_to_neutral_frtb(p.data["gen_trading"].positions,
+                                                  np.random.default_rng(SEED), TRADING_NET_FRACTION)
+    book.frtb_sensitivities, book.drc_positions = sens, drc  # type: ignore[assignment]
+    book.rrao_positions = [RRAOPositionInput(
+        position_id=i, gross_notional=n,
+        category=NeutralRRAOCategory.EXOTIC if c == "EXOTIC" else NeutralRRAOCategory.OTHER_RESIDUAL)
+        for i, n, c in RRAO_BOOK]
+    book.sec_tranches = reference_securitisations(SEC_DEALS, SEC_TRANCHES, SEC_POOL_N_EFFECTIVE,
+                                                  SEC_TRANCHE_MATURITY_YEARS)
+    book.ccp_exposures = [CCPExposureInput(
+        ccp_id=c, is_qualifying=q, trade_exposure=te, is_client_cleared_via_member=cl,
+        initial_margin_bankruptcy_remote=cl, default_fund_contribution=df, k_ccp=kc,
+        total_default_fund=tdf) for c, q, te, cl, df, kc, tdf in CCP_BOOK]
+    book.leverage = _comparison_leverage_inputs(p)
+    book.large_exposures = banking_book_large_exposures(book.exposures)
     cap = p.data["capital"]
-    common = dict(market_rwa_usd=p.data["frtb_result"].total_rwa, securitisation_rwa_usd=p.data["sec_rwa"],
-                  capital_usd={"cet1": cap.cet1.net_cet1, "tier1": cap.tier1_capital,
+    # Stage-10 US FRTB RWA is used only for a regime without its own FRTB calculator
+    # (reported in common_components).
+    common = dict(capital_usd={"cet1": cap.cet1.net_cet1, "tier1": cap.tier1_capital,
                                "total": cap.total_capital},
-                  leverage_exposure_usd=p.data["adequacy"].ratios.total_leverage_exposure
-                  if hasattr(p.data["adequacy"].ratios, "total_leverage_exposure")
-                  else cap.tier1_capital / p.data["adequacy"].ratios.leverage_ratio,
+                  market_rwa_usd=p.data["frtb_result"].total_rwa,
                   gsib_method1_score_bps=p.data["gsib"].method1_score_bps, us_gsib_rate=p.data["gsib_rate"],
                   us_scb=p.data["stress"].stress_capital_buffer)
     res = run_comparison(book, COMPARISON_YEAR, **common)
     full = run_comparison(book, FULLY_PHASED_YEAR, **common)
-    sens = floor_sensitivity(res, (COMPARISON_YEAR, FULLY_PHASED_YEAR))
-    p.data.update(jurisdictions=res, jurisdictions_full=full, jurisdiction_book=book, floor_sens=sens)
+    sens_rows = floor_sensitivity(res, (COMPARISON_YEAR, FULLY_PHASED_YEAR))
+    p.data.update(jurisdictions=res, jurisdictions_full=full, jurisdiction_book=book, floor_sens=sens_rows)
     st.headline = " | ".join(f"{r.jurisdiction.value} CET1 {r.cet1_ratio:.1%}" for r in res.regimes)
     by = {r.jurisdiction: r for r in res.regimes}
+    us_frtb = p.data["frtb_result"].total_rwa
     check(st, "six regimes computed", float(len(res.regimes)), 6, 6, ".0f")
     check(st, "US: no output floor", float(by[Jurisdiction.US].floor_applies), 0, 0, ".0f")
     check(st, "EU floor factor 2027 (Art. 465(1))", by[Jurisdiction.EU].floor_factor, 0.60, 0.60, ".3f")
@@ -780,6 +848,17 @@ def run_jurisdictions(p: Pipeline, st: StageResult) -> None:
               (Jurisdiction.BCBS, Jurisdiction.EU, Jurisdiction.UK, Jurisdiction.SG)), 0.725, 0.725, ".3f")
     check(st, "UK/EU op-risk ILM = 1 (UK rule 5.9; CRR Art. 312)",
           max(by[Jurisdiction.UK].op_ilm, by[Jurisdiction.EU].op_ilm), 1.0, 1.0, ".2f")
+    check(st, "US adapter FRTB RWA / stage-10 FRTB RWA", by[Jurisdiction.US].market_rwa / us_frtb,
+          0.95, 1.05, ".3f")
+    check(st, "US securitisation: SEC-SA / 1,250% only (§ __.133)",
+          float(all(x["approach"] in ("SEC_SA", "RW_1250") for x in by[Jurisdiction.US].securitisation_rows)),
+          1, 1, ".0f")
+    check(st, "US adapter sec RWA = stage-8 SEC-SA RWA", by[Jurisdiction.US].securitisation_rwa,
+          p.data["sec_rwa"] - 0.5, p.data["sec_rwa"] + 0.5)
+    check(st, "UK leverage excludes central bank claims (Art 429a(A1)-(A2))",
+          by[Jurisdiction.UK].leverage_exclusions, CENTRAL_BANK_RESERVES - 0.5, CENTRAL_BANK_RESERVES + 0.5)
+    check(st, "no large-exposure limit breaches", float(sum(len(r.large_exposure_breaches)
+                                                             for r in res.regimes)), 0, 0, ".0f")
 
 
 def write_outputs(p: Pipeline, out: Path) -> dict[str, Any]:
@@ -847,6 +926,12 @@ def write_outputs(p: Pipeline, out: Path) -> dict[str, Any]:
                 pd.DataFrame([{"jurisdiction": r.jurisdiction.value, "class": c, "rwa_$M": v}
                               for r in d["jurisdictions"].regimes for c, v in r.credit_rwa_by_class.items()]
                              ).to_excel(w, sheet_name="Jurisdiction_Credit", index=False)
+                pd.DataFrame([{"jurisdiction": r.jurisdiction.value, **x}
+                              for r in d["jurisdictions"].regimes for x in r.securitisation_rows]
+                             ).to_excel(w, sheet_name="Jurisdiction_Securitisation", index=False)
+                pd.DataFrame([{"jurisdiction": r.jurisdiction.value, "risk_class": c, "capital_$M": v}
+                              for r in d["jurisdictions"].regimes for c, v in r.market_by_class.items()]
+                             ).to_excel(w, sheet_name="Jurisdiction_FRTB", index=False)
                 pd.DataFrame([x.model_dump() for x in d["floor_sens"]]).to_excel(
                     w, sheet_name="Output_Floor_WhatIf", index=False)
             if "reports" in d and d["reports"].fr_y9c is not None:
@@ -969,15 +1054,41 @@ def _jurisdiction_markdown(res: ComparisonResult, full: ComparisonResult,
          "Same synthetic bank under each rulebook. Held common: " + "; ".join(res.common_components) + ".",
          f"FX: {res.fx_source}. The bank uses standardised approaches, so no output floor binds; "
          "see the floor what-if below (US proposal: no floor).\n",
-         "| Regime | SA credit RWA | CCR RWA | CVA RWA | Op RWA (ILM) | Total RWA | Floor factor | CET1 | "
-         "CET1 req. | Surplus | Leverage req. |",
-         "|---|---|---|---|---|---|---|---|---|---|---|"]
+         "| Regime | SA credit RWA | CCR RWA | CVA RWA | Op RWA (ILM) | Market RWA | Sec. RWA | CCP RWA | "
+         "Total RWA | Floor factor | CET1 | CET1 req. | Surplus |",
+         "|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for r in res.regimes:
         fl = f"{r.floor_factor:.1%}" if r.floor_applies else "none"
         L.append(f"| {r.jurisdiction.value} | {r.credit_rwa:,.0f} | {r.ccr_rwa:,.0f} | {r.cva_rwa:,.0f} | "
-                 f"{r.op_rwa:,.0f} ({r.op_ilm:.2f}) | {r.total_rwa:,.0f} | {fl} | "
-                 f"{r.cet1_ratio:.2%} | {r.cet1_requirement:.2%} | {r.cet1_surplus:+.2%} | "
-                 f"{r.leverage_requirement:.2%} |")
+                 f"{r.op_rwa:,.0f} ({r.op_ilm:.2f}) | {r.market_rwa:,.0f} | {r.securitisation_rwa:,.0f} | "
+                 f"{r.ccp_rwa:,.0f} | {r.total_rwa:,.0f} | {fl} | "
+                 f"{r.cet1_ratio:.2%} | {r.cet1_requirement:.2%} | {r.cet1_surplus:+.2%} |")
+    L += ["\nMarket risk (FRTB standardised approach, $M capital; one regime-neutral trading book, USD "
+          "reporting currency):\n",
+          "| Regime | SBM | Binding scenario | DRC | RRAO | RWA | GIRR | CSR | Equity | Commodity | FX |",
+          "|---|---|---|---|---|---|---|---|---|---|---|"]
+    for r in res.regimes:
+        c = r.market_by_class
+        L.append(f"| {r.jurisdiction.value} | {r.market_sbm:,.0f} | {r.market_binding_scenario or '-'} | "
+                 f"{r.market_drc:,.0f} | {r.market_rrao:,.0f} | {r.market_rwa:,.0f} | "
+                 f"{c.get('GIRR', 0.0):,.0f} | {c.get('CSR_NONSEC', 0.0):,.0f} | {c.get('EQUITY', 0.0):,.0f} | "
+                 f"{c.get('COMMODITY', 0.0):,.0f} | {c.get('FX', 0.0):,.0f} |")
+    tranches = [x["tranche"] for x in res.regimes[0].securitisation_rows]
+    L += ["\nSecuritisation risk weights by tranche (approach / RW; US: SEC-SA only, other regimes use "
+          "SEC-ERBA for rated tranches subject to their hierarchy):\n",
+          "| Tranche | " + " | ".join(r.jurisdiction.value for r in res.regimes) + " |",
+          "|---|" + "---|" * len(res.regimes)]
+    for k, t in enumerate(tranches):
+        L.append(f"| {t} | " + " | ".join(
+            f"{r.securitisation_rows[k]['approach']} {float(r.securitisation_rows[k]['risk_weight']):.0%}"  # type: ignore[arg-type]
+            for r in res.regimes) + " |")
+    L += ["\nLeverage and large exposures:\n",
+          "| Regime | Exposure measure | Exclusions | Leverage ratio | Requirement | LE reportable | "
+          "LE breaches | Largest non-exempt (% T1) |", "|---|---|---|---|---|---|---|---|"]
+    for r in res.regimes:
+        L.append(f"| {r.jurisdiction.value} | {r.leverage_exposure:,.0f} | {r.leverage_exclusions:,.0f} | "
+                 f"{r.leverage_ratio:.2%} | {r.leverage_requirement:.2%} | {r.large_exposures_reportable} | "
+                 f"{len(r.large_exposure_breaches)} | {r.large_exposure_max_pct_tier1:.1%} |")
     L += [f"\nEnd-state rules ({full.year}: transitionals such as equity phase-ins and the EU UCC CCF "
           "have run off):\n", "| Regime | Total RWA | CET1 | vs " + str(res.year) + " |", "|---|---|---|---|"]
     by_now = {r.jurisdiction: r for r in res.regimes}

@@ -485,6 +485,7 @@ class USMarketRisk:
             jurisdiction=self.jurisdiction,
             sbm_by_class=self._sbm_rows(r),
             sbm_total=r.sbm_total,
+            binding_scenario=str(r.binding_scenario or "").upper(),
             drc_nonsec=r.drc_nonsec,
             drc_sec_nonctp=r.drc_sec_nonctp,
             drc_ctp=r.drc_sec_ctp,

@@ -180,6 +180,7 @@ def trading_positions_to_frtb_inputs(
                     risk_measure=RiskMeasure.DELTA,
                     bucket=str(min(b, COMMODITY_MAX_BUCKET)),
                     label=f"CMD{b}",
+                    tenor=GIRR_TENORS[pos.tenor],  # type: ignore[attr-defined]
                     value=delta / RELATIVE_SHOCK,
                 )
             )
@@ -422,6 +423,7 @@ def trading_positions_to_neutral_frtb(
                     measure=FRTBMeasure.DELTA,
                     commodity_name=f"CMD{b}",
                     delivery_location=f"CMD{b}",
+                    tenor_years=TENOR_YEARS[str(pos.tenor)],  # type: ignore[attr-defined]
                     value=delta / RELATIVE_SHOCK,
                     **group_kw,
                 )

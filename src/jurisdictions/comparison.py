@@ -15,12 +15,23 @@ components that each rulebook calibrates differently:
   reference bank is a standardised-approach bank, so the floor cannot bind;
   :func:`floor_sensitivity` applies each regime's floor schedule to
   hypothetical modelled/standardised RWA ratios);
-- the capital requirement -- regime ``capital_requirements``.
+- the capital requirement -- regime ``capital_requirements``;
+- market risk -- each regime's :class:`MarketRiskCalculator` (SBM risk weights,
+  correlations and scenario rule, DRC, RRAO) on one regime-neutral trading
+  book (:func:`src.data_generation.frtb_inputs.trading_positions_to_neutral_frtb`);
+- securitisation -- each regime's ``securitisation`` hierarchy (the US NPR
+  allows SEC-SA only; BCBS, UK, EU, Singapore and Canada use SEC-ERBA for
+  rated positions, subject to their own ordering rules);
+- CCP exposures, the leverage exposure measure and large-exposure limits --
+  each regime's Pillar 1 calculators (``src/jurisdictions/<cc>/pillar1``).
 
-Held common across regimes and labelled as such in the result: market-risk
-RWA (US FRTB-SA engine) and securitisation RWA (US SEC-SA engine). The
-jurisdictional FRTB and securitisation calibrations are not part of the
-RegimeCalculator contract.
+Held common across regimes: capital resources (CET1, Tier 1, total) and the
+synthetic inputs themselves. Market-risk amounts stay in USD in every regime
+(the bank's reporting currency is set to USD in each FRTB calculator), so the
+GIRR specified-currency and FX liquid-pair reductions are applied to the same
+currency set. If the reference book carries no trading book, securitisation
+tranches or leverage inputs, the caller's common amounts are used instead and
+listed in ``common_components``.
 
 Currency: each regime's monetary thresholds are stated in its own currency
 (EUR, GBP, SGD, CAD). Inputs in USD are converted to the regime currency
@@ -33,8 +44,8 @@ All amounts in USD millions ($M) unless stated otherwise.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Final
+from dataclasses import dataclass, field
+from typing import Any, Final
 
 import numpy as np
 from pydantic import BaseModel, Field
@@ -51,6 +62,18 @@ from src.jurisdictions.base import (
     SACCRNettingSetInput,
     SAExposure,
     SCRAGrade,
+)
+from src.jurisdictions.frtb_base import (
+    DRCPositionInput,
+    FRTBSensitivity,
+    MarketRiskCalculator,
+    RRAOPositionInput,
+)
+from src.jurisdictions.pillar1_base import (
+    CCPExposureInput,
+    LargeExposureInput,
+    LeverageInputs,
+    SecTrancheInput,
 )
 
 # =========================================================================
@@ -164,6 +187,18 @@ class ReferenceBook:
     ]
     """(inputs, counterparty class, rating, SCRA grade, CVA sector, CVA quality, maturity)."""
     op_inputs: OpRiskInputs
+    frtb_sensitivities: list[FRTBSensitivity] = field(default_factory=list)
+    drc_positions: list[DRCPositionInput] = field(default_factory=list)
+    rrao_positions: list[RRAOPositionInput] = field(default_factory=list)
+    sec_tranches: list[SecTrancheInput] = field(default_factory=list)
+    ccp_exposures: list[CCPExposureInput] = field(default_factory=list)
+    leverage: LeverageInputs | None = None
+    large_exposures: list[LargeExposureInput] = field(default_factory=list)
+
+    @property
+    def has_trading_book(self) -> bool:
+        """True when the book carries FRTB inputs."""
+        return bool(self.frtb_sensitivities or self.drc_positions or self.rrao_positions)
 
 
 def build_reference_book(
@@ -193,7 +228,8 @@ def build_reference_book(
         rating = str(e.rating)  # type: ignore[attr-defined]
         mat = float(e.maturity_years)  # type: ignore[attr-defined]
         common = dict(
-            exposure_id=str(e.exposure_id),  # type: ignore[attr-defined] counterparty=str(e.counterparty_name),  # type: ignore[attr-defined]
+            exposure_id=str(e.exposure_id),  # type: ignore[attr-defined]
+            counterparty=str(e.counterparty_name),  # type: ignore[attr-defined]
             on_balance_amount=ead,
             residual_maturity_years=mat,
             is_defaulted=bool(e.is_defaulted),
@@ -422,6 +458,75 @@ def build_reference_book(
     return ReferenceBook(out, ns, op_inputs)
 
 
+SecDealSpec = tuple[str, float, float, float]
+"""(deal id, pool size $M, pool SA capital charge K_SA, delinquent share W)."""
+
+SecTrancheSpec = tuple[str, float, float, bool, str | None]
+"""(tranche suffix, attachment A, detachment D, is senior, external rating or None)."""
+
+
+def reference_securitisations(
+    deals: list[SecDealSpec],
+    tranches: list[SecTrancheSpec],
+    n_effective: float,
+    maturity_years: float,
+) -> list[SecTrancheInput]:
+    """Investor tranches of each deal as regime-neutral inputs.
+
+    K_SA and W are the pool parameters of CRE44.2-44.3 (ERBA NPR § __.133(b));
+    the exposure amount is the tranche thickness times the pool size; the
+    rating drives SEC-ERBA where a regime uses it (CRE42; CRR Art. 263).
+    """
+    out: list[SecTrancheInput] = []
+    for deal, size, k_sa, w in deals:
+        for name, a, d, senior, rating in tranches:
+            out.append(
+                SecTrancheInput(
+                    tranche_id=f"{deal}-{name}",
+                    exposure_amount=size * (d - a),
+                    attachment=a,
+                    detachment=d,
+                    is_senior=senior,
+                    maturity_years=maturity_years,
+                    k_sa=k_sa,
+                    w=w,
+                    n_effective=n_effective,
+                    external_rating=rating,
+                )
+            )
+    return out
+
+
+def banking_book_large_exposures(exposures: list[SAExposure]) -> list[LargeExposureInput]:
+    """Aggregate banking-book exposures by counterparty for the large-exposure test.
+
+    Exposure value = on-balance amount + off-balance notional, i.e. before
+    credit conversion factors (an upper bound of the LEX30.11 measure, which
+    applies the SA CCFs floored at 10%). Sovereign exposures are flagged
+    exempt (LEX30.33); each regime may apply further exemptions of its own.
+    Derivative exposures are added per regime in :func:`run_comparison`
+    from the regime's own SA-CCR EAD.
+    """
+    agg: dict[str, list[object]] = {}
+    for e in exposures:
+        key = e.counterparty or e.exposure_id
+        amount = e.on_balance_amount + (e.off_balance_notional or 0.0)
+        if key in agg:
+            agg[key][0] = float(agg[key][0]) + amount  # type: ignore[arg-type]
+        else:
+            agg[key] = [amount, e.asset_class]
+    return [
+        LargeExposureInput(
+            counterparty_id=k,
+            exposure_value=float(v[0]),  # type: ignore[arg-type]
+            counterparty_asset_class=v[1],  # type: ignore[arg-type]
+            is_exempt=v[1] == AssetClass.SOVEREIGN,
+        )
+        for k, v in agg.items()
+        if float(v[0]) > 0.0  # type: ignore[arg-type]
+    ]
+
+
 # =========================================================================
 #  Results
 # =========================================================================
@@ -444,7 +549,15 @@ class RegimeComparison(BaseModel):
     op_ilm: float
     op_rwa: float
     market_rwa: float
+    market_sbm: float = 0.0
+    market_drc: float = 0.0
+    market_rrao: float = 0.0
+    market_binding_scenario: str = ""
+    market_by_class: dict[str, float] = Field(default_factory=dict)
+    securitisation_exposure: float = 0.0
     securitisation_rwa: float
+    securitisation_rows: list[dict[str, object]] = Field(default_factory=list)
+    ccp_rwa: float = 0.0
     standardised_rwa: float
     modelled_rwa: float | None = None
     floor_applies: bool = False
@@ -454,12 +567,28 @@ class RegimeComparison(BaseModel):
     cet1_ratio: float
     tier1_ratio: float
     total_capital_ratio: float
+    leverage_exposure: float = 0.0
+    leverage_exclusions: float = 0.0
     leverage_ratio: float
+    large_exposures_reportable: int = 0
+    large_exposure_breaches: list[str] = Field(default_factory=list)
+    large_exposure_max_pct_tier1: float = 0.0
     cet1_requirement: float
     cet1_surplus: float
     leverage_requirement: float
     citations: dict[str, str] = Field(default_factory=dict)
     notes: list[str] = Field(default_factory=list)
+
+
+TABLE_EXCLUDED_FIELDS: Final[set[str]] = {
+    "credit_rwa_by_class",
+    "market_by_class",
+    "securitisation_rows",
+    "large_exposure_breaches",
+    "citations",
+    "notes",
+}
+"""Nested fields left out of the flat report table."""
 
 
 class ComparisonResult(BaseModel):
@@ -472,10 +601,7 @@ class ComparisonResult(BaseModel):
 
     def table(self) -> list[dict[str, object]]:
         """Flat rows for reporting."""
-        return [
-            r.model_dump(exclude={"credit_rwa_by_class", "citations", "notes"})
-            for r in self.regimes
-        ]
+        return [r.model_dump(exclude=TABLE_EXCLUDED_FIELDS) for r in self.regimes]
 
 
 # =========================================================================
@@ -501,6 +627,64 @@ def default_regimes(year: int) -> dict[Jurisdiction, RegimeCalculator]:
         Jurisdiction.EU: EURegime(year=year),
         Jurisdiction.SG: SGRegime(is_dsib=True, as_of=date(year, 1, 1)),
         Jurisdiction.CA: CARegime(),
+    }
+
+
+def default_market_regimes() -> dict[Jurisdiction, MarketRiskCalculator]:
+    """One FRTB calculator per jurisdiction, each with USD as the reporting currency.
+
+    The reference bank reports in USD, so USD is the domestic currency for the
+    GIRR specified-currency reduction and the FX reporting currency in every
+    regime (MAR21.44, MAR21.88; UK and EU Art. 325ae(3) / 325av; OSFI CAR
+    Ch. 9; MAS Notice 637 Annex 8).
+    """
+    import importlib
+
+    from src.jurisdictions.bcbs.frtb import BCBSMarketRisk
+    from src.jurisdictions.ca.frtb import CAMarketRisk
+    from src.jurisdictions.eu.frtb import EUMarketRisk
+    from src.jurisdictions.uk.frtb import UKMarketRisk
+    from src.jurisdictions.us import USMarketRisk
+
+    out: dict[Jurisdiction, MarketRiskCalculator] = {
+        Jurisdiction.BCBS: BCBSMarketRisk(),
+        Jurisdiction.US: USMarketRisk(),
+        Jurisdiction.UK: UKMarketRisk(domestic_currency="USD"),
+        Jurisdiction.EU: EUMarketRisk(domestic_currency="USD"),
+        Jurisdiction.CA: CAMarketRisk(reporting_currency="USD"),
+    }
+    try:
+        sg = importlib.import_module("src.jurisdictions.sg.frtb")
+        out[Jurisdiction.SG] = sg.SGMarketRisk(reporting_currency="USD")
+    except ImportError:
+        pass  # SG FRTB package absent: run_comparison falls back to market_rwa_usd
+    return out
+
+
+def default_pillar1_regimes(year: int) -> dict[Jurisdiction, Any]:
+    """Securitisation, CCP, leverage and large-exposure calculators per jurisdiction.
+
+    Amounts are passed in USD; the EU calculator converts its EUR 150 million
+    institution floor (CRR Art. 395(1)) at the ECB 31 Dec 2024 rate.
+    """
+    from src.jurisdictions.bcbs.pillar1 import BCBSPillar1
+    from src.jurisdictions.ca.pillar1 import CAPillar1
+    from src.jurisdictions.eu.pillar1 import EUPillar1
+    from src.jurisdictions.sg.pillar1 import SGPillar1
+    from src.jurisdictions.uk.pillar1 import UKPillar1
+    from src.jurisdictions.us import USPillar1
+
+    return {
+        Jurisdiction.BCBS: BCBSPillar1(),
+        Jurisdiction.US: USPillar1(),
+        Jurisdiction.UK: UKPillar1(),
+        Jurisdiction.EU: EUPillar1(
+            year=year,
+            reporting_currency="USD",
+            reporting_ccy_per_eur=ECB_EUR_REFERENCE_RATES_20241231["USD"],
+        ),
+        Jurisdiction.SG: SGPillar1(),
+        Jurisdiction.CA: CAPillar1(reporting_currency="USD"),
     }
 
 
@@ -566,32 +750,54 @@ def floor_sensitivity(
     return rows
 
 
+def _market_result(
+    reg: MarketRiskCalculator, book: ReferenceBook
+) -> tuple[float, float, float, float, str, dict[str, float], str]:
+    """(RWA, SBM, DRC, RRAO, binding scenario, SBM by class, citation) of one regime."""
+    r = reg.market_risk(book.frtb_sensitivities, book.drc_positions, book.rrao_positions)
+    by_class = {c.risk_class.value: c.total for c in r.sbm_by_class if c.total}
+    cite = "; ".join(f"{k}: {v}" for k, v in r.citations.items())
+    return r.rwa, r.sbm_total, r.drc_total, r.rrao, r.binding_scenario, by_class, cite
+
+
 def run_comparison(
     book: ReferenceBook,
     year: int,
-    market_rwa_usd: float,
-    securitisation_rwa_usd: float,
+    *,
     capital_usd: dict[str, float],
-    leverage_exposure_usd: float,
     gsib_method1_score_bps: float,
     us_gsib_rate: float,
     us_scb: float,
+    market_rwa_usd: float | None = None,
+    securitisation_rwa_usd: float | None = None,
+    leverage_exposure_usd: float | None = None,
+    reporting_bank_is_gsib: bool = True,
     regimes: dict[Jurisdiction, RegimeCalculator] | None = None,
+    market_regimes: dict[Jurisdiction, MarketRiskCalculator] | None = None,
+    pillar1_regimes: dict[Jurisdiction, Any] | None = None,
 ) -> ComparisonResult:
     """Run the reference bank through every regime.
 
     Args:
         book: Reference inputs (USD $M).
         year: Reporting year (drives transitional schedules).
-        market_rwa_usd: Market-risk RWA, held common (US FRTB-SA engine).
-        securitisation_rwa_usd: Securitisation RWA, held common (US SEC-SA engine).
-        capital_usd: {"cet1", "tier1", "total"} capital amounts ($M).
-        leverage_exposure_usd: Leverage exposure measure ($M).
+        capital_usd: {"cet1", "tier1", "total"} capital amounts ($M), held common.
         gsib_method1_score_bps: BCBS-methodology score, used for the G-SIB
             bucket outside the US (BCBS SCO40 / RBC40 bucket table).
         us_gsib_rate: US surcharge rate (decimal) from 12 CFR 217.403.
         us_scb: US stress capital buffer (decimal).
-        regimes: Calculators to use (default: :func:`default_regimes`).
+        market_rwa_usd: Common market-risk RWA, used only when the book has no
+            trading book.
+        securitisation_rwa_usd: Common securitisation RWA, used only when the
+            book has no securitisation tranches.
+        leverage_exposure_usd: Common leverage exposure measure, used only when
+            the book has no leverage inputs.
+        reporting_bank_is_gsib: Drives the G-SIB-to-G-SIB large-exposure limit.
+        regimes: Credit / op-risk / floor / capital calculators
+            (default: :func:`default_regimes`).
+        market_regimes: FRTB calculators (default: :func:`default_market_regimes`).
+        pillar1_regimes: Securitisation / CCP / leverage / large-exposure
+            calculators (default: :func:`default_pillar1_regimes`).
 
     The bank uses standardised approaches everywhere, so pre-floor RWA equals
     standardised RWA and the floor cannot bind; :func:`floor_sensitivity`
@@ -602,14 +808,28 @@ def run_comparison(
     """
     from src.jurisdictions.bcbs.capital_stack import gsib_bucket_from_score, gsib_hla
 
+    if not book.has_trading_book and market_rwa_usd is None:
+        raise ValueError("book has no trading book: pass market_rwa_usd")
+    if not book.sec_tranches and securitisation_rwa_usd is None:
+        raise ValueError("book has no securitisation tranches: pass securitisation_rwa_usd")
+    if book.leverage is None and leverage_exposure_usd is None:
+        raise ValueError("book has no leverage inputs: pass leverage_exposure_usd")
+
     regimes = regimes or default_regimes(year)
+    if book.has_trading_book:
+        market_regimes = market_regimes or default_market_regimes()
+    if book.sec_tranches or book.leverage or book.ccp_exposures or book.large_exposures:
+        pillar1_regimes = pillar1_regimes or default_pillar1_regimes(year)
     hla = gsib_hla(gsib_bucket_from_score(gsib_method1_score_bps))
+    tier1 = capital_usd["tier1"]
+    fallbacks: list[str] = []
     rows: list[RegimeComparison] = []
     for j, reg in regimes.items():
         ccy = REGIME_CURRENCY[j]
         k = usd_to_local(ccy)
         back = 1.0 / k
         notes: list[str] = []
+        citations: dict[str, str] = {}
         local = [scale_exposure(e, k) for e in book.exposures]
         cr = reg.credit_rwa(local)
         cls_of = {e.exposure_id: e.asset_class.value for e in book.exposures}
@@ -620,6 +840,7 @@ def run_comparison(
             )
 
         ccr_ead = ccr_rwa = 0.0
+        ns_ead: list[tuple[str, float, AssetClass]] = []
         cva_cps: list[dict[str, float | str | bool]] = []
         for nsi, cls, rb, grade, sector, quality, mat in book.netting_sets:
             local_ns = nsi.model_copy(
@@ -645,6 +866,7 @@ def run_comparison(
             )
             ccr_ead += sr.ead * back
             ccr_rwa += reg.risk_weight(cp).rwa * back
+            ns_ead.append((nsi.netting_set_id, sr.ead * back, cls))
             cva_cps.append(
                 {
                     "id": nsi.netting_set_id,
@@ -661,8 +883,93 @@ def run_comparison(
         op = reg.operational_risk(scale_op_inputs(book.op_inputs, k))
         op_rwa = op.rwa * back
         credit_rwa = cr.total_rwa * back
-        sa_total = credit_rwa + ccr_rwa + cva_rwa + op_rwa + market_rwa_usd + securitisation_rwa_usd
 
+        # ---- market risk (regime FRTB calculator, USD reporting currency)
+        sbm = drc = rrao = 0.0
+        scenario = ""
+        mkt_by_class: dict[str, float] = {}
+        if book.has_trading_book and market_regimes is not None and j in market_regimes:
+            market_rwa, sbm, drc, rrao, scenario, mkt_by_class, mcite = _market_result(
+                market_regimes[j], book
+            )
+            citations["market_risk"] = mcite
+        elif market_rwa_usd is not None:
+            market_rwa = market_rwa_usd
+            notes.append("market-risk RWA held common (caller-supplied)")
+            if book.has_trading_book:
+                fallbacks.append(f"market risk RWA for {j.value} (caller-supplied; no calculator)")
+        else:
+            raise ValueError(f"no market-risk calculator for {j.value} and no market_rwa_usd")
+
+        # ---- securitisation, CCP, leverage, large exposures (regime Pillar 1)
+        p1 = (pillar1_regimes or {}).get(j)
+        sec_rows: list[dict[str, object]] = []
+        sec_exposure = 0.0
+        if book.sec_tranches and p1 is not None:
+            sec_rwa = 0.0
+            for t in book.sec_tranches:
+                sr_row = p1.securitisation(t)
+                sec_rwa += sr_row.rwa
+                sec_exposure += t.exposure_amount
+                sec_rows.append(
+                    {
+                        "tranche": t.tranche_id,
+                        "approach": sr_row.approach.value,
+                        "risk_weight": sr_row.risk_weight,
+                        "rwa": sr_row.rwa,
+                        "citation": sr_row.citation,
+                    }
+                )
+            citations["securitisation"] = sec_rows[0]["citation"] if sec_rows else ""  # type: ignore[assignment]
+        elif securitisation_rwa_usd is not None:
+            sec_rwa = securitisation_rwa_usd
+            notes.append("securitisation RWA held common (caller-supplied)")
+            if book.sec_tranches:
+                fallbacks.append(
+                    f"securitisation RWA for {j.value} (caller-supplied; no calculator)"
+                )
+        else:
+            raise ValueError(f"no securitisation calculator for {j.value} and no common RWA")
+
+        ccp_rwa = 0.0
+        if p1 is not None:
+            for c in book.ccp_exposures:
+                cres = p1.ccp_exposure(c)
+                ccp_rwa += cres.total_rwa
+                citations[f"ccp:{c.ccp_id}"] = cres.citation
+
+        if book.leverage is not None and p1 is not None:
+            lev = p1.leverage_exposure(book.leverage)
+            lev_exposure, lev_excl = lev.total_exposure, lev.exclusions
+            citations.update({f"leverage:{a}": b for a, b in lev.citations.items()})
+        else:
+            lev_exposure, lev_excl = float(leverage_exposure_usd or 0.0), 0.0
+            notes.append("leverage exposure measure held common (caller-supplied)")
+
+        le_reportable = 0
+        le_breaches: list[str] = []
+        le_max = 0.0
+        if book.large_exposures and p1 is not None:
+            le_inputs = list(book.large_exposures)
+            for ns_id, ead, cls in ns_ead:
+                le_inputs.append(
+                    LargeExposureInput(
+                        counterparty_id=ns_id,
+                        exposure_value=ead,
+                        counterparty_asset_class=cls,
+                        counterparty_is_gsib=cls == AssetClass.BANK,
+                        is_exempt=cls == AssetClass.SOVEREIGN,
+                    )
+                )
+            exempt = {x.counterparty_id for x in le_inputs if x.is_exempt}
+            for row in p1.large_exposures(le_inputs, tier1, reporting_bank_is_gsib):
+                le_reportable += int(row.reportable)
+                if row.breach:
+                    le_breaches.append(row.counterparty_id)
+                if row.counterparty_id not in exempt:
+                    le_max = max(le_max, row.exposure_value / tier1)
+
+        sa_total = credit_rwa + ccr_rwa + cva_rwa + op_rwa + market_rwa + sec_rwa + ccp_rwa
         modelled = None
         fl = reg.output_floor(sa_total * k, sa_total * k, year)
         total = fl.floored_rwa * back
@@ -694,8 +1001,16 @@ def run_comparison(
                 op_business_indicator=op.business_indicator * back,
                 op_ilm=op.ilm,
                 op_rwa=op_rwa,
-                market_rwa=market_rwa_usd,
-                securitisation_rwa=securitisation_rwa_usd,
+                market_rwa=market_rwa,
+                market_sbm=sbm,
+                market_drc=drc,
+                market_rrao=rrao,
+                market_binding_scenario=scenario,
+                market_by_class=mkt_by_class,
+                securitisation_exposure=sec_exposure,
+                securitisation_rwa=sec_rwa,
+                securitisation_rows=sec_rows,
+                ccp_rwa=ccp_rwa,
                 standardised_rwa=sa_total,
                 modelled_rwa=modelled,
                 floor_applies=fl.applies,
@@ -703,22 +1018,32 @@ def run_comparison(
                 floor_add_on=fl.add_on * back,
                 total_rwa=total,
                 cet1_ratio=cet1,
-                tier1_ratio=capital_usd["tier1"] / total,
+                tier1_ratio=tier1 / total,
                 total_capital_ratio=capital_usd["total"] / total,
-                leverage_ratio=capital_usd["tier1"] / leverage_exposure_usd,
+                leverage_exposure=lev_exposure,
+                leverage_exclusions=lev_excl,
+                leverage_ratio=tier1 / lev_exposure,
+                large_exposures_reportable=le_reportable,
+                large_exposure_breaches=le_breaches,
+                large_exposure_max_pct_tier1=le_max,
                 cet1_requirement=req.cet1_requirement,
                 cet1_surplus=cet1 - req.cet1_requirement,
                 leverage_requirement=req.leverage_minimum + req.leverage_buffer,
-                citations={"output_floor": fl.citation, "op_risk": op.citation, **req.citations},
+                citations={
+                    "output_floor": fl.citation,
+                    "op_risk": op.citation,
+                    **citations,
+                    **req.citations,
+                },
                 notes=notes,
             )
         )
-    return ComparisonResult(
-        year=year,
-        common_components=[
-            "market risk RWA (US FRTB-SA engine)",
-            "securitisation RWA (US SEC-SA engine)",
-            "capital resources and leverage exposure measure",
-        ],
-        regimes=rows,
-    )
+    common = ["capital resources (CET1, Tier 1, total capital)"]
+    if not book.has_trading_book:
+        common.append("market risk RWA (caller-supplied)")
+    if not book.sec_tranches:
+        common.append("securitisation RWA (caller-supplied)")
+    if book.leverage is None:
+        common.append("leverage exposure measure (caller-supplied)")
+    common += fallbacks
+    return ComparisonResult(year=year, common_components=common, regimes=rows)
