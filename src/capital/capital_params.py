@@ -19,7 +19,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Optional
 
 
 # =========================================================================
@@ -65,9 +64,8 @@ CCYB_MAXIMUM_RATE: float = 0.025
 
 # =========================================================================
 #  G-SIB Surcharge
-#  Reference: G-SIB NPR pp. 12-28, 12 CFR 217.403-404
-#  US 2026 re-proposal: 20bp score ranges / 0.1% surcharge increments
-#  (NOT 100bp/0.5% from original Basel standard)
+#  Reference: 12 CFR 217.403-405; G-SIB NPR FR Doc. 2026-05961. Method 1
+#  keeps 100 bp bands; the proposal moves method 2 to 20 bp / 0.1% bands.
 # =========================================================================
 
 class GSIBMethod(Enum):
@@ -76,113 +74,50 @@ class GSIBMethod(Enum):
     METHOD_2 = "METHOD_2"  # Short-term wholesale funding substitution
 
 
-# G-SIB surcharge bands per US 2026 re-proposal
-# Score range: 20bp increments; surcharge: 0.1% increments
-# Reference: G-SIB NPR pp. 18-22
-GSIB_SCORE_INCREMENT: float = 0.0020
-"""G-SIB score band width: 20bp (0.20%) per US 2026 re-proposal.
-Note: Original Basel uses 100bp bands."""
-
-GSIB_SURCHARGE_INCREMENT: float = 0.001
-"""G-SIB surcharge increment: 0.1% per band per US 2026 re-proposal.
-Note: Original Basel uses 0.5% increments."""
-
+# G-SIB surcharge scores are expressed here as decimals (0.0200 = 200 bp).
+# The bands themselves live in src.capital.gsib.gsib_params (Table 1 to
+# § 217.403 for method 1; Table 2 / proposed § 217.403(c) for method 2).
 GSIB_BASE_SCORE_THRESHOLD: float = 0.0130
-"""Score threshold above which G-SIB surcharge applies: 130bp.
-Reference: 12 CFR 217.403(b)."""
+"""GSIB identification threshold: method 1 score of 130 bp (12 CFR 217.402)."""
 
 GSIB_METHOD2_DOWNWARD_FACTOR: float = 1.0 / 1.2
-"""Method 2 coefficients adjusted by 1.2x downward factor per US 2026
-re-proposal. Effective multiplier = 1/1.2 = 0.8333.
-Reference: G-SIB NPR p. 24."""
+"""One-time 1.2 downward adjustment of the method 2 coefficients (G-SIB NPR,
+FR Doc. 2026-05961, preamble § II.A.i); already reflected in the proposed
+Table 1 to § 217.405 in src.capital.gsib.gsib_params."""
 
-
-@dataclass(frozen=True)
-class GSIBSurchargeBand:
-    """A single G-SIB surcharge band.
-
-    Attributes:
-        score_lower: Lower bound of score band (inclusive).
-        score_upper: Upper bound of score band (exclusive).
-        surcharge: Applicable surcharge rate.
-    """
-    score_lower: float
-    score_upper: float
-    surcharge: float
-
-
-def build_gsib_surcharge_schedule(
-    num_bands: int = 50,
-    base_threshold: float = GSIB_BASE_SCORE_THRESHOLD,
-    score_increment: float = GSIB_SCORE_INCREMENT,
-    surcharge_increment: float = GSIB_SURCHARGE_INCREMENT,
-) -> list[GSIBSurchargeBand]:
-    """Build the G-SIB surcharge lookup table.
-
-    Generates surcharge bands using 20bp score ranges and 0.1% surcharge
-    increments per the US 2026 re-proposal (G-SIB NPR pp. 18-22).
-
-    Args:
-        num_bands: Number of surcharge bands to generate.
-        base_threshold: Score threshold for first band.
-        score_increment: Width of each score band (20bp default).
-        surcharge_increment: Surcharge step per band (0.1% default).
-
-    Returns:
-        List of GSIBSurchargeBand from lowest to highest.
-
-    Example:
-        Band 1: score 130-150bp -> 1.0% surcharge
-        Band 2: score 150-170bp -> 1.1% surcharge
-        ...
-    """
-    bands: list[GSIBSurchargeBand] = []
-    for i in range(num_bands):
-        lower = base_threshold + i * score_increment
-        upper = lower + score_increment
-        surcharge = 0.010 + i * surcharge_increment  # Start at 1.0%
-        bands.append(GSIBSurchargeBand(
-            score_lower=lower,
-            score_upper=upper,
-            surcharge=surcharge,
-        ))
-    return bands
+_BPS_PER_UNIT: float = 10_000.0
 
 
 def lookup_gsib_surcharge(
     score: float,
-    schedule: Optional[list[GSIBSurchargeBand]] = None,
+    method: GSIBMethod = GSIBMethod.METHOD_1,
+    proposal: bool = True,
 ) -> float:
-    """Look up G-SIB surcharge for a given systemic importance score.
+    """G-SIB surcharge rate for a score expressed as a decimal.
 
-    Per 12 CFR 217.403, the surcharge is determined by the band in which
-    the institution's G-SIB score falls. Scores below the base threshold
-    receive no surcharge.
-
-    NOTE (audit 2026-09): ``gsib_calculator.score_to_surcharge`` returns the
-    1.0% MINIMUM for scores below 130bp (semantics: "already-designated
-    G-SIB"), whereas this function returns 0% (semantics: "not a G-SIB").
-    Callers must not mix the two below the 130bp threshold.
+    Delegates to :mod:`src.capital.gsib` so there is one band table in the
+    engine: method 1 -- Table 1 to § 217.403 (100 bp bands, unchanged by the
+    2026 proposal); method 2 -- Table 2 to § 217.403 or, under the proposal,
+    revised § 217.403(c) (20 bp / 0.1%).
 
     Args:
-        score: G-SIB systemic importance score (as decimal, e.g. 0.0200 = 200bp).
-        schedule: Optional pre-built schedule; built if None.
+        score: Score as a decimal (0.0200 = 200 bp).
+        method: Which method's mapping to use.
+        proposal: Use the March 2026 proposal for method 2.
 
     Returns:
-        G-SIB surcharge rate (as decimal, e.g. 0.015 = 1.5%).
+        Surcharge as a decimal rate (0.015 = 1.5%); 0.0 below the 130 bp
+        method 1 identification threshold.
     """
+    from src.capital.gsib.gsib_calculator import get_surcharge_for_score
+    from src.capital.gsib.gsib_params import GSIBMethod as _GM
+    from src.capital.gsib.gsib_params import GSIBRuleVersion
+
     if score < GSIB_BASE_SCORE_THRESHOLD:
         return 0.0
-
-    if schedule is None:
-        schedule = build_gsib_surcharge_schedule()
-
-    # Find applicable band
-    for band in reversed(schedule):
-        if score >= band.score_lower:
-            return band.surcharge
-
-    return 0.0
+    version = GSIBRuleVersion.PROPOSAL_2026 if proposal else GSIBRuleVersion.CURRENT_RULE
+    pct = get_surcharge_for_score(score * _BPS_PER_UNIT, _GM(method.value), version)
+    return pct / 100.0
 
 
 # =========================================================================

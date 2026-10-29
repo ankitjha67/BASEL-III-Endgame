@@ -34,7 +34,7 @@ class FRTBResult(BaseModel):
     """Complete FRTB capital charge result.
 
     Captures SBM results by risk class, DRC, RRAO, and aggregated totals
-    for regulatory reporting (FR Y-9C / Pillar 3 MR1-MR4).
+    for regulatory reporting (FR Y-9C HC-R and Pillar 3 Template MR1, DIS50).
     """
 
     # SBM results by risk class -------------------------------------------
@@ -54,7 +54,9 @@ class FRTBResult(BaseModel):
 
     # DRC -----------------------------------------------------------------
     drc_nonsec: float = Field(default=0.0, description="DRC Non-Sec charge")
-    drc_total: float = Field(default=0.0, description="Total DRC charge")
+    drc_sec_nonctp: float = Field(default=0.0, description="DRC securitisation (non-CTP) charge")
+    drc_sec_ctp: float = Field(default=0.0, description="DRC securitisation (CTP) charge")
+    drc_total: float = Field(default=0.0, description="Total DRC charge (non-sec + sec non-CTP + CTP)")
 
     # RRAO ----------------------------------------------------------------
     rrao_total: float = Field(default=0.0, description="Total RRAO charge")
@@ -167,6 +169,8 @@ class FRTBCalculator:
         self._fx = None
         self._drc = None
         self._rrao = None
+        self._drc_sec_nonctp = None
+        self._drc_sec_ctp = None
 
         # Attempt to import each sub-calculator; log warnings for any
         # that are not yet available.
@@ -211,6 +215,14 @@ class FRTBCalculator:
             self._drc = DRCCalculator()
         except ImportError:
             logger.warning("DRCCalculator not available; DRC charges will be zero.")
+
+        try:
+            from src.market_risk.frtb.drc.drc_sec_ctp import DRCSecCTPCalculator
+            from src.market_risk.frtb.drc.drc_sec_nonctp import DRCSecNonCTPCalculator
+            self._drc_sec_nonctp = DRCSecNonCTPCalculator()
+            self._drc_sec_ctp = DRCSecCTPCalculator()
+        except ImportError:
+            logger.warning("DRC securitisation calculators not available; DRC-sec charges will be zero.")
 
         try:
             from src.market_risk.frtb.rrao.rrao import RRAOCalculator
@@ -377,13 +389,31 @@ class FRTBCalculator:
         # -----------------------------------------------------------------
         # DRC
         # -----------------------------------------------------------------
-        if drc_positions and self._drc is not None:
-            try:
-                drc_result = self._drc.calculate(drc_positions)
-                result.drc_nonsec = drc_result.total_charge
-                result.drc_total = drc_result.total_charge
-            except (CalculationError, ValidationError, AttributeError) as e:
-                logger.error("DRC calculation failed: %s", e)
+        # The three DRC components are computed separately and summed with no
+        # diversification between them (MAR22.2 / ERBA NPR § __.210).
+        if drc_positions:
+            from src.market_risk.frtb.drc.drc_sec_ctp import DRCSecCTPPosition
+            from src.market_risk.frtb.drc.drc_sec_nonctp import DRCSecNonCTPPosition
+            sec_nonctp = [p for p in drc_positions if isinstance(p, DRCSecNonCTPPosition)]
+            sec_ctp = [p for p in drc_positions if isinstance(p, DRCSecCTPPosition)]
+            nonsec = [p for p in drc_positions
+                      if not isinstance(p, (DRCSecNonCTPPosition, DRCSecCTPPosition))]
+            if nonsec and self._drc is not None:
+                try:
+                    result.drc_nonsec = self._drc.calculate(nonsec).total_charge
+                except (CalculationError, ValidationError, AttributeError) as e:
+                    logger.error("DRC non-sec calculation failed: %s", e)
+            if sec_nonctp and self._drc_sec_nonctp is not None:
+                try:
+                    result.drc_sec_nonctp = self._drc_sec_nonctp.calculate(sec_nonctp).total_charge
+                except (CalculationError, ValidationError, AttributeError) as e:
+                    logger.error("DRC sec non-CTP calculation failed: %s", e)
+            if sec_ctp and self._drc_sec_ctp is not None:
+                try:
+                    result.drc_sec_ctp = self._drc_sec_ctp.calculate(sec_ctp).total_charge
+                except (CalculationError, ValidationError, AttributeError) as e:
+                    logger.error("DRC sec CTP calculation failed: %s", e)
+            result.drc_total = result.drc_nonsec + result.drc_sec_nonctp + result.drc_sec_ctp
 
         # -----------------------------------------------------------------
         # RRAO
@@ -404,7 +434,7 @@ class FRTBCalculator:
     def summary(self, result: FRTBResult) -> str:
         """Generate a formatted summary report of FRTB results.
 
-        Produces output suitable for FR Y-9C / Pillar 3 MR1-MR4 disclosure
+        Produces output suitable for FR Y-9C and Pillar 3 MR1 disclosure
         templates.
 
         Args:
@@ -478,14 +508,15 @@ class FRTBCalculator:
         return "\n".join(lines)
 
     # --------------------------------------------------------------------- #
-    #  Pillar 3 MR1-MR4 Reporting                                            #
+    #  Pillar 3 MR1 (DIS50) and supplementary breakdowns                    #
     # --------------------------------------------------------------------- #
 
     def pillar3_mr1(self, result: FRTBResult) -> dict[str, float]:
-        """Generate Pillar 3 MR1 template data: Market risk under SA.
+        """Pillar 3 Template MR1 data (Basel Framework DIS50), rows 1-12.
 
-        MR1 discloses the components of market risk capital charge under
-        the Standardized Approach.
+        Row order follows DIS50: GIRR, equity, commodity, FX, CSR non-sec,
+        CSR sec non-CTP, CSR sec CTP, DRC non-sec, DRC sec non-CTP, DRC sec
+        CTP, RRAO, total.
 
         Args:
             result: An :class:`FRTBResult` from a prior :meth:`calculate` call.
@@ -494,25 +525,25 @@ class FRTBCalculator:
             Dictionary with MR1 line items and their values.
         """
         return {
-            "1_sa_sbm_girr": result.girr_charge,
-            "2_sa_sbm_csr_nonsec": result.csr_nonsec_charge,
-            "3_sa_sbm_csr_sec_nonctp": result.csr_sec_nonctp_charge,
-            "4_sa_sbm_csr_sec_ctp": result.csr_sec_ctp_charge,
-            "5_sa_sbm_equity": result.equity_charge,
-            "6_sa_sbm_commodity": result.commodity_charge,
-            "7_sa_sbm_fx": result.fx_charge,
-            "8_sa_sbm_total": result.sbm_total,
-            "9_sa_drc_nonsec": result.drc_nonsec,
-            "10_sa_drc_total": result.drc_total,
-            "11_sa_rrao": result.rrao_total,
-            "12_sa_total_capital": result.total_capital_charge,
-            "13_sa_total_rwa": result.total_rwa,
+            "1_general_interest_rate_risk": result.girr_charge,
+            "2_equity_risk": result.equity_charge,
+            "3_commodity_risk": result.commodity_charge,
+            "4_foreign_exchange_risk": result.fx_charge,
+            "5_csr_non_securitisations": result.csr_nonsec_charge,
+            "6_csr_securitisations_non_ctp": result.csr_sec_nonctp_charge,
+            "7_csr_securitisation_ctp": result.csr_sec_ctp_charge,
+            "8_default_risk_non_securitisations": result.drc_nonsec,
+            "9_default_risk_securitisations_non_ctp": result.drc_sec_nonctp,
+            "10_default_risk_securitisations_ctp": result.drc_sec_ctp,
+            "11_residual_risk_add_on": result.rrao_total,
+            "12_total": result.total_capital_charge,
         }
 
-    def pillar3_mr2(self, result: FRTBResult) -> dict[str, dict[str, float]]:
-        """Generate Pillar 3 MR2 template data: SBM by risk measure.
+    def sbm_by_risk_measure(self, result: FRTBResult) -> dict[str, dict[str, float]]:
+        """Supplementary SBM breakdown by risk class and measure (delta/vega/curvature).
 
-        MR2 breaks down each risk class into delta, vega, and curvature.
+        Not a DIS50 template (DIS50 MR2 is the IMA template); provided for
+        the MR1 narrative and management reporting.
 
         Args:
             result: An :class:`FRTBResult` from a prior :meth:`calculate` call.
@@ -565,10 +596,10 @@ class FRTBCalculator:
             },
         }
 
-    def pillar3_mr3(self, result: FRTBResult) -> dict[str, float]:
-        """Generate Pillar 3 MR3 template data: Capital charge flow.
+    def capital_composition(self, result: FRTBResult) -> dict[str, float]:
+        """High-level composition of the SA capital requirement (SBM measures, DRC, RRAO).
 
-        MR3 shows the composition of capital requirements at a high level.
+        Supplementary to DIS50 MR1; not itself a DIS50 template.
 
         Args:
             result: An :class:`FRTBResult` from a prior :meth:`calculate` call.
@@ -587,10 +618,8 @@ class FRTBCalculator:
             "total_rwa": result.total_rwa,
         }
 
-    def pillar3_mr4(self, result: FRTBResult) -> dict[str, float]:
-        """Generate Pillar 3 MR4 template data: SA comparison by risk class.
-
-        MR4 maps to FR Y-9C Schedule HC-R Part II market risk reporting.
+    def fr_y9c_market_risk_lines(self, result: FRTBResult) -> dict[str, float]:
+        """FR Y-9C Schedule HC-R Part II market-risk line items by risk class.
 
         Args:
             result: An :class:`FRTBResult` from a prior :meth:`calculate` call.

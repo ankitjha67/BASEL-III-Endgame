@@ -1,65 +1,191 @@
-"""FR Y-15 systemic risk indicators for G-SIB score calculation.
+"""FR Y-15 systemic indicators and G-SIB method 1 / method 2 scores.
 
-Implements the 12 systemic risk indicators required for FR Y-15 reporting
-and G-SIB score computation under both Method 1 and Method 2.
+Implements:
 
-Regulatory References:
-- G-SIB NPR Section II.B (pp.15-22): Indicator definitions
-- G-SIB NPR Section II.D (pp.30-35): STWF component for Method 2
-- FR Y-15 Instructions (OMB 7100-0352): Reporting requirements
-- BCBS d445: Global Systemically Important Banks assessment methodology
-- 12 CFR 217.404-406: US regulatory implementation
+- Method 1 score (12 CFR 217.404): sum over systemic indicators of
+  (indicator / aggregate global indicator amount) x 10,000 x indicator weight,
+  with the substitutability sum capped at 100 basis points (§ 217.404(b)(2)).
+- Weighted short-term wholesale funding (Table 1 to § 217.406): funding
+  category (1-4) x remaining-maturity weights.
+- Method 2 score (§ 217.405): indicator in $bn x coefficient (%), plus
+    * current rule -- the STWF score of § 217.406(a):
+      average weighted STWF / average RWA x 350;
+    * 2026 proposal -- weighted STWF as a tenth indicator with coefficient
+      23.003 and every coefficient divided by the GDP growth adjustment
+      (revised § 217.405(c), FR Doc. 2026-05961).
 
-All monetary amounts in USD millions ($M).
+All monetary inputs in USD millions ($M).
 """
 
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields, replace
 from datetime import date
 from typing import Optional
 
 from src.capital.gsib.gsib_params import (
-    CATEGORY_WEIGHT,
     DEFAULT_DENOMINATION_FACTORS,
+    DEFAULT_RULE_VERSION,
     DEFAULT_VALIDATION_BOUNDS,
+    INITIAL_GDP_GROWTH_ADJUSTMENT,
+    LEGACY_STWF_CATEGORY,
+    METHOD_1_SCALING_FACTOR,
+    METHOD_2_INDICATOR_CATEGORY,
+    MILLIONS_PER_BILLION,
+    PERCENT,
+    STWF_FIXED_FACTOR_CURRENT,
+    STWF_MATURITY_BUCKETS,
+    STWF_WEIGHTS,
+    SUBSTITUTABILITY_CAP_BPS,
     DenominationFactors,
     GSIBIndicatorCategory,
-    INDICATOR_LOOKUP,
-    INDICATORS_PER_CATEGORY,
-    METHOD_1_INDICATORS,
-    METHOD_1_SCALING_FACTOR,
-    METHOD_2_ADJUSTED_COEFFICIENT,
-    METHOD_2_CATEGORY_WEIGHT,
-    STWF_MATURITY_BUCKETS,
-    SUBSTITUTABILITY_CAP_BPS,
+    GSIBRuleVersion,
     IndicatorSpec,
-    STWFBucketSpec,
+    STWFMaturityBucket,
     ValidationBounds,
+    method1_indicators,
+    method2_coefficients_pct,
 )
 
 logger = logging.getLogger(__name__)
 
 
 # =========================================================================
-#  Data Classes for Indicator Values
+#  Input data
 # =========================================================================
+
+
+@dataclass(frozen=True)
+class STWFComponent:
+    """One cell of Table 1 to § 217.406: amount by funding category and maturity.
+
+    Attributes:
+        category: Funding category 1-4 (Table 1 to § 217.406).
+        bucket: Remaining-maturity column.
+        amount: Average daily amount over the prior calendar year ($M)
+            (§ 217.406(b)(1)).
+    """
+
+    category: int
+    bucket: STWFMaturityBucket
+    amount: float
+
+    def __post_init__(self) -> None:
+        """Validate the category against Table 1 to § 217.406."""
+        if self.category not in STWF_WEIGHTS:
+            raise ValueError(f"STWF category must be 1-4, got {self.category}")
+
+
+@dataclass
+class GSIBIndicatorData:
+    """FR Y-15 systemic indicator values for one bank holding company ($M).
+
+    Field names match :class:`IndicatorSpec.name`. Under the 2026 proposal
+    the averaged indicators (preamble § II.C) are reported as annual averages
+    of daily or monthly values; supply them already averaged.
+
+    STWF may be given three ways, in order of precedence:
+    ``weighted_stwf_amount_reported`` (FR Y-15 Schedule G total);
+    ``stwf_components`` (category x maturity cells); or the legacy
+    maturity-only fields ``stwf_*_days``, which carry no funding category and
+    are weighted as Category 4 (``LEGACY_STWF_CATEGORY``, conservative).
+    """
+
+    reporting_entity: str = ""
+    reporting_date: Optional[date] = None
+    assessment_year: Optional[int] = None
+
+    total_exposures: float = 0.0
+    intra_financial_system_assets: float = 0.0
+    intra_financial_system_liabilities: float = 0.0
+    securities_outstanding: float = 0.0
+    payments_activity: float = 0.0
+    assets_under_custody: float = 0.0
+    underwriting_activity: float = 0.0
+    trading_volume_fixed_income: float = 0.0
+    trading_volume_equity_other: float = 0.0
+    otc_derivatives_notional: float = 0.0
+    trading_and_afs_securities: float = 0.0
+    level_3_assets: float = 0.0
+    cross_jurisdictional_claims: float = 0.0
+    cross_jurisdictional_liabilities: float = 0.0
+
+    stwf_components: list[STWFComponent] = field(default_factory=list)
+    weighted_stwf_amount_reported: Optional[float] = None
+    stwf_0_30_days: float = 0.0
+    stwf_31_90_days: float = 0.0
+    stwf_91_180_days: float = 0.0
+    stwf_181_365_days: float = 0.0
+
+    avg_risk_weighted_assets: float = 0.0
+    """§ 217.406(a)(2) denominator (current rule only)."""
+    avg_total_assets: float = 0.0
+    """Average total consolidated assets (data-quality cross-checks only)."""
+
+    def get_indicator_value(self, indicator_name: str) -> float:
+        """Raw value of a systemic indicator by name ($M).
+
+        Raises:
+            ValueError: If the name is not a systemic indicator field.
+        """
+        if indicator_name == "weighted_stwf_amount":
+            return weighted_stwf(self).weighted_amount
+        valid = {f.name for f in fields(self)} - _NON_INDICATOR_FIELDS
+        if indicator_name not in valid:
+            raise ValueError(f"Unknown indicator '{indicator_name}'. Valid: {sorted(valid)}")
+        return float(getattr(self, indicator_name))
+
+    def get_stwf_amounts(self) -> list[float]:
+        """Legacy maturity-only STWF amounts in Table 1 column order ($M)."""
+        return [
+            self.stwf_0_30_days,
+            self.stwf_31_90_days,
+            self.stwf_91_180_days,
+            self.stwf_181_365_days,
+        ]
+
+    def with_indicator(self, indicator_name: str, value: float) -> GSIBIndicatorData:
+        """Copy of the data with one indicator replaced (sensitivity analysis)."""
+        if indicator_name == "weighted_stwf_amount":
+            return replace(self, weighted_stwf_amount_reported=value)
+        self.get_indicator_value(indicator_name)
+        return replace(self, **{indicator_name: value})
+
+
+_NON_INDICATOR_FIELDS = {
+    "reporting_entity",
+    "reporting_date",
+    "assessment_year",
+    "stwf_components",
+    "weighted_stwf_amount_reported",
+    "stwf_0_30_days",
+    "stwf_31_90_days",
+    "stwf_91_180_days",
+    "stwf_181_365_days",
+    "avg_risk_weighted_assets",
+    "avg_total_assets",
+}
+
+
+# =========================================================================
+#  Result data
+# =========================================================================
+
 
 @dataclass
 class IndicatorValue:
-    """A single indicator's raw and scored values.
-
-    Per G-SIB NPR p.24 / BCBS d445 Section 3.2:
-    score_i = (bank_value_i / global_aggregate_i) * indicator_weight * 10,000
+    """One indicator's contribution to a method score.
 
     Attributes:
-        indicator_name: Name matching IndicatorSpec.name
-        raw_value: Bank's raw indicator value in $M
-        denomination_factor: Global aggregate for this indicator in $M
-        weighted_score_bps: Weighted contribution to G-SIB score in basis points
-        fr_y15_line: FR Y-15 schedule/line reference
+        indicator_name: Indicator field name.
+        raw_value: Bank's value ($M).
+        denomination_factor: Method 1 aggregate global amount ($M); for
+            method 2 the effective coefficient in % per $bn.
+        weighted_score_bps: Contribution to the score (basis points).
+        fr_y15_line: FR Y-15 schedule reference.
     """
+
     indicator_name: str
     raw_value: float
     denomination_factor: float
@@ -69,18 +195,16 @@ class IndicatorValue:
 
 @dataclass
 class CategoryScore:
-    """Aggregated score for one of the five systemic importance categories.
-
-    Per G-SIB NPR p.15: Each category receives 20% weight.
-    The category score is the sum of its constituent indicator scores.
+    """Score of one systemic category.
 
     Attributes:
-        category: Which systemic category
-        indicators: Individual indicator scores within this category
-        raw_score_bps: Sum of indicator scores before any caps
-        capped_score_bps: Score after applying caps (e.g., substitutability cap)
-        cap_applied: Whether a cap was applied to this category
+        category: The category.
+        indicators: Indicator contributions.
+        raw_score_bps: Sum before any cap.
+        capped_score_bps: Sum after the § 217.404(b)(2) substitutability cap.
+        cap_applied: Whether the cap bound.
     """
+
     category: GSIBIndicatorCategory
     indicators: list[IndicatorValue] = field(default_factory=list)
     raw_score_bps: float = 0.0
@@ -90,158 +214,136 @@ class CategoryScore:
 
 @dataclass
 class STWFBucketValue:
-    """Short-Term Wholesale Funding value for a single maturity bucket.
+    """Weighted STWF for one category x maturity cell of Table 1 to § 217.406."""
 
-    Per G-SIB NPR p.32 / 12 CFR 217.406(b):
-    Wholesale funding is allocated to maturity buckets and weighted.
-
-    Attributes:
-        bucket: The maturity bucket specification
-        amount: Total wholesale funding in this bucket ($M)
-        weighted_amount: amount * bucket.weight ($M)
-    """
-    bucket: STWFBucketSpec
+    category: int
+    bucket: STWFMaturityBucket
+    weight: float
     amount: float = 0.0
     weighted_amount: float = 0.0
 
 
 @dataclass
 class STWFScore:
-    """Short-Term Wholesale Funding score for Method 2.
-
-    Per G-SIB NPR pp.30-35 / 12 CFR 217.406:
-    STWF score = (weighted_stwf_amount / average RWA) * adjusted_coefficient
+    """Weighted short-term wholesale funding and its method 2 score.
 
     Attributes:
-        buckets: Breakdown by maturity bucket
-        total_wholesale_funding: Sum of all bucket amounts ($M)
-        total_weighted_funding: Sum of all weighted amounts ($M)
-        avg_total_assets: Denominator used for the STWF ratio ($M) -- average
-            risk-weighted assets when supplied, else average total assets
-        stwf_ratio: weighted_funding / denominator
-        stwf_score_bps: Final STWF contribution to Method 2 score
+        buckets: Cell-by-cell breakdown (empty when a reported total is used).
+        total_wholesale_funding: Unweighted STWF ($M).
+        weighted_amount: Weighted STWF amount ($M).
+        denominator: Average RWA used under the current rule ($M; 0 under
+            the proposal, which removes the denominator).
+        stwf_ratio: weighted_amount / denominator (current rule only).
+        coefficient: 350 (current) or the proposal coefficient in % per $bn.
+        stwf_score_bps: Contribution to the method 2 score.
+        source: How the weighted amount was obtained.
     """
+
     buckets: list[STWFBucketValue] = field(default_factory=list)
     total_wholesale_funding: float = 0.0
-    total_weighted_funding: float = 0.0
-    avg_total_assets: float = 0.0
+    weighted_amount: float = 0.0
+    denominator: float = 0.0
     stwf_ratio: float = 0.0
+    coefficient: float = 0.0
     stwf_score_bps: float = 0.0
+    source: str = ""
+
+    @property
+    def total_weighted_funding(self) -> float:
+        """Alias of :attr:`weighted_amount`."""
+        return self.weighted_amount
 
 
 # =========================================================================
-#  Indicator Data Input
+#  Weighted STWF -- Table 1 to § 217.406
 # =========================================================================
 
-@dataclass
-class GSIBIndicatorData:
-    """Complete set of indicator values for G-SIB score calculation.
 
-    Contains all 12 systemic indicators required for Method 1 (FR Y-15
-    Schedules A-E) plus the STWF data for Method 2 (Schedule G).
+def weighted_stwf(indicator_data: GSIBIndicatorData) -> STWFScore:
+    """Weighted short-term wholesale funding amount (§ 217.406(b), Table 1).
 
-    All monetary values in USD millions ($M).
-    Per FR Y-15 Instructions / G-SIB NPR Section II.B.
+    Each component is weighted by its funding category (1-4) and remaining
+    maturity column; the weighted amount is the average over each business
+    day of the prior calendar year (supply averaged amounts).
+
+    Returns:
+        STWFScore with the weighted amount and breakdown (score fields unset).
     """
-    # Reporting metadata
-    reporting_entity: str = ""
-    reporting_date: Optional[date] = None
-    assessment_year: Optional[int] = None
+    if indicator_data.weighted_stwf_amount_reported is not None:
+        return STWFScore(
+            weighted_amount=float(indicator_data.weighted_stwf_amount_reported),
+            source="FR Y-15 Schedule G reported total",
+        )
 
-    # ---- Category 1: Size (Schedule A) ----
-    # Per G-SIB NPR p.16: Total exposures as defined by leverage ratio
-    total_exposures: float = 0.0  # Schedule A, Line 1
-
-    # ---- Category 2: Interconnectedness (Schedule B) ----
-    # Per G-SIB NPR pp.16-17
-    intra_financial_system_assets: float = 0.0  # Schedule B, Line 1
-    intra_financial_system_liabilities: float = 0.0  # Schedule B, Line 2
-    securities_outstanding: float = 0.0  # Schedule B, Line 3
-
-    # ---- Category 3: Substitutability (Schedule C) ----
-    # Per G-SIB NPR pp.17-19
-    payments_activity: float = 0.0  # Schedule C, Line 1
-    assets_under_custody: float = 0.0  # Schedule C, Line 2
-    underwriting_activity: float = 0.0  # Schedule C, Line 3
-
-    # ---- Category 4: Complexity (Schedule D) ----
-    # Per G-SIB NPR pp.19-20
-    otc_derivatives_notional: float = 0.0  # Schedule D, Line 1
-    trading_and_afs_securities: float = 0.0  # Schedule D, Line 2
-    level_3_assets: float = 0.0  # Schedule D, Line 3
-
-    # ---- Category 5: Cross-Jurisdictional (Schedule E) ----
-    # Per G-SIB NPR pp.20-22
-    cross_jurisdictional_claims: float = 0.0  # Schedule E, Line 1
-    cross_jurisdictional_liabilities: float = 0.0  # Schedule E, Line 2
-
-    # ---- STWF Data for Method 2 (Schedule G) ----
-    # Per G-SIB NPR pp.30-35
-    stwf_0_30_days: float = 0.0  # Wholesale funding maturing in 0-30 days
-    stwf_31_90_days: float = 0.0  # Wholesale funding maturing in 31-90 days
-    stwf_91_180_days: float = 0.0  # Wholesale funding maturing in 91-180 days
-    stwf_181_365_days: float = 0.0  # Wholesale funding maturing in 181-365 days
-    avg_total_assets: float = 0.0  # Average total consolidated assets
-    # 12 CFR 217.406(c): the STWF ratio is taken over average risk-weighted
-    # assets. Falls back to avg_total_assets (with a warning) when not supplied.
-    avg_risk_weighted_assets: float = 0.0
-
-    def get_indicator_value(self, indicator_name: str) -> float:
-        """Get the raw value for a named indicator.
-
-        Per FR Y-15 Instructions, each indicator maps to a specific
-        schedule and line item.
-
-        Args:
-            indicator_name: One of the 12 indicator names from METHOD_1_INDICATORS
-
-        Returns:
-            Raw indicator value in $M
-
-        Raises:
-            ValueError: If indicator_name is not recognized
-        """
-        indicator_map: dict[str, float] = {
-            "total_exposures": self.total_exposures,
-            "intra_financial_system_assets": self.intra_financial_system_assets,
-            "intra_financial_system_liabilities": self.intra_financial_system_liabilities,
-            "securities_outstanding": self.securities_outstanding,
-            "payments_activity": self.payments_activity,
-            "assets_under_custody": self.assets_under_custody,
-            "underwriting_activity": self.underwriting_activity,
-            "otc_derivatives_notional": self.otc_derivatives_notional,
-            "trading_and_afs_securities": self.trading_and_afs_securities,
-            "level_3_assets": self.level_3_assets,
-            "cross_jurisdictional_claims": self.cross_jurisdictional_claims,
-            "cross_jurisdictional_liabilities": self.cross_jurisdictional_liabilities,
-        }
-        if indicator_name not in indicator_map:
-            raise ValueError(
-                f"Unknown indicator '{indicator_name}'. "
-                f"Valid indicators: {list(indicator_map.keys())}"
+    components = list(indicator_data.stwf_components)
+    source = "category x maturity components (Table 1 to § 217.406)"
+    if not components and any(a > 0 for a in indicator_data.get_stwf_amounts()):
+        components = [
+            STWFComponent(LEGACY_STWF_CATEGORY, bucket, amount)
+            for bucket, amount in zip(
+                STWF_MATURITY_BUCKETS, indicator_data.get_stwf_amounts(), strict=True
             )
-        return indicator_map[indicator_name]
-
-    def get_stwf_amounts(self) -> list[float]:
-        """Get STWF amounts by maturity bucket.
-
-        Per G-SIB NPR p.32, wholesale funding is allocated to
-        four maturity buckets.
-
-        Returns:
-            List of 4 amounts corresponding to STWF_MATURITY_BUCKETS
-        """
-        return [
-            self.stwf_0_30_days,
-            self.stwf_31_90_days,
-            self.stwf_91_180_days,
-            self.stwf_181_365_days,
         ]
+        source = (
+            f"maturity-only inputs weighted as Category {LEGACY_STWF_CATEGORY} "
+            "(no funding category supplied)"
+        )
+        logger.warning(
+            "STWF supplied without funding categories; applying Category %d weights",
+            LEGACY_STWF_CATEGORY,
+        )
+
+    cells: list[STWFBucketValue] = []
+    total = weighted = 0.0
+    for comp in components:
+        weight = STWF_WEIGHTS[comp.category][STWF_MATURITY_BUCKETS.index(comp.bucket)]
+        cells.append(
+            STWFBucketValue(comp.category, comp.bucket, weight, comp.amount, comp.amount * weight)
+        )
+        total += comp.amount
+        weighted += comp.amount * weight
+    return STWFScore(
+        buckets=cells, total_wholesale_funding=total, weighted_amount=weighted, source=source
+    )
+
+
+def calculate_stwf_score(
+    indicator_data: GSIBIndicatorData,
+    version: GSIBRuleVersion = DEFAULT_RULE_VERSION,
+    gdp_growth_adjustment: float = INITIAL_GDP_GROWTH_ADJUSTMENT,
+) -> STWFScore:
+    """STWF contribution to the method 2 score.
+
+    Current rule, § 217.406(a): (1) the average weighted STWF amount,
+    (2) divided by average risk-weighted assets, (3) multiplied by 350.
+
+    Proposal, revised § 217.405(b)-(c): weighted STWF amount in $bn x
+    (23.003% / GDP growth adjustment) -- "remove the average risk-weighted
+    assets denominator" (preamble § II.B.i).
+    """
+    stwf = weighted_stwf(indicator_data)
+    if version == GSIBRuleVersion.CURRENT_RULE:
+        denom = indicator_data.avg_risk_weighted_assets
+        stwf.coefficient = STWF_FIXED_FACTOR_CURRENT
+        stwf.denominator = denom
+        if denom <= 0:
+            if stwf.weighted_amount > 0:
+                raise ValueError("§ 217.406(a)(2) requires average risk-weighted assets > 0")
+            return stwf
+        stwf.stwf_ratio = stwf.weighted_amount / denom
+        stwf.stwf_score_bps = stwf.stwf_ratio * STWF_FIXED_FACTOR_CURRENT
+        return stwf
+
+    coeff = method2_coefficients_pct(version)["weighted_stwf_amount"] / gdp_growth_adjustment
+    stwf.coefficient = coeff
+    stwf.stwf_score_bps = stwf.weighted_amount / MILLIONS_PER_BILLION * coeff / PERCENT
+    return stwf
 
 
 # =========================================================================
-#  Score Calculation Functions
+#  Method 1 -- § 217.404
 # =========================================================================
+
 
 def calculate_indicator_score(
     raw_value: float,
@@ -249,426 +351,182 @@ def calculate_indicator_score(
     indicator_weight: float,
     scaling_factor: float = METHOD_1_SCALING_FACTOR,
 ) -> float:
-    """Calculate a single indicator's contribution to the G-SIB score.
+    """Systemic indicator score in basis points (§ 217.404(b)(1)).
 
-    Per BCBS d445 Section 3.2 / G-SIB NPR p.24:
-    score_i = (bank_value_i / global_aggregate_i) * weight_i * 10,000
-
-    Args:
-        raw_value: Bank's indicator value in $M
-        denomination_factor: Global aggregate for this indicator in $M
-        indicator_weight: Weight of this indicator (e.g., 0.20 for size)
-        scaling_factor: Multiplier to convert to basis points (10,000)
-
-    Returns:
-        Indicator score contribution in basis points
+    score = (indicator / aggregate global indicator amount) x 10,000 x weight.
+    Negative indicator values are floored at zero.
     """
     if denomination_factor <= 0:
-        logger.warning(
-            "Denomination factor is non-positive (%.2f). "
-            "Returning 0 for this indicator.",
-            denomination_factor,
-        )
-        return 0.0
-
-    if raw_value < 0:
-        logger.warning(
-            "Negative indicator value (%.2f). Per BCBS d445, "
-            "negative values are floored at 0.",
-            raw_value,
-        )
-        raw_value = 0.0
-
-    return (raw_value / denomination_factor) * indicator_weight * scaling_factor
+        raise ValueError("aggregate global indicator amount must be positive")
+    return max(raw_value, 0.0) / denomination_factor * scaling_factor * indicator_weight
 
 
 def calculate_category_scores(
     indicator_data: GSIBIndicatorData,
     denomination_factors: DenominationFactors = DEFAULT_DENOMINATION_FACTORS,
+    version: GSIBRuleVersion = DEFAULT_RULE_VERSION,
 ) -> list[CategoryScore]:
-    """Calculate Method 1 category scores for all five categories.
+    """Method 1 category scores, with the substitutability cap (§ 217.404).
 
-    Per G-SIB NPR Section II.B / BCBS d445:
-    1. For each indicator, calculate score = (bank / global) * weight * 10,000
-    2. Sum indicators within each category
-    3. Apply substitutability cap of 500bp
-
-    Args:
-        indicator_data: Bank's indicator values
-        denomination_factors: Global aggregates for normalization
-
-    Returns:
-        List of 5 CategoryScore objects, one per systemic category
+    Raises:
+        ValueError: If an indicator with a positive value has no published
+            aggregate global indicator amount.
     """
-    # Build denomination factor lookup
-    denom_lookup: dict[str, float] = {
-        "total_exposures": denomination_factors.total_exposures,
-        "intra_financial_system_assets": denomination_factors.intra_financial_system_assets,
-        "intra_financial_system_liabilities": denomination_factors.intra_financial_system_liabilities,
-        "securities_outstanding": denomination_factors.securities_outstanding,
-        "payments_activity": denomination_factors.payments_activity,
-        "assets_under_custody": denomination_factors.assets_under_custody,
-        "underwriting_activity": denomination_factors.underwriting_activity,
-        "otc_derivatives_notional": denomination_factors.otc_derivatives_notional,
-        "trading_and_afs_securities": denomination_factors.trading_and_afs_securities,
-        "level_3_assets": denomination_factors.level_3_assets,
-        "cross_jurisdictional_claims": denomination_factors.cross_jurisdictional_claims,
-        "cross_jurisdictional_liabilities": denomination_factors.cross_jurisdictional_liabilities,
-    }
-
-    # Group indicators by category
-    category_indicators: dict[GSIBIndicatorCategory, list[IndicatorSpec]] = {}
-    for ind in METHOD_1_INDICATORS:
-        category_indicators.setdefault(ind.category, []).append(ind)
+    specs = method1_indicators(version)
+    by_cat: dict[GSIBIndicatorCategory, list[IndicatorSpec]] = {}
+    for spec in specs:
+        by_cat.setdefault(spec.category, []).append(spec)
 
     results: list[CategoryScore] = []
-
-    for category in GSIBIndicatorCategory:
-        indicators = category_indicators.get(category, [])
-        indicator_values: list[IndicatorValue] = []
-        category_raw_score = 0.0
-
-        for ind_spec in indicators:
-            raw_value = indicator_data.get_indicator_value(ind_spec.name)
-            denom = denom_lookup[ind_spec.name]
-
-            score = calculate_indicator_score(
-                raw_value=raw_value,
-                denomination_factor=denom,
-                indicator_weight=ind_spec.weight,
-            )
-
-            iv = IndicatorValue(
-                indicator_name=ind_spec.name,
-                raw_value=raw_value,
-                denomination_factor=denom,
-                weighted_score_bps=score,
-                fr_y15_line=ind_spec.fr_y15_line,
-            )
-            indicator_values.append(iv)
-            category_raw_score += score
-
-        # Apply substitutability cap per G-SIB NPR p.18
-        cap_applied = False
-        capped_score = category_raw_score
-        if category == GSIBIndicatorCategory.SUBSTITUTABILITY:
-            if category_raw_score > SUBSTITUTABILITY_CAP_BPS:
-                capped_score = SUBSTITUTABILITY_CAP_BPS
-                cap_applied = True
+    for category, cat_specs in by_cat.items():
+        values: list[IndicatorValue] = []
+        raw = 0.0
+        for spec in cat_specs:
+            amount = indicator_data.get_indicator_value(spec.name)
+            denom = denomination_factors.get(spec.name)
+            if denom is None:
+                if amount > 0:
+                    raise ValueError(
+                        f"No aggregate global indicator amount for '{spec.name}'; supply it in "
+                        "DenominationFactors (published by the Board under § 217.401)"
+                    )
                 logger.info(
-                    "Substitutability cap applied: raw=%.2f bps, capped=%.2f bps",
-                    category_raw_score, capped_score,
+                    "No aggregate global amount for %s and no reported value; scored 0", spec.name
                 )
-
-        results.append(CategoryScore(
-            category=category,
-            indicators=indicator_values,
-            raw_score_bps=category_raw_score,
-            capped_score_bps=capped_score,
-            cap_applied=cap_applied,
-        ))
-
+                values.append(IndicatorValue(spec.name, amount, 0.0, 0.0, spec.fr_y15_line))
+                continue
+            score = calculate_indicator_score(amount, denom, spec.weight)
+            values.append(IndicatorValue(spec.name, amount, denom, score, spec.fr_y15_line))
+            raw += score
+        capped, cap_applied = raw, False
+        if category == GSIBIndicatorCategory.SUBSTITUTABILITY and raw > SUBSTITUTABILITY_CAP_BPS:
+            capped, cap_applied = SUBSTITUTABILITY_CAP_BPS, True
+        results.append(CategoryScore(category, values, raw, capped, cap_applied))
     return results
 
 
 def calculate_method1_score(
     indicator_data: GSIBIndicatorData,
     denomination_factors: DenominationFactors = DEFAULT_DENOMINATION_FACTORS,
+    version: GSIBRuleVersion = DEFAULT_RULE_VERSION,
 ) -> tuple[float, list[CategoryScore]]:
-    """Calculate Method 1 G-SIB score.
-
-    Per G-SIB NPR Section II.B / 12 CFR 217.404:
-    Method 1 score = sum of all 5 category scores (with substitutability cap)
-
-    Args:
-        indicator_data: Bank's indicator values
-        denomination_factors: Global aggregates for normalization
-
-    Returns:
-        Tuple of (total_score_bps, list_of_category_scores)
-    """
-    category_scores = calculate_category_scores(indicator_data, denomination_factors)
-    total_score = sum(cs.capped_score_bps for cs in category_scores)
-
-    logger.info("Method 1 G-SIB score: %.2f bps", total_score)
-    for cs in category_scores:
-        logger.debug(
-            "  %s: raw=%.2f bps, capped=%.2f bps",
-            cs.category.value, cs.raw_score_bps, cs.capped_score_bps,
-        )
-
-    return total_score, category_scores
+    """Method 1 score: sum of systemic indicator scores (§ 217.404(a))."""
+    cats = calculate_category_scores(indicator_data, denomination_factors, version)
+    return sum(c.capped_score_bps for c in cats), cats
 
 
-def calculate_stwf_score(
-    indicator_data: GSIBIndicatorData,
-) -> STWFScore:
-    """Calculate the Short-Term Wholesale Funding (STWF) score for Method 2.
-
-    Per G-SIB NPR pp.30-35 / 12 CFR 217.406(b)-(c):
-    1. Allocate wholesale funding to maturity buckets
-    2. Apply maturity-based weights
-    3. Calculate STWF ratio = weighted_funding / average RWA
-    4. STWF score = ratio * adjusted_coefficient (the coefficient of 350
-       already converts the ratio into score points; there is no further
-       x10,000 scaling)
-
-    The adjusted coefficient applies the 1.2x downward factor per
-    the 2026 Re-Proposal / CLAUDE.md.
-
-    Args:
-        indicator_data: Bank's indicator values including STWF data
-
-    Returns:
-        STWFScore with full breakdown
-    """
-    stwf_amounts = indicator_data.get_stwf_amounts()
-
-    if len(stwf_amounts) != len(STWF_MATURITY_BUCKETS):
-        raise ValueError(
-            f"Expected {len(STWF_MATURITY_BUCKETS)} STWF bucket amounts, "
-            f"got {len(stwf_amounts)}"
-        )
-
-    bucket_values: list[STWFBucketValue] = []
-    total_wholesale = 0.0
-    total_weighted = 0.0
-
-    for bucket_spec, amount in zip(STWF_MATURITY_BUCKETS, stwf_amounts):
-        weighted = amount * bucket_spec.weight
-        bucket_values.append(STWFBucketValue(
-            bucket=bucket_spec,
-            amount=amount,
-            weighted_amount=weighted,
-        ))
-        total_wholesale += amount
-        total_weighted += weighted
-
-    # Calculate STWF ratio -- denominator is average RWA (12 CFR 217.406(c))
-    avg_assets = indicator_data.avg_risk_weighted_assets
-    if avg_assets <= 0:
-        # TODO: VERIFY -- fallback to total assets understates the STWF score
-        avg_assets = indicator_data.avg_total_assets
-        logger.warning(
-            "avg_risk_weighted_assets not supplied; STWF ratio uses average "
-            "total assets (%.2f) instead.",
-            avg_assets,
-        )
-    if avg_assets <= 0:
-        logger.warning(
-            "STWF denominator is non-positive (%.2f). "
-            "Cannot calculate STWF ratio.",
-            avg_assets,
-        )
-        return STWFScore(
-            buckets=bucket_values,
-            total_wholesale_funding=total_wholesale,
-            total_weighted_funding=total_weighted,
-            avg_total_assets=avg_assets,
-        )
-
-    stwf_ratio = total_weighted / avg_assets
-
-    # Calculate STWF score using adjusted coefficient
-    # Per CLAUDE.md: Method 2 coefficients adjusted by 1.2x downward factor
-    stwf_score = stwf_ratio * METHOD_2_ADJUSTED_COEFFICIENT
-
-    logger.info(
-        "STWF score: ratio=%.6f, adjusted_coeff=%.3f, score=%.2f bps",
-        stwf_ratio, METHOD_2_ADJUSTED_COEFFICIENT, stwf_score,
-    )
-
-    return STWFScore(
-        buckets=bucket_values,
-        total_wholesale_funding=total_wholesale,
-        total_weighted_funding=total_weighted,
-        avg_total_assets=avg_assets,
-        stwf_ratio=stwf_ratio,
-        stwf_score_bps=stwf_score,
-    )
+# =========================================================================
+#  Method 2 -- § 217.405
+# =========================================================================
 
 
 def calculate_method2_score(
     indicator_data: GSIBIndicatorData,
-    denomination_factors: DenominationFactors = DEFAULT_DENOMINATION_FACTORS,
+    version: GSIBRuleVersion = DEFAULT_RULE_VERSION,
+    gdp_growth_adjustment: float = INITIAL_GDP_GROWTH_ADJUSTMENT,
 ) -> tuple[float, list[CategoryScore], STWFScore]:
-    """Calculate Method 2 G-SIB score.
+    """Method 2 score (§ 217.405).
 
-    Per G-SIB NPR Section II.D / 12 CFR 217.406:
-    Method 2 uses the same 4 systemic categories as Method 1
-    (size, interconnectedness, complexity, cross-jurisdictional)
-    but replaces the substitutability category with the STWF component.
-
-    Each of the 5 components receives 20% weight.
-
-    Args:
-        indicator_data: Bank's indicator values
-        denomination_factors: Global aggregates for normalization
+    Systemic indicator score = indicator in billions of dollars x coefficient
+    (Table 1 to § 217.405, in %). Under the proposal each coefficient is
+    divided by the GDP growth adjustment (revised § 217.405(c)(2)) and the
+    weighted STWF amount is the tenth indicator; under the current rule the
+    STWF score of § 217.406 is added (§ 217.405(a)(1)(ii)).
 
     Returns:
-        Tuple of (total_score_bps, category_scores, stwf_score)
-        Note: category_scores excludes substitutability (replaced by STWF)
+        (score_bps, category_scores, stwf_score); the STWF category appears in
+        ``category_scores`` under both versions.
     """
-    # Calculate the standard 4 categories (exclude substitutability)
-    all_category_scores = calculate_category_scores(indicator_data, denomination_factors)
+    if gdp_growth_adjustment <= 0:
+        raise ValueError("GDP growth adjustment must be positive")
+    coeffs = method2_coefficients_pct(version)
+    stwf = calculate_stwf_score(indicator_data, version, gdp_growth_adjustment)
 
-    # Filter to the 4 categories used in Method 2
-    method2_categories = {
-        GSIBIndicatorCategory.SIZE,
-        GSIBIndicatorCategory.INTERCONNECTEDNESS,
-        GSIBIndicatorCategory.COMPLEXITY,
-        GSIBIndicatorCategory.CROSS_JURISDICTIONAL,
-    }
-    m2_category_scores = [
-        cs for cs in all_category_scores
-        if cs.category in method2_categories
-    ]
+    by_cat: dict[GSIBIndicatorCategory, CategoryScore] = {}
+    for name, coeff_pct in coeffs.items():
+        if name == "weighted_stwf_amount":
+            continue
+        eff = (
+            coeff_pct / gdp_growth_adjustment
+            if version == GSIBRuleVersion.PROPOSAL_2026
+            else coeff_pct
+        )
+        amount = indicator_data.get_indicator_value(name)
+        score = max(amount, 0.0) / MILLIONS_PER_BILLION * eff / PERCENT
+        cat = METHOD_2_INDICATOR_CATEGORY[name]
+        cs = by_cat.setdefault(cat, CategoryScore(cat))
+        cs.indicators.append(IndicatorValue(name, amount, eff, score))
+        cs.raw_score_bps += score
+        cs.capped_score_bps += score
 
-    # Calculate STWF component
-    stwf_score = calculate_stwf_score(indicator_data)
-
-    # Method 2 total = sum of 4 categories + STWF score
-    total_from_categories = sum(cs.capped_score_bps for cs in m2_category_scores)
-    total_score = total_from_categories + stwf_score.stwf_score_bps
-
-    logger.info(
-        "Method 2 G-SIB score: %.2f bps (categories=%.2f + STWF=%.2f)",
-        total_score, total_from_categories, stwf_score.stwf_score_bps,
+    stwf_cat = CategoryScore(
+        GSIBIndicatorCategory.SHORT_TERM_WHOLESALE_FUNDING,
+        [
+            IndicatorValue(
+                "weighted_stwf_amount",
+                stwf.weighted_amount,
+                stwf.coefficient,
+                stwf.stwf_score_bps,
+                "Schedule G",
+            )
+        ],
+        stwf.stwf_score_bps,
+        stwf.stwf_score_bps,
     )
-
-    return total_score, m2_category_scores, stwf_score
+    categories = list(by_cat.values()) + [stwf_cat]
+    total = sum(c.capped_score_bps for c in categories)
+    logger.info(
+        "Method 2 score (%s): %.1f bp (STWF %.1f bp)", version.value, total, stwf.stwf_score_bps
+    )
+    return total, categories, stwf
 
 
 # =========================================================================
-#  Validation Functions
+#  Validation
 # =========================================================================
+
 
 def validate_indicator_data(
     indicator_data: GSIBIndicatorData,
     bounds: ValidationBounds = DEFAULT_VALIDATION_BOUNDS,
 ) -> list[str]:
-    """Validate G-SIB indicator data for plausibility.
-
-    Per SR 11-7 / BCBS 239 data quality requirements:
-    - Range checks on all indicator values
-    - Non-negativity checks
-    - Cross-field consistency checks
-    - Completeness checks
-
-    Args:
-        indicator_data: Data to validate
-        bounds: Plausibility bounds for validation
+    """Plausibility checks on FR Y-15 inputs (BCBS 239 / SR 11-7).
 
     Returns:
-        List of validation warning messages (empty if all checks pass)
+        Warning messages (empty if all checks pass).
     """
     warnings: list[str] = []
-
-    # 1. Total exposures range check
-    if indicator_data.total_exposures < bounds.min_total_exposures:
+    te = indicator_data.total_exposures
+    if te == 0:
+        warnings.append("Total exposures is zero; it is required for both methods.")
+    elif te < bounds.min_total_exposures:
+        warnings.append(f"Total exposures ({te:,.0f} $M) below the Category I plausibility bound.")
+    elif te > bounds.max_total_exposures:
+        warnings.append(f"Total exposures ({te:,.0f} $M) above the plausibility bound; verify.")
+    for f in fields(indicator_data):
+        if f.name in _NON_INDICATOR_FIELDS:
+            continue
+        if getattr(indicator_data, f.name) < 0:
+            warnings.append(f"Indicator '{f.name}' is negative.")
+    stwf = weighted_stwf(indicator_data)
+    if any(c.amount < 0 for c in indicator_data.stwf_components) or any(
+        a < 0 for a in indicator_data.get_stwf_amounts()
+    ):
+        warnings.append("Negative short-term wholesale funding amount.")
+    if te > 0 and stwf.total_wholesale_funding > bounds.max_stwf_to_total_exposures * te:
+        warnings.append("Short-term wholesale funding exceeds total exposures.")
+    if (
+        not indicator_data.stwf_components
+        and indicator_data.weighted_stwf_amount_reported is None
+        and any(a > 0 for a in indicator_data.get_stwf_amounts())
+    ):
         warnings.append(
-            f"Total exposures ({indicator_data.total_exposures:,.0f} $M) "
-            f"below minimum threshold ({bounds.min_total_exposures:,.0f} $M) "
-            f"for a Category I G-SIB."
+            f"STWF supplied without funding categories; Category {LEGACY_STWF_CATEGORY} "
+            "weights applied (conservative)."
         )
-    if indicator_data.total_exposures > bounds.max_total_exposures:
-        warnings.append(
-            f"Total exposures ({indicator_data.total_exposures:,.0f} $M) "
-            f"above maximum threshold ({bounds.max_total_exposures:,.0f} $M). "
-            f"Verify data accuracy."
-        )
-
-    # 2. Non-negativity checks for all indicators
-    all_indicators = {
-        "total_exposures": indicator_data.total_exposures,
-        "intra_financial_system_assets": indicator_data.intra_financial_system_assets,
-        "intra_financial_system_liabilities": indicator_data.intra_financial_system_liabilities,
-        "securities_outstanding": indicator_data.securities_outstanding,
-        "payments_activity": indicator_data.payments_activity,
-        "assets_under_custody": indicator_data.assets_under_custody,
-        "underwriting_activity": indicator_data.underwriting_activity,
-        "otc_derivatives_notional": indicator_data.otc_derivatives_notional,
-        "trading_and_afs_securities": indicator_data.trading_and_afs_securities,
-        "level_3_assets": indicator_data.level_3_assets,
-        "cross_jurisdictional_claims": indicator_data.cross_jurisdictional_claims,
-        "cross_jurisdictional_liabilities": indicator_data.cross_jurisdictional_liabilities,
-    }
-
-    for name, value in all_indicators.items():
-        if value < 0:
-            warnings.append(
-                f"Indicator '{name}' has negative value ({value:,.0f} $M). "
-                f"Per BCBS d445, negative values are not expected."
-            )
-
-    # 3. STWF validation
-    stwf_amounts = indicator_data.get_stwf_amounts()
-    for i, amount in enumerate(stwf_amounts):
-        if amount < 0:
-            warnings.append(
-                f"STWF bucket {i} has negative value ({amount:,.0f} $M)."
-            )
-
-    if indicator_data.avg_total_assets <= 0 and any(a > 0 for a in stwf_amounts):
-        warnings.append(
-            "STWF data provided but avg_total_assets is non-positive. "
-            "Cannot compute STWF ratio."
-        )
-
-    # 4. STWF ratio plausibility
-    if indicator_data.avg_total_assets > 0:
-        total_stwf = sum(stwf_amounts)
-        stwf_ratio = total_stwf / indicator_data.avg_total_assets
-        if stwf_ratio > bounds.max_stwf_ratio:
-            warnings.append(
-                f"STWF ratio ({stwf_ratio:.2%}) exceeds "
-                f"maximum plausible ratio ({bounds.max_stwf_ratio:.2%})."
-            )
-
-    # 5. Cross-field consistency: total exposures should be roughly
-    # in line with avg_total_assets (leverage ratio basis is typically
-    # larger than total assets due to off-balance-sheet items)
-    if (indicator_data.avg_total_assets > 0
-            and indicator_data.total_exposures > 0):
-        ratio = indicator_data.total_exposures / indicator_data.avg_total_assets
-        if ratio < 0.8:
-            warnings.append(
-                f"Total exposures / avg total assets ratio ({ratio:.2f}) "
-                f"is unusually low. Leverage ratio exposure should typically "
-                f"exceed or be close to total assets."
-            )
-        if ratio > 3.0:
-            warnings.append(
-                f"Total exposures / avg total assets ratio ({ratio:.2f}) "
-                f"is unusually high. Verify off-balance-sheet calculations."
-            )
-
-    # 6. Completeness check: at least total_exposures must be non-zero
-    if indicator_data.total_exposures == 0:
-        warnings.append(
-            "Total exposures is zero. This is a required field "
-            "for G-SIB score calculation."
-        )
-
     return warnings
 
 
-def calculate_reporting_period(
-    assessment_year: int,
-) -> tuple[date, date]:
-    """Determine the reporting period for a G-SIB assessment year.
-
-    Per FR Y-15 Instructions / G-SIB NPR p.23:
-    The annual G-SIB score is based on data as of December 31
-    of the assessment year. The reporting period covers the
-    full calendar year.
-
-    Args:
-        assessment_year: The year for which G-SIB scores are being calculated
-
-    Returns:
-        Tuple of (period_start, period_end) dates
-    """
-    period_start = date(assessment_year, 1, 1)
-    period_end = date(assessment_year, 12, 31)
-    return period_start, period_end
+def calculate_reporting_period(assessment_year: int) -> tuple[date, date]:
+    """Calendar-year measurement period for a G-SIB assessment (§ 217.403(a))."""
+    return date(assessment_year, 1, 1), date(assessment_year, 12, 31)

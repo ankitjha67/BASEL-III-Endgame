@@ -21,6 +21,30 @@ from collections import OrderedDict
 from scipy.stats import norm
 import plotly.graph_objects as go
 import plotly.express as px
+import sys
+
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
+
+# Engine calculators (the POC uses the same src/ implementations as the
+# end-to-end driver; no hard-coded charges).
+from src.capital.gsib import (  # noqa: E402
+    METHOD_1_INDICATORS_PROPOSAL,
+    GSIBRuleVersion,
+    calculate_gsib_surcharge,
+    create_indicator_data_from_dict,
+)
+from src.counterparty_risk.saccr.saccr import SACCRCalculator, SACCRNettingSet, SACCRTrade  # noqa: E402
+from src.cva_risk.cva_calculator import CVACalculator, CVACounterparty  # noqa: E402
+from src.cva_risk.cva_params import CVACreditQuality, CVASector  # noqa: E402
+from src.data_generation.frtb_inputs import trading_positions_to_frtb_inputs  # noqa: E402
+from src.data_generation.portfolio_generator import PortfolioGenerator  # noqa: E402
+from src.core.enums import RRAOCategory  # noqa: E402
+from src.core.models import RRAOPosition  # noqa: E402
+from src.market_risk.frtb.calculator import FRTBCalculator  # noqa: E402
+from src.operational_risk.or_calculator import BusinessIndicatorInputs, OpRiskCalculator, ServiceLineData  # noqa: E402
+from src.operational_risk.or_params import ServiceLine, compute_bcbs_reference_ilm  # noqa: E402
 
 np.random.seed(20260319)
 OUT = os.environ.get("BASEL_OUTPUT_DIR", os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "output", "reports"))
@@ -431,32 +455,41 @@ Deriv = pd.DataFrame({
     "Delta": np.random.uniform(-1, 1, nDeriv),
 })
 
-SF_MAP = {"Interest Rate": 0.005, "FX": 0.04, "Credit": 0.01, "Equity": 0.20, "Commodity": 0.18}
+# SA-CCR via src.counterparty_risk.saccr (§ __.114: supervisory factors by asset
+# class and credit quality, maturity factors, multiplier floor, alpha 1.4 / 1.0).
+SACCR_ASSET_CLASS = {"Interest Rate": "IR", "FX": "FX", "Credit": "CREDIT_IG",
+                     "Equity": "EQUITY_SINGLE", "Commodity": "COMMODITY_OTHER"}
+SACCR_UNDERLYINGS = {"IR": ["USD", "EUR", "GBP", "JPY"], "FX": ["EURUSD", "USDJPY", "GBPUSD"],
+                     "CREDIT_IG": [f"CORP{i}" for i in range(40)],
+                     "EQUITY_SINGLE": [f"EQ{i}" for i in range(40)], "COMMODITY_OTHER": ["WTI", "GOLD", "CORN"]}
+# Counterparty risk weights (ERBA NPR § __.111 Table 2 Grade A "otherwise" 40%; corporates
+# 100%; sovereign 0%; QCCP trade exposures 2%).
 CPTY_RW = {"Financial": 40, "EndUser": 100, "QCCP": 2, "Sovereign": 0, "HedgeFund": 100}
+saccrCalc = SACCRCalculator()
 
 nsRows = []
 for nsId, ns in Deriv.groupby("NettingSetId"):
-    V = ns["MarkToMarket"].sum()
-    C = ns["CollateralHeld"].sum()
-    RC = max(V - C, 0)
-    addon = 0
-    for ac, acDf in ns.groupby("AssetClass"):
-        sf = SF_MAP.get(ac, 0.01)
-        for _, t in acDf.iterrows():
-            mf = min(1.0, np.sqrt(min(t["Maturity"], 1)))
-            addon += abs(t["Notional"] * mf * t["Delta"]) * sf
-    
-    floor = 0.05
-    mult = min(1.0, floor + (1-floor)*np.exp((V-C)/(2*(1-floor)*max(addon,1)))) if addon > 0 else 1.0
-    PFE = mult * addon
-    alpha = 1.0 if (ns["CounterpartyType"]=="EndUser").all() else 1.4
-    EAD = alpha * (RC + PFE)
+    trades = []
+    for k, t in enumerate(ns.itertuples()):
+        ac = SACCR_ASSET_CLASS[t.AssetClass]
+        unders = SACCR_UNDERLYINGS[ac]
+        trades.append(SACCRTrade(trade_id=t.TradeId, asset_class=ac, notional=float(t.Notional),
+                                 mtm_value=float(t.MarkToMarket), end_years=float(t.Maturity),
+                                 is_long=bool(t.Delta >= 0), underlying=unders[k % len(unders)]))
+    margined = bool(ns["IsMargined"].mean() >= 0.5)
+    endUser = bool((ns["CounterpartyType"] == "EndUser").all())
+    nsObj = SACCRNettingSet(netting_set_id=nsId, trades=trades, is_margined=margined,
+                            collateral=float(ns["CollateralHeld"].sum()), mpor=10, is_financial=not endUser)
+    r = saccrCalc.calculate(nsObj)
     ct = ns["CounterpartyType"].mode().iloc[0]
     rw = CPTY_RW.get(ct, 100)
     nsRows.append({"NettingSetId": nsId, "Trades": len(ns), "CounterpartyType": ct,
-                    "NetMtm": round(V,2), "Collateral": round(C,2), "ReplacementCost": round(RC,2),
-                    "Pfe": round(PFE,2), "Multiplier": round(mult,4), "Alpha": alpha,
-                    "Ead": round(EAD,2), "CounterpartyRw": rw, "Rwa": round(EAD*rw/100,2)})
+                   "NetMtm": round(float(ns["MarkToMarket"].sum()), 2),
+                   "Collateral": round(float(ns["CollateralHeld"].sum()), 2),
+                   "ReplacementCost": round(r.replacement_cost, 2), "Pfe": round(r.pfe, 2),
+                   "Multiplier": round(r.multiplier, 4), "Alpha": r.alpha, "Ead": round(r.ead, 2),
+                   "Maturity": float((ns["Notional"] * ns["Maturity"]).sum() / ns["Notional"].sum()),
+                   "CounterpartyRw": rw, "Rwa": round(r.ead * rw / 100, 2)})
 
 Saccr = pd.DataFrame(nsRows)
 saccrRwa = Saccr["Rwa"].sum()
@@ -500,26 +533,38 @@ GOV.logAudit("Securitization SEC-SA", True, f"{len(Sec)} Tranches, Floors 15%/10
 print("\nSection 3: Operational Risk")
 print("─" * 65)
 
-TII = [95000, 102000, 115000]; TIE = [45000, 52000, 67000]
-IEA_Q = list(np.linspace(2200000, 2800000, 12))
-DIV = [2100, 2400, 2700]; NI_TOT = [58000, 62000, 68000]; RG = [1300, -1700, 700]
-NIE_BI = [26000, 28000, 31000]; IM_INC = [16000, 17500, 19000]; IM_EXP = [8500, 9200, 10000]
+# Operational risk via src.operational_risk (§ __.150: two-component BI, 0.7 factor on
+# investment management, investment services and non-lending treasury services,
+# ILDC cap 2.25% of interest-earning assets, BIC 12/15/18%, RWA = 12.5 x BIC).
+opInputs = BusinessIndicatorInputs(
+    total_interest_income=[95_000.0, 102_000.0, 115_000.0],
+    total_interest_expense=[45_000.0, 52_000.0, 67_000.0],
+    interest_earning_assets=list(np.linspace(2_200_000.0, 2_800_000.0, 12)),
+    dividend_income=[2_100.0, 2_400.0, 2_700.0],
+    total_noninterest_income=[58_000.0, 62_000.0, 68_000.0],
+    realized_gains_losses_htm_securities=[300.0, -900.0, 200.0],
+    realized_gains_losses_afs_debt_securities=[1_000.0, -800.0, 500.0],
+    noninterest_expense_for_bi=[26_000.0, 28_000.0, 31_000.0],
+    service_lines=[
+        ServiceLineData(service_line=ServiceLine.INVESTMENT_MANAGEMENT,
+                        noninterest_income=[9_000.0, 9_800.0, 10_500.0],
+                        noninterest_expense_for_bi=[4_800.0, 5_100.0, 5_500.0]),
+        ServiceLineData(service_line=ServiceLine.INVESTMENT_SERVICES,
+                        noninterest_income=[5_000.0, 5_500.0, 6_000.0],
+                        noninterest_expense_for_bi=[2_700.0, 3_000.0, 3_300.0]),
+        ServiceLineData(service_line=ServiceLine.NON_LENDING_TREASURY_SERVICES,
+                        noninterest_income=[2_000.0, 2_200.0, 2_500.0],
+                        noninterest_expense_for_bi=[1_000.0, 1_100.0, 1_200.0]),
+    ],
+    total_operational_losses=[3_200.0, 4_100.0, 3_500.0],
+)
 OP_LOSS = [3200, 4100, 3500]
-
-avgNii = np.mean([abs(TII[i]-TIE[i]) for i in range(3)])
-niiCap = 0.0225 * np.mean(IEA_Q)
-ILDC = min(avgNii, niiCap) + np.mean(DIV)
-nicYr = [abs(NI_TOT[i]+RG[i]-NIE_BI[i]-0.7*(IM_INC[i]-IM_EXP[i])) + OP_LOSS[i] for i in range(3)]
-NIC = np.mean(nicYr)
-BI = ILDC + NIC
-
-if BI <= 1000: BIC = 0.12 * BI
-elif BI <= 30000: BIC = 120 + 0.15 * (BI - 1000)
-else: BIC = 4470 + 0.18 * (BI - 30000)
-
-opRwa = BIC * 1.0 * 12.5  # ILM = 1
-lc = (15 * np.mean(OP_LOSS) / max(BIC,1)) ** 0.8
-ilm2023 = max(1.0, np.log(np.exp(1)-1+lc))
+opRes = OpRiskCalculator().calculate(opInputs)
+BI, BIC, opRwa = opRes.business_indicator, opRes.bic, opRes.rwa
+ILDC, NIC = opRes.ildc, opRes.noninterest_component
+# Comparison only: the BCBS ILM (OPE25.8-25.9) the US proposal removes
+lc = 15 * np.mean(OP_LOSS)
+ilm2023 = compute_bcbs_reference_ilm(lc, BIC)
 opRwa2023 = BIC * ilm2023 * 12.5
 ilmSavings = opRwa2023 - opRwa
 
@@ -534,21 +579,37 @@ GOV.logAudit("Operational Risk", True, f"BI=${BI:,.0f}M, BIC=${BIC:,.0f}M, ILM=1
 print("\nSection 4: Market Risk (FRTB) And CVA Risk")
 print("─" * 65)
 
-# Realistic FRTB for a GSIB ($20-30B capital)
-sbmDelta=12000; sbmVega=4000; sbmCurv=2000; sbmTotal=sbmDelta+sbmVega+sbmCurv
-drcCapital=8000; rraoCapital=1500
-mrCapital = sbmTotal + drcCapital + rraoCapital; mrRwa = mrCapital * 12.5
-print(f"  FRTB: SBM=${sbmTotal:,}M | DRC=${drcCapital:,}M | RRAO=${rraoCapital:,}M | MR RWA=${mrRwa:,}M")
+# FRTB-SA via src.market_risk.frtb (SBM § __.209, DRC § __.210, RRAO) on the
+# synthetic trading book, mapped by src.data_generation.frtb_inputs.
+_gen = PortfolioGenerator(seed=20260319)
+_trading = _gen.generate_trading_portfolio()
+frtbSens, frtbDrc = trading_positions_to_frtb_inputs(_trading.positions, np.random.default_rng(20260319))
+frtbRrao = [RRAOPosition(instrument_id="WEATHER-1", notional=2_000.0, category=RRAOCategory.EXOTIC),
+            RRAOPosition(instrument_id="BERMUDAN-BOOK", notional=60_000.0, category=RRAOCategory.OTHER)]
+frtbRes = FRTBCalculator().calculate(sensitivities=frtbSens, drc_positions=frtbDrc, rrao_positions=frtbRrao)
+sbmDelta, sbmVega, sbmCurv = frtbRes.sbm_delta, frtbRes.sbm_vega, frtbRes.sbm_curvature
+sbmTotal = frtbRes.sbm_total
+drcCapital, rraoCapital = frtbRes.drc_total, frtbRes.rrao_total
+mrCapital = frtbRes.total_capital_charge; mrRwa = frtbRes.total_rwa
+print(f"  FRTB: SBM=${sbmTotal:,.0f}M | DRC=${drcCapital:,.0f}M | RRAO=${rraoCapital:,.0f}M | MR RWA=${mrRwa:,.0f}M")
 
-# CVA
-beta = 0.65
-cvaCapital = 0
-for ct, grp in Deriv[~(Deriv["CounterpartyType"]=="QCCP")].groupby("CounterpartyType"):
-    rw = {"Financial":0.010,"EndUser":0.007,"Sovereign":0.005,"HedgeFund":0.030}.get(ct,0.015)
-    ead = grp["MarkToMarket"].abs().sum() + grp["Notional"].sum()*0.005
-    cvaCapital += beta * ead * grp["Maturity"].mean() * rw
-cvaRwa = cvaCapital * 12.5
-print(f"  CVA: Capital=${cvaCapital:,.0f}M | RWA=${cvaRwa:,.0f}M (β=0.65)")
+# CVA via src.cva_risk (BA-CVA, § __.222: K = 0.65 x (0.25 K_unhedged + 0.75 K_hedged) with no
+# hedges -> reduced form; SCVA = (1/alpha) x RW x M x EAD x DF, Table 1 to § __.222 weights).
+# QCCP-cleared netting sets are outside the CVA scope.
+CVA_SECTOR = {"Financial": CVASector.FINANCIALS, "HedgeFund": CVASector.FINANCIALS,
+              "EndUser": CVASector.OTHER_SECTOR, "Sovereign": CVASector.SOVEREIGN_MDB_SUPRANATIONAL}
+CVA_QUALITY = {"Financial": CVACreditQuality.INVESTMENT_GRADE,
+               "HedgeFund": CVACreditQuality.SPECULATIVE_GRADE,
+               "EndUser": CVACreditQuality.INVESTMENT_GRADE,
+               "Sovereign": CVACreditQuality.INVESTMENT_GRADE}
+cvaCps = [CVACounterparty(counterparty_id=r["NettingSetId"], sector=CVA_SECTOR[r["CounterpartyType"]],
+                          credit_quality=CVA_QUALITY[r["CounterpartyType"]],
+                          is_commercial_end_user=r["CounterpartyType"] == "EndUser",
+                          ead=r["Ead"], effective_maturity=r["Maturity"])
+          for r in nsRows if r["CounterpartyType"] != "QCCP" and r["Ead"] > 0]
+cvaRes = CVACalculator().calculate(counterparties=cvaCps)
+cvaCapital = cvaRes.k_cva; cvaRwa = cvaRes.rwa
+print(f"  CVA: {cvaRes.approach.value} K=${cvaCapital:,.0f}M | RWA=${cvaRwa:,.0f}M ({len(cvaCps)} counterparties)")
 GOV.logAudit("FRTB + CVA", True, f"MR RWA=${mrRwa:,}M, CVA RWA=${cvaRwa:,.0f}M")
 
 # ╔══════════════════════════════════════════════════════════════════════╗
@@ -629,39 +690,36 @@ GOV.logAudit("Large Exposures", True, f"25% T1=${leLimit:,.0f}M, {len(breaches)}
 print("\nSection 7: G-SIB Surcharge (FR Y-15)")
 print("─" * 65)
 
+# G-SIB surcharge via src.capital.gsib under the March 2026 G-SIB NPR (FR Doc. 2026-05961):
+# method 1 with the 2025 aggregate global indicator amounts (FR Doc. 2025-22964),
+# method 2 with the proposed Table 1 to § 217.405 coefficients and STWF by category.
+gsibInputs = {
+    "total_exposures": 3_800_000.0, "intra_financial_system_assets": 450_000.0,
+    "intra_financial_system_liabilities": 380_000.0, "securities_outstanding": 520_000.0,
+    "payments_activity": 85_000_000.0, "assets_under_custody": 28_000_000.0,
+    "underwriting_activity": 350_000.0, "otc_derivatives_notional": 55_000_000.0,
+    "trading_and_afs_securities": 600_000.0, "level_3_assets": 35_000.0,
+    "cross_jurisdictional_claims": 680_000.0, "cross_jurisdictional_liabilities": 550_000.0,
+    "stwf_cat1_b1": 240_000.0, "stwf_cat1_b2": 50_000.0, "stwf_cat2_b1": 60_000.0,
+    "stwf_cat3_b1": 110_000.0, "stwf_cat3_b2": 40_000.0, "stwf_cat3_b3": 20_000.0,
+    "stwf_cat4_b1": 25_000.0, "stwf_cat4_b4": 10_000.0,
+}
+gsibRes = calculate_gsib_surcharge(create_indicator_data_from_dict(gsibInputs),
+                                   version=GSIBRuleVersion.PROPOSAL_2026)
+_m1 = gsibRes.method1_result
 GsibInd = pd.DataFrame([
-    {"Category":"Size",             "Indicator":"Total Exposures",              "AmountBn":3800,"GlobalBn":95000, "Weight":0.20},
-    {"Category":"Interconnectedness","Indicator":"Intra-Financial System Assets","AmountBn":450, "GlobalBn":12000, "Weight":0.0667},
-    {"Category":"Interconnectedness","Indicator":"Intra-Financial System Liabs", "AmountBn":380, "GlobalBn":11000, "Weight":0.0667},
-    {"Category":"Interconnectedness","Indicator":"Securities Outstanding",       "AmountBn":520, "GlobalBn":14000, "Weight":0.0667},
-    {"Category":"Substitutability",  "Indicator":"Payments Activity",            "AmountBn":85000,"GlobalBn":650000,"Weight":0.0667},
-    {"Category":"Substitutability",  "Indicator":"Assets Under Custody",         "AmountBn":28000,"GlobalBn":200000,"Weight":0.0667},
-    {"Category":"Substitutability",  "Indicator":"Underwritten Transactions",    "AmountBn":350, "GlobalBn":8000,  "Weight":0.0667},
-    {"Category":"Complexity",        "Indicator":"OTC Derivatives Notional",     "AmountBn":55000,"GlobalBn":600000,"Weight":0.0667},
-    {"Category":"Complexity",        "Indicator":"Trading And AFS Securities",   "AmountBn":600, "GlobalBn":10000, "Weight":0.0667},
-    {"Category":"Complexity",        "Indicator":"Level 3 Assets",               "AmountBn":35,  "GlobalBn":500,   "Weight":0.0667},
-    {"Category":"Cross-Jurisdictional","Indicator":"Cross-Jurisdictional Claims","AmountBn":680, "GlobalBn":18000, "Weight":0.10},
-    {"Category":"Cross-Jurisdictional","Indicator":"Cross-Jurisdictional Liabs", "AmountBn":550, "GlobalBn":16000, "Weight":0.10},
-])
-GsibInd["ScoreBp"] = GsibInd["AmountBn"] / GsibInd["GlobalBn"] * GsibInd["Weight"] * 10000
-
-m1Score = round(GsibInd["ScoreBp"].sum())
-m1Sur = {True: 0, 130<=m1Score<230: 1.0, 230<=m1Score<330: 1.5, 330<=m1Score<430: 2.0, 430<=m1Score<530: 2.5}
-if m1Score < 130: m1Surcharge = 0.0
-elif m1Score < 230: m1Surcharge = 1.0
-elif m1Score < 330: m1Surcharge = 1.5
-elif m1Score < 430: m1Surcharge = 2.0
-elif m1Score < 530: m1Surcharge = 2.5
-else: m1Surcharge = 3.5 + 1.0 * ((m1Score - 530) // 100)
-
-# Method 2 with 1.2× adjustment
-m2PreAdj = 580
-m2AdjScore = round(m2PreAdj / 1.2)
-if m2AdjScore <= 189: m2Surcharge = 1.0
-else: m2Surcharge = 1.0 + 0.1 * np.ceil((m2AdjScore - 189) / 20)
+    {"Category": c.category.value.title().replace("_", "-"), "Indicator": iv.indicator_name,
+     "AmountBn": iv.raw_value / 1000, "GlobalBn": iv.denomination_factor / 1000,
+     "Weight": next((sp.weight for sp in METHOD_1_INDICATORS_PROPOSAL if sp.name == iv.indicator_name), 0.0),
+     "ScoreBp": iv.weighted_score_bps}
+    for c in _m1.category_scores for iv in c.indicators])
+m1Score = round(gsibRes.method1_score_bps); m1Surcharge = gsibRes.method1_surcharge_pct
+m2AdjScore = round(gsibRes.method2_score_bps); m2Surcharge = gsibRes.method2_surcharge_pct
+m2PreAdj = round(calculate_gsib_surcharge(create_indicator_data_from_dict(
+    {**gsibInputs, "avg_risk_weighted_assets": 1_900_000.0}), version=GSIBRuleVersion.CURRENT_RULE).method2_score_bps)
 
 gsibSurcharge = max(m1Surcharge, m2Surcharge)
-print(f"  Method 1: {m1Score}bp → {m1Surcharge:.1f}% | Method 2: {m2PreAdj}bp → adj {m2AdjScore}bp → {m2Surcharge:.1f}%")
+print(f"  Method 1: {m1Score}bp → {m1Surcharge:.1f}% | Method 2: current rule {m2PreAdj}bp, NPR {m2AdjScore}bp → {m2Surcharge:.1f}%")
 print(f"  Binding G-SIB Surcharge: {gsibSurcharge:.1f}%")
 GOV.logAudit("G-SIB Surcharge", True, f"M1={m1Score}bp/{m1Surcharge:.1f}%, M2 adj={m2AdjScore}bp/{m2Surcharge:.1f}%, Binding={gsibSurcharge:.1f}%")
 

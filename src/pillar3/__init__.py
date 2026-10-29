@@ -6,7 +6,7 @@ Implements Pillar 3 disclosure templates per BCBS d400/d455:
 - CC1: Composition of Regulatory Capital
 - CC2: Reconciliation to Balance Sheet
 - CR1-CR5: Credit Risk Disclosures
-- MR1-MR4: Market Risk Disclosures
+- MR1-MR3: Market Risk Disclosures (Basel Framework DIS50)
 - OR1: Operational Risk
 - LR1-LR2: Leverage Ratio
 
@@ -47,8 +47,9 @@ from src.pillar3.templates import (
     Pillar3CR1, Pillar3CR4, Pillar3CR5,
     build_cr1, build_cr4, build_cr5,
     # Market risk
-    MR1Row, MR2Row, Pillar3MR1, Pillar3MR2,
-    build_mr1, build_mr2,
+    IMAInputs, IMARiskMeasure, MR1Row, MR2Row, MR3Row,
+    Pillar3MR1, Pillar3MR2, Pillar3MR3,
+    build_mr1, build_mr2, build_mr3,
     # Operational risk
     OR1Row, Pillar3OR1, build_or1,
     # Leverage ratio
@@ -80,8 +81,9 @@ __all__ = [
     "CR1Row", "CR4Row", "CR5Row",
     "Pillar3CR1", "Pillar3CR4", "Pillar3CR5",
     "build_cr1", "build_cr4", "build_cr5",
-    "MR1Row", "MR2Row", "Pillar3MR1", "Pillar3MR2",
-    "build_mr1", "build_mr2",
+    "IMAInputs", "IMARiskMeasure", "MR1Row", "MR2Row", "MR3Row",
+    "Pillar3MR1", "Pillar3MR2", "Pillar3MR3",
+    "build_mr1", "build_mr2", "build_mr3",
     "OR1Row", "Pillar3OR1", "build_or1",
     "LR1Row", "LR2Row", "Pillar3LR1", "Pillar3LR2",
     "build_lr1", "build_lr2",

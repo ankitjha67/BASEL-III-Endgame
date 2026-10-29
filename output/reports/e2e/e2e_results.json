@@ -6,7 +6,7 @@
     {
       "name": "Portfolio generation",
       "status": "PASS",
-      "seconds": 0.01,
+      "seconds": 0.009,
       "headline": "565 credit exposures ($1,763,400M EAD), 130 trading positions",
       "checks": [
         {
@@ -25,7 +25,7 @@
     {
       "name": "SA credit risk (\u00a7 __.111)",
       "status": "PASS",
-      "seconds": 0.013,
+      "seconds": 0.011,
       "headline": "EAD $1,924,996M  RWA $792,369M  density 41.2%",
       "checks": [
         {
@@ -49,7 +49,7 @@
     {
       "name": "Off-balance sheet CCFs (\u00a7 __.112)",
       "status": "PASS",
-      "seconds": 0.008,
+      "seconds": 0.012,
       "headline": "notional $903,275M  EAD $273,315M  RWA $168,602M",
       "checks": [
         {
@@ -68,7 +68,7 @@
     {
       "name": "SA-CCR (\u00a7 __.114)",
       "status": "PASS",
-      "seconds": 0.129,
+      "seconds": 0.18,
       "headline": "300 netting sets  notional $5,740,825M  EAD $230,659M  RWA $143,616M",
       "checks": [
         {
@@ -92,7 +92,7 @@
     {
       "name": "CVA (\u00a7 __.222)",
       "status": "PASS",
-      "seconds": 0.005,
+      "seconds": 0.009,
       "headline": "BA-CVA-REDUCED K $10,113M  RWA $126,417M  (300 counterparties)",
       "checks": [
         {
@@ -149,7 +149,7 @@
     {
       "name": "FRTB SBM + DRC + RRAO",
       "status": "PASS",
-      "seconds": 0.525,
+      "seconds": 0.479,
       "headline": "167 sensitivities  SBM $16,260M  DRC $136M  RRAO $80M  RWA $205,949M",
       "checks": [
         {
@@ -168,7 +168,7 @@
     {
       "name": "ECL / CECL",
       "status": "PASS",
-      "seconds": 0.009,
+      "seconds": 0.007,
       "headline": "530 loans  EAD $981,325M  ECL $16,624M  coverage 1.69%",
       "checks": [
         {
@@ -221,45 +221,22 @@
       "name": "G-SIB surcharge",
       "status": "PASS",
       "seconds": 0.0,
-      "headline": "Method 1 512bp (2.9%) | Method 2 386bp (2.2%) -> 2.9% (METHOD_1)",
+      "headline": "proposal: M1 388bp (2.0%) | M2 664bp (3.4%) -> 3.4% (METHOD_2); current rule M2 779bp -> 4.0%",
       "checks": [
         {
           "check": "surcharge between 1.0% and 5.0%",
           "ok": true,
-          "detail": "0.029 in [0.010, 0.050]"
-        }
-      ],
-      "error": ""
-    },
-    {
-      "name": "Ratios, buffers, PCA",
-      "status": "PASS",
-      "seconds": 0.0,
-      "headline": "CET1 12.22%  T1 13.63%  Total 16.37%  SLR 5.91%  PCA WELL_CAPITALIZED",
-      "checks": [
-        {
-          "check": "CET1 ratio (CLAUDE.md 10-15%)",
-          "ok": true,
-          "detail": "0.1222 in [0.1000, 0.1500]"
+          "detail": "0.034 in [0.010, 0.050]"
         },
         {
-          "check": "SLR (CLAUDE.md 5-7%)",
+          "check": "identified as GSIB (method 1 >= 130 bp)",
           "ok": true,
-          "detail": "0.0591 in [0.0500, 0.0700]"
-        }
-      ],
-      "error": ""
-    },
-    {
-      "name": "Large exposures (SCCL)",
-      "status": "PASS",
-      "seconds": 0.001,
-      "headline": "30 counterparties, 23 reportable, 1 limit breaches, largest 18.4% of T1",
-      "checks": [
+          "detail": "388 in [130, 2000]"
+        },
         {
-          "check": "counterparties assessed",
+          "check": "proposal lowers method 2 score vs current rule",
           "ok": true,
-          "detail": "40 in [40, 40]"
+          "detail": "0.853 in [0.000, 1.000]"
         }
       ],
       "error": ""
@@ -284,10 +261,48 @@
       "error": ""
     },
     {
+      "name": "Ratios, buffers, PCA",
+      "status": "PASS",
+      "seconds": 0.0,
+      "headline": "CET1 12.22%  T1 13.63%  Total 16.37%  SLR 5.91%  PCA WELL_CAPITALIZED",
+      "checks": [
+        {
+          "check": "CET1 ratio (CLAUDE.md 10-15%)",
+          "ok": true,
+          "detail": "0.1222 in [0.1000, 0.1500]"
+        },
+        {
+          "check": "SLR (CLAUDE.md 5-7%)",
+          "ok": true,
+          "detail": "0.0591 in [0.0500, 0.0700]"
+        },
+        {
+          "check": "SCB in buffer stack = stress-test SCB",
+          "ok": true,
+          "detail": "0.0551 in [0.0551, 0.0551]"
+        }
+      ],
+      "error": ""
+    },
+    {
+      "name": "Large exposures (SCCL)",
+      "status": "PASS",
+      "seconds": 0.001,
+      "headline": "30 counterparties, 23 reportable, 1 limit breaches, largest 18.4% of T1",
+      "checks": [
+        {
+          "check": "counterparties assessed",
+          "ok": true,
+          "detail": "40 in [40, 40]"
+        }
+      ],
+      "error": ""
+    },
+    {
       "name": "Fed reports (Y-9C, 101, Y-15, Y-14)",
       "status": "PASS",
       "seconds": 0.001,
-      "headline": "reports: FR_Y_9C, FFIEC_101, FR_Y_15, FR_Y_14 | cross-validation 3/4 | DQ pass=False",
+      "headline": "reports: FR_Y_9C, FFIEC_101, FR_Y_15, FR_Y_14 | cross-validation 4/4 | DQ pass=True",
       "checks": [
         {
           "check": "four Fed reports generated",
@@ -301,7 +316,7 @@
       "name": "Pillar 3 disclosures",
       "status": "PASS",
       "seconds": 0.0,
-      "headline": "5 templates: OV1, KM1, MR1, LR1, LR2 | not produced: MR2, MR3, MR4",
+      "headline": "5 templates: OV1, KM1, MR1, LR1, LR2",
       "checks": [
         {
           "check": "Pillar 3 templates produced",
@@ -335,14 +350,14 @@
     "leverage_ratio": 0.05912372751928002
   },
   "buffers": {
-    "capital_conservation_buffer": 0.032,
+    "capital_conservation_buffer": 0.05514489282987152,
     "countercyclical_buffer": 0.0,
-    "gsib_surcharge": 0.029000000000000005,
-    "stress_capital_buffer": 0.032,
-    "combined_buffer_requirement": 0.061000000000000006,
-    "effective_cet1_minimum": 0.10600000000000001,
-    "effective_tier1_minimum": 0.121,
-    "effective_total_capital_minimum": 0.14100000000000001
+    "gsib_surcharge": 0.034,
+    "stress_capital_buffer": 0.05514489282987152,
+    "combined_buffer_requirement": 0.08914489282987152,
+    "effective_cet1_minimum": 0.13414489282987152,
+    "effective_tier1_minimum": 0.14914489282987153,
+    "effective_total_capital_minimum": 0.16914489282987152
   },
   "pca": "WELL_CAPITALIZED",
   "capital": {
@@ -353,9 +368,9 @@
     "total": 278624.45600840176
   },
   "gsib": {
-    "method1_bps": 511.7224127980279,
-    "method2_bps": 386.3788165227413,
-    "surcharge": 2.9000000000000004,
-    "binding": "GSIBMethod.METHOD_1"
+    "method1_bps": 387.68676800483115,
+    "method2_bps": 664.4586125000001,
+    "surcharge": 3.4,
+    "binding": "GSIBMethod.METHOD_2"
   }
 }

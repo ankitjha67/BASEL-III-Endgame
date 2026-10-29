@@ -372,9 +372,9 @@ class TestReportingParams:
         assert BCBS_239_THRESHOLDS.timeliness_max_days > 0
 
     def test_pillar3_templates(self) -> None:
-        """All Pillar 3 templates defined."""
+        """All Pillar 3 templates defined (DIS50 market risk: MR1-MR3)."""
         from src.reporting.reporting_params import Pillar3Template
-        assert len(Pillar3Template) == 20
+        assert len(Pillar3Template) == 19
 
     def test_filing_frequencies(self) -> None:
         """Filing frequencies are correct."""
@@ -610,56 +610,41 @@ class TestFRY15:
     def test_method2_score(
         self, gsib_indicator_values: dict[str, float],
     ) -> None:
-        """Method 2 score includes STWF component."""
+        """Method 2 score includes the STWF component (12 CFR 217.405)."""
         from src.reporting.fr_y15 import compute_method2_score
-        stwf = {
-            "stwf_0_30_days": 150_000.0,
-            "stwf_31_90_days": 120_000.0,
-            "stwf_91_180_days": 80_000.0,
-            "stwf_181_365_days": 60_000.0,
-        }
-        result = compute_method2_score(
-            gsib_indicator_values, stwf, 3_200_000.0,
-        )
+        result = compute_method2_score(gsib_indicator_values)
         assert result.total_score_bps > 0
-        # Should have STWF category
         cats = {c.category for c in result.category_scores}
         assert "STWF (Method 2)" in cats
+        assert "Substitutability" not in cats
 
     def test_surcharge_bands(self) -> None:
-        """Score-to-surcharge uses 20bp bands / 0.1% increments per 2026."""
+        """Method 1 uses Table 1 to § 217.403 (100 bp bands, unchanged by the
+        2026 proposal); method 2 uses the proposal's 20 bp / 0.1% bands."""
         from src.reporting.fr_y15 import score_to_surcharge
-        # Score of 130 bps -> first band -> 1.0%
-        surcharge, bucket, _, _ = score_to_surcharge(130.0)
-        assert surcharge == 1.0
-        assert bucket == 1
-
-        # Score of 150 bps -> second band -> 1.1%
-        surcharge, bucket, _, _ = score_to_surcharge(150.0)
-        assert surcharge == pytest.approx(1.1)
-        assert bucket == 2
-
-        # Score of 170 bps -> third band -> 1.2%
-        surcharge, bucket, _, _ = score_to_surcharge(170.0)
-        assert surcharge == pytest.approx(1.2)
-        assert bucket == 3
+        assert score_to_surcharge(130.0, method=1)[0] == 1.0
+        assert score_to_surcharge(229.0, method=1)[0] == 1.0
+        assert score_to_surcharge(230.0, method=1)[0] == 1.5
+        assert score_to_surcharge(530.0, method=1)[0] == 3.5
+        assert score_to_surcharge(189.0, method=2)[0] == 1.0
+        assert score_to_surcharge(190.0, method=2)[0] == pytest.approx(1.1)
+        assert score_to_surcharge(210.0, method=2)[0] == pytest.approx(1.2)
 
     def test_surcharge_minimum(self) -> None:
-        """Score below threshold gets minimum 1.0% surcharge."""
+        """Method 1 below 130 bp is 0.0% (not a GSIB); method 2 floor is 1.0%."""
         from src.reporting.fr_y15 import score_to_surcharge
-        surcharge, _, _, _ = score_to_surcharge(50.0)
-        assert surcharge == 1.0
+        assert score_to_surcharge(50.0, method=1)[0] == 0.0
+        assert score_to_surcharge(50.0, method=2)[0] == 1.0
 
     def test_substitutability_cap(self) -> None:
-        """Substitutability category capped at 500bps."""
+        """Substitutability indicator scores capped at 100 bp (§ 217.404(b)(2))."""
         from src.reporting.fr_y15 import compute_method1_score
-        # Create data with extremely high substitutability
         vals = {
             "total_exposures": 3_500_000.0,
             "intra_financial_system_assets": 250_000.0,
             "intra_financial_system_liabilities": 280_000.0,
             "securities_outstanding": 350_000.0,
-            "payments_activity": 500_000_000.0,  # Very high
+            "payments_activity": 3_000_000_000.0,  # Very high
             "assets_under_custody": 100_000_000.0,  # Very high
             "underwriting_activity": 5_000_000.0,  # Very high
             "otc_derivatives_notional": 45_000_000.0,
@@ -671,7 +656,7 @@ class TestFRY15:
         result = compute_method1_score(vals)
         sub_cat = [c for c in result.category_scores if c.category == "Substitutability"][0]
         assert sub_cat.cap_applied is True
-        assert sub_cat.capped_score_bps == 500.0
+        assert sub_cat.capped_score_bps == 100.0
 
     def test_fr_y15_data_quality(
         self, gsib_indicator_values: dict[str, float],

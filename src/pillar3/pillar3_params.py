@@ -64,6 +64,9 @@ class TemplateDefinition:
     category: str
     row_count: int = 0
     column_count: int = 0
+    applies_to: str = "ALL"
+    """Approach condition: "ALL", or the market-risk approach that triggers it
+    ("SA", "IMA", "SSA") per the template's DIS50 scope of application."""
 
 
 # Overview and Key Metrics
@@ -185,54 +188,47 @@ TEMPLATE_CR5 = TemplateDefinition(
     column_count=12,
 )
 
-# Market Risk Templates
+# Market Risk Templates -- Basel Framework DIS50 (FRTB version)
 TEMPLATE_MR1 = TemplateDefinition(
     template_id="MR1",
-    name="Market Risk Under Standardised Approach",
-    description="Capital requirements under the FRTB standardised approach "
-                "by risk class (GIRR, CSR, Equity, Commodity, FX).",
-    frequency=DisclosureFrequency.QUARTERLY,
+    name="Market risk under the standardised approach",
+    description="SA capital requirement (MAR20-MAR23) by risk class, DRC and RRAO; "
+                "mandatory where any market-risk capital is measured under the SA.",
+    frequency=DisclosureFrequency.SEMI_ANNUAL,
     disclosure_type=DisclosureType.FIXED_FORMAT,
-    regulatory_reference="BCBS d455 Table MR1",
+    regulatory_reference="Basel Framework DIS50, Template MR1",
     category="market_risk",
-    row_count=15,
-    column_count=2,
+    row_count=12,
+    column_count=1,
+    applies_to="SA",
 )
 
 TEMPLATE_MR2 = TemplateDefinition(
     template_id="MR2",
-    name="RWA Flow Statements of Market Risk Exposures Under SA",
-    description="Movements in market risk RWA during the reporting period.",
+    name="Market risk for banks using the IMA",
+    description="ES, IMCC, SES, DRC, amber-desk surcharge and total capital under MAR33; "
+                "mandatory for banks using the IMA for part or all of market risk.",
     frequency=DisclosureFrequency.QUARTERLY,
     disclosure_type=DisclosureType.FIXED_FORMAT,
-    regulatory_reference="BCBS d455 Table MR2",
+    regulatory_reference="Basel Framework DIS50, Template MR2",
     category="market_risk",
-    row_count=8,
-    column_count=2,
+    row_count=16,
+    column_count=7,
+    applies_to="IMA",
 )
 
 TEMPLATE_MR3 = TemplateDefinition(
     template_id="MR3",
-    name="Market Risk Under IMA (where applicable)",
-    description="VaR, stressed VaR, and incremental risk charge under IMA.",
-    frequency=DisclosureFrequency.QUARTERLY,
+    name="Market risk under the simplified standardised approach",
+    description="MAR40 capital requirement by risk and product type; mandatory for banks "
+                "using the simplified standardised approach.",
+    frequency=DisclosureFrequency.SEMI_ANNUAL,
     disclosure_type=DisclosureType.FIXED_FORMAT,
-    regulatory_reference="BCBS d455 Table MR3",
+    regulatory_reference="Basel Framework DIS50, Template MR3",
     category="market_risk",
-    row_count=10,
-    column_count=2,
-)
-
-TEMPLATE_MR4 = TemplateDefinition(
-    template_id="MR4",
-    name="Comparison of VaR Estimates with Gains/Losses",
-    description="Backtesting results: VaR estimates vs actual P&L.",
-    frequency=DisclosureFrequency.QUARTERLY,
-    disclosure_type=DisclosureType.FIXED_FORMAT,
-    regulatory_reference="BCBS d455 Table MR4",
-    category="market_risk",
-    row_count=5,
-    column_count=2,
+    row_count=6,
+    column_count=4,
+    applies_to="SSA",
 )
 
 # Operational Risk
@@ -293,7 +289,6 @@ TEMPLATE_REGISTRY: dict[str, TemplateDefinition] = {
     "MR1": TEMPLATE_MR1,
     "MR2": TEMPLATE_MR2,
     "MR3": TEMPLATE_MR3,
-    "MR4": TEMPLATE_MR4,
     "OR1": TEMPLATE_OR1,
     "LR1": TEMPLATE_LR1,
     "LR2": TEMPLATE_LR2,
@@ -304,20 +299,26 @@ Reference: BCBS d400/d455."""
 
 def get_templates_by_frequency(
     frequency: DisclosureFrequency,
+    market_risk_approaches: frozenset[str] = frozenset({"SA"}),
 ) -> list[TemplateDefinition]:
-    """Get all templates that must be published at the given frequency.
+    """Templates that must be published at a frequency, given the bank's approaches.
+
+    Templates scoped to a market-risk approach (DIS50 MR1/MR2/MR3) are
+    required only when the bank uses that approach.
 
     Args:
         frequency: Publication frequency to filter by.
+        market_risk_approaches: Subset of {"SA", "IMA", "SSA"} the bank uses.
 
     Returns:
-        List of TemplateDefinition matching the frequency.
+        List of TemplateDefinition matching the frequency and scope.
 
-    Reference: BCBS d400, Section 2.
+    Reference: BCBS d400, Section 2; Basel Framework DIS50 scope of application.
     """
     return [
         t for t in TEMPLATE_REGISTRY.values()
         if t.frequency == frequency
+        and (t.applies_to == "ALL" or t.applies_to in market_risk_approaches)
     ]
 
 

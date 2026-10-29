@@ -1,21 +1,15 @@
-"""G-SIB Surcharge Module — Basel III Endgame 2026.
+"""G-SIB surcharge (12 CFR 217 Subpart H and the March 2026 G-SIB NPR).
 
-Implements the G-SIB capital surcharge calculation per:
-- G-SIB NPR (128 pages): "Risk-Based Capital Surcharges for GSIBs"
-- 12 CFR 217 Subpart H: G-SIB Surcharge
-- FR Y-15: Banking Organization Systemic Risk Report
-
-Key features:
-- Method 1: BCBS substitutability-based (12 indicators, 5 categories)
-- Method 2: US-specific STWF-based (1.2x downward adjustment)
-- Higher-of Method 1 vs Method 2 determination
-- Surcharge bands: 20bp score ranges / 0.1% increments
-- FR Y-15 report generation
-- Sensitivity and what-if analysis
-
-Per CLAUDE.md:
-- G-SIB Method 2 coefficients adjusted by 1.2x downward factor
-- G-SIB surcharge bands: 20bp score ranges / 0.1% increments (NOT 100bp/0.5%)
+- Method 1 (§ 217.404): indicator / aggregate global indicator amount x
+  10,000 x weight; substitutability capped at 100 bp; Table 1 to § 217.403
+  bands (unchanged by the proposal).
+- Method 2 (§ 217.405): indicator ($bn) x fixed coefficient; current rule
+  adds the § 217.406 STWF score (weighted STWF / average RWA x 350); the
+  proposal (FR Doc. 2026-05961) divides coefficients by 1.2, indexes them
+  by a GDP growth adjustment, scores weighted STWF with coefficient 23.003,
+  and uses 20 bp / 0.1% bands above 190 bp.
+- Surcharge = max(method 1, method 2) (§ 217.403(a)); effective-date
+  mechanics § 217.403(d).
 """
 
 from src.capital.gsib.gsib_calculator import (
@@ -33,6 +27,7 @@ from src.capital.gsib.gsib_indicators import (
     GSIBIndicatorData,
     IndicatorValue,
     STWFBucketValue,
+    STWFComponent,
     STWFScore,
     calculate_category_scores,
     calculate_indicator_score,
@@ -40,25 +35,27 @@ from src.capital.gsib.gsib_indicators import (
     calculate_method2_score,
     calculate_stwf_score,
     validate_indicator_data,
+    weighted_stwf,
 )
 from src.capital.gsib.gsib_params import (
-    CATEGORY_WEIGHT,
+    AGGREGATE_GLOBAL_INDICATORS_2025,
     DEFAULT_DENOMINATION_FACTORS,
+    DEFAULT_RULE_VERSION,
+    METHOD_1_INDICATORS_CURRENT,
+    METHOD_1_INDICATORS_PROPOSAL,
+    METHOD_2_COEFFICIENTS_CURRENT_PCT,
+    METHOD_2_COEFFICIENTS_PROPOSAL_PCT,
+    STWF_WEIGHTS,
+    SUBSTITUTABILITY_CAP_BPS,
     DenominationFactors,
     GSIBCategory,
     GSIBIndicatorCategory,
     GSIBMethod,
-    INDICATOR_LOOKUP,
-    METHOD_1_BAND_WIDTH_BPS,
-    METHOD_1_INDICATORS,
-    METHOD_1_INITIAL_THRESHOLD_BPS,
-    METHOD_1_MIN_SURCHARGE_PCT,
-    METHOD_1_SURCHARGE_INCREMENT_PCT,
-    METHOD_2_ADJUSTED_COEFFICIENT,
-    METHOD_2_BASE_COEFFICIENT,
-    METHOD_2_DOWNWARD_FACTOR,
-    SUBSTITUTABILITY_CAP_BPS,
+    GSIBRuleVersion,
     IndicatorSpec,
+    STWFMaturityBucket,
+    effective_surcharge_pct,
+    gdp_growth_adjustment,
 )
 from src.capital.gsib.gsib_reporting import (
     FRY15Report,
@@ -77,57 +74,56 @@ from src.capital.gsib.gsib_reporting import (
 )
 
 __all__ = [
-    # Calculator
-    "GSIBCalculator",
-    "GSIBSurchargeResult",
-    "MethodResult",
-    "calculate_gsib_surcharge",
-    "create_indicator_data_from_dict",
-    "get_surcharge_for_score",
-    "score_to_method1_surcharge",
-    "score_to_method2_surcharge",
-    # Indicators
+    "AGGREGATE_GLOBAL_INDICATORS_2025",
     "CategoryScore",
+    "DEFAULT_DENOMINATION_FACTORS",
+    "DEFAULT_RULE_VERSION",
+    "DenominationFactors",
+    "FRY15Report",
+    "FRY15Schedule",
+    "FRY15ScheduleLineItem",
+    "GSIBCalculator",
+    "GSIBCategory",
+    "GSIBIndicatorCategory",
     "GSIBIndicatorData",
+    "GSIBMethod",
+    "GSIBRuleVersion",
+    "GSIBSurchargeResult",
+    "IndicatorSpec",
     "IndicatorValue",
+    "METHOD_1_INDICATORS_CURRENT",
+    "METHOD_1_INDICATORS_PROPOSAL",
+    "METHOD_2_COEFFICIENTS_CURRENT_PCT",
+    "METHOD_2_COEFFICIENTS_PROPOSAL_PCT",
+    "MethodComparisonReport",
+    "MethodResult",
     "STWFBucketValue",
+    "STWFComponent",
+    "STWFMaturityBucket",
     "STWFScore",
+    "STWF_WEIGHTS",
+    "SUBSTITUTABILITY_CAP_BPS",
+    "SurchargeBucketReport",
     "calculate_category_scores",
+    "calculate_gsib_surcharge",
     "calculate_indicator_score",
     "calculate_method1_score",
     "calculate_method2_score",
     "calculate_stwf_score",
-    "validate_indicator_data",
-    # Params
-    "CATEGORY_WEIGHT",
-    "DEFAULT_DENOMINATION_FACTORS",
-    "DenominationFactors",
-    "GSIBCategory",
-    "GSIBIndicatorCategory",
-    "GSIBMethod",
-    "INDICATOR_LOOKUP",
-    "IndicatorSpec",
-    "METHOD_1_BAND_WIDTH_BPS",
-    "METHOD_1_INDICATORS",
-    "METHOD_1_INITIAL_THRESHOLD_BPS",
-    "METHOD_1_MIN_SURCHARGE_PCT",
-    "METHOD_1_SURCHARGE_INCREMENT_PCT",
-    "METHOD_2_ADJUSTED_COEFFICIENT",
-    "METHOD_2_BASE_COEFFICIENT",
-    "METHOD_2_DOWNWARD_FACTOR",
-    "SUBSTITUTABILITY_CAP_BPS",
-    # Reporting
-    "FRY15Report",
-    "FRY15Schedule",
-    "FRY15ScheduleLineItem",
-    "MethodComparisonReport",
-    "SurchargeBucketReport",
+    "create_indicator_data_from_dict",
+    "effective_surcharge_pct",
     "format_fr_y15_text",
     "format_method_comparison_text",
     "format_surcharge_bucket_text",
     "fr_y15_report_to_dict",
+    "gdp_growth_adjustment",
     "generate_fr_y15_report",
     "generate_method_comparison",
     "generate_surcharge_bucket_report",
+    "get_surcharge_for_score",
+    "score_to_method1_surcharge",
+    "score_to_method2_surcharge",
     "surcharge_result_to_dict",
+    "validate_indicator_data",
+    "weighted_stwf",
 ]

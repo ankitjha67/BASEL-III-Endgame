@@ -589,10 +589,9 @@ class Pillar3Template(Enum):
     SEC2 = "SEC2"  # Securitization exposures in trading book
     SEC3 = "SEC3"  # Securitization exposures in banking book — risk weight
     SEC4 = "SEC4"  # Securitization exposures in banking book — approach
-    MR1 = "MR1"    # Market risk under SA
-    MR2 = "MR2"    # RWA flow statements for market risk
-    MR3 = "MR3"    # IMA values for trading portfolios
-    MR4 = "MR4"    # Comparison of VaR estimates with gains/losses
+    MR1 = "MR1"    # Market risk under the standardised approach (DIS50)
+    MR2 = "MR2"    # Market risk for banks using the IMA (DIS50)
+    MR3 = "MR3"    # Market risk under the simplified standardised approach (DIS50)
     OR1 = "OR1"    # Operational risk
     LR1 = "LR1"    # Summary comparison of accounting assets vs leverage ratio
     LR2 = "LR2"    # Leverage ratio common disclosure
@@ -612,10 +611,9 @@ PILLAR_3_FILING_FREQUENCY: dict[Pillar3Template, FilingFrequency] = {
     Pillar3Template.SEC2: FilingFrequency.SEMI_ANNUAL,
     Pillar3Template.SEC3: FilingFrequency.SEMI_ANNUAL,
     Pillar3Template.SEC4: FilingFrequency.SEMI_ANNUAL,
-    Pillar3Template.MR1: FilingFrequency.QUARTERLY,
+    Pillar3Template.MR1: FilingFrequency.SEMI_ANNUAL,
     Pillar3Template.MR2: FilingFrequency.QUARTERLY,
-    Pillar3Template.MR3: FilingFrequency.QUARTERLY,
-    Pillar3Template.MR4: FilingFrequency.QUARTERLY,
+    Pillar3Template.MR3: FilingFrequency.SEMI_ANNUAL,
     Pillar3Template.OR1: FilingFrequency.ANNUAL,
     Pillar3Template.LR1: FilingFrequency.QUARTERLY,
     Pillar3Template.LR2: FilingFrequency.QUARTERLY,

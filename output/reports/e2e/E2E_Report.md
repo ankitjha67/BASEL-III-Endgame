@@ -14,20 +14,20 @@ All amounts in $M. Synthetic, seeded portfolio; figures illustrate the engine an
 | 1 | Portfolio generation | PASS | 0.01 | 565 credit exposures ($1,763,400M EAD), 130 trading positions |
 | 2 | SA credit risk (§ __.111) | PASS | 0.01 | EAD $1,924,996M  RWA $792,369M  density 41.2% |
 | 3 | Off-balance sheet CCFs (§ __.112) | PASS | 0.01 | notional $903,275M  EAD $273,315M  RWA $168,602M |
-| 4 | SA-CCR (§ __.114) | PASS | 0.13 | 300 netting sets  notional $5,740,825M  EAD $230,659M  RWA $143,616M |
-| 5 | CVA (§ __.222) | PASS | 0.00 | BA-CVA-REDUCED K $10,113M  RWA $126,417M  (300 counterparties) |
+| 4 | SA-CCR (§ __.114) | PASS | 0.18 | 300 netting sets  notional $5,740,825M  EAD $230,659M  RWA $143,616M |
+| 5 | CVA (§ __.222) | PASS | 0.01 | BA-CVA-REDUCED K $10,113M  RWA $126,417M  (300 counterparties) |
 | 6 | Securitization SEC-SA (§ __.133) | PASS | 0.00 | 15 tranches  exposure $48,500M  RWA $64,780M |
 | 7 | Operational risk (§ __.150) | PASS | 0.00 | BI $83,980M  BIC $14,186M  RWA $177,330M  ILM 1.0 |
-| 8 | FRTB SBM + DRC + RRAO | PASS | 0.53 | 167 sensitivities  SBM $16,260M  DRC $136M  RRAO $80M  RWA $205,949M |
+| 8 | FRTB SBM + DRC + RRAO | PASS | 0.48 | 167 sensitivities  SBM $16,260M  DRC $136M  RRAO $80M  RWA $205,949M |
 | 9 | ECL / CECL | PASS | 0.01 | 530 loans  EAD $981,325M  ECL $16,624M  coverage 1.69% |
 | 10 | RWA aggregation | PASS | 0.00 | total RWA $1,701,564M  (credit 70%, market 12%, op 10%, CVA 7%) |
 | 11 | Capital stack | PASS | 0.00 | CET1 $208,000M  T1 $232,000M  Total $278,624M |
-| 12 | G-SIB surcharge | PASS | 0.00 | Method 1 512bp (2.9%) | Method 2 386bp (2.2%) -> 2.9% (METHOD_1) |
-| 13 | Ratios, buffers, PCA | PASS | 0.00 | CET1 12.22%  T1 13.63%  Total 16.37%  SLR 5.91%  PCA WELL_CAPITALIZED |
-| 14 | Large exposures (SCCL) | PASS | 0.00 | 30 counterparties, 23 reportable, 1 limit breaches, largest 18.4% of T1 |
-| 15 | CCAR stress test | PASS | 0.00 | severely adverse min CET1 6.71% (Q9), SCB 5.51%, pass=True |
-| 16 | Fed reports (Y-9C, 101, Y-15, Y-14) | PASS | 0.00 | reports: FR_Y_9C, FFIEC_101, FR_Y_15, FR_Y_14 | cross-validation 3/4 | DQ pass=False |
-| 17 | Pillar 3 disclosures | PASS | 0.00 | 5 templates: OV1, KM1, MR1, LR1, LR2 | not produced: MR2, MR3, MR4 |
+| 12 | G-SIB surcharge | PASS | 0.00 | proposal: M1 388bp (2.0%) | M2 664bp (3.4%) -> 3.4% (METHOD_2); current rule M2 779bp -> 4.0% |
+| 13 | CCAR stress test | PASS | 0.00 | severely adverse min CET1 6.71% (Q9), SCB 5.51%, pass=True |
+| 14 | Ratios, buffers, PCA | PASS | 0.00 | CET1 12.22%  T1 13.63%  Total 16.37%  SLR 5.91%  PCA WELL_CAPITALIZED |
+| 15 | Large exposures (SCCL) | PASS | 0.00 | 30 counterparties, 23 reportable, 1 limit breaches, largest 18.4% of T1 |
+| 16 | Fed reports (Y-9C, 101, Y-15, Y-14) | PASS | 0.00 | reports: FR_Y_9C, FFIEC_101, FR_Y_15, FR_Y_14 | cross-validation 4/4 | DQ pass=True |
+| 17 | Pillar 3 disclosures | PASS | 0.00 | 5 templates: OV1, KM1, MR1, LR1, LR2 |
 
 ### Plausibility and regulatory checks
 
@@ -56,12 +56,15 @@ All amounts in $M. Synthetic, seeded portfolio; figures illustrate the engine an
 | RWA aggregation | output floor not applied | yes | 0 in [0, 0] |
 | Capital stack | CET1 $M | yes | 208,000 in [120,000, 280,000] |
 | Capital stack | MSAs not deducted (250% RW instead) | yes | 0 in [0, 0] |
-| G-SIB surcharge | surcharge between 1.0% and 5.0% | yes | 0.029 in [0.010, 0.050] |
-| Ratios, buffers, PCA | CET1 ratio (CLAUDE.md 10-15%) | yes | 0.1222 in [0.1000, 0.1500] |
-| Ratios, buffers, PCA | SLR (CLAUDE.md 5-7%) | yes | 0.0591 in [0.0500, 0.0700] |
-| Large exposures (SCCL) | counterparties assessed | yes | 40 in [40, 40] |
+| G-SIB surcharge | surcharge between 1.0% and 5.0% | yes | 0.034 in [0.010, 0.050] |
+| G-SIB surcharge | identified as GSIB (method 1 >= 130 bp) | yes | 388 in [130, 2000] |
+| G-SIB surcharge | proposal lowers method 2 score vs current rule | yes | 0.853 in [0.000, 1.000] |
 | CCAR stress test | severely adverse min CET1 >= 4.5% | yes | 0.0671 in [0.0450, 0.2000] |
 | CCAR stress test | SCB floor 2.5% | yes | 0.0551 in [0.0250, 0.1000] |
+| Ratios, buffers, PCA | CET1 ratio (CLAUDE.md 10-15%) | yes | 0.1222 in [0.1000, 0.1500] |
+| Ratios, buffers, PCA | SLR (CLAUDE.md 5-7%) | yes | 0.0591 in [0.0500, 0.0700] |
+| Ratios, buffers, PCA | SCB in buffer stack = stress-test SCB | yes | 0.0551 in [0.0551, 0.0551] |
+| Large exposures (SCCL) | counterparties assessed | yes | 40 in [40, 40] |
 | Fed reports (Y-9C, 101, Y-15, Y-14) | four Fed reports generated | yes | 4 in [4, 10] |
 | Pillar 3 disclosures | Pillar 3 templates produced | yes | 5 in [4, 40] |
 
@@ -87,10 +90,10 @@ All amounts in $M. Synthetic, seeded portfolio; figures illustrate the engine an
 | Tier 1 ratio | 13.63% |
 | Total capital ratio | 16.37% |
 | Supplementary leverage ratio | 5.91% |
-| stress capital buffer | 3.20% |
-| gsib surcharge | 2.90% |
+| stress capital buffer | 5.51% |
+| gsib surcharge | 3.40% |
 | PCA category | WELL_CAPITALIZED |
-| Meets minimums / buffers | True / True |
+| Meets minimums / buffers | True / False |
 
 ## Market risk (FRTB standardized)
 
@@ -116,7 +119,7 @@ Approach BA-CVA-REDUCED; K_unhedged 15,559; K 10,113; RWA 126,417 over 300 count
 
 ## G-SIB surcharge
 
-Method 1 512 bp -> 2.9%; Method 2 386 bp -> 2.2%; binding METHOD_1: **2.9%**.
+Method 1 388 bp -> 2.0%; Method 2 664 bp -> 3.4%; binding METHOD_2: **3.4%**.
 
 ## CCAR stress test (9 quarters)
 
@@ -130,11 +133,11 @@ Stress capital buffer 5.51%; overall pass True.
 
 ## Regulatory reports
 
-Generated: FR_Y_9C, FFIEC_101, FR_Y_15, FR_Y_14. Overall data-quality pass: False.
+Generated: FR_Y_9C, FFIEC_101, FR_Y_15, FR_Y_14. Overall data-quality pass: True.
 
 | Cross-validation check | Passed | Detail |
 |---|---|---|
 | Total RWA: FR Y-9C vs FFIEC 101 | True | RWA deviation: $0.00M |
 | Credit Risk RWA: FR Y-9C vs FFIEC 101 | True | Credit Risk RWA deviation: $0.00M |
 | CET1 ratio consistency: Part I vs Part II | True | CET1 ratio deviation: 0.000000 |
-| G-SIB surcharge: FR Y-9C vs FR Y-15 | False | Surcharge deviation: 0.0060 |
+| G-SIB surcharge: FR Y-9C vs FR Y-15 | True | Surcharge deviation: 0.0000 |

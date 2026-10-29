@@ -35,11 +35,16 @@ from src.pillar3.templates.credit_risk_disclosure import (
 )
 from src.pillar3.templates.market_risk_disclosure import (
     MR1Row,
+    IMAInputs,
+    IMARiskMeasure,
     MR2Row,
+    MR3Row,
     Pillar3MR1,
     Pillar3MR2,
+    Pillar3MR3,
     build_mr1,
     build_mr2,
+    build_mr3,
 )
 from src.pillar3.templates.operational_risk_disclosure import (
     OR1Row,
@@ -67,8 +72,9 @@ __all__ = [
     "Pillar3CR1", "Pillar3CR2", "Pillar3CR4", "Pillar3CR5",
     "build_cr1", "build_cr2", "build_cr4", "build_cr5",
     # Market risk
-    "MR1Row", "MR2Row", "Pillar3MR1", "Pillar3MR2",
-    "build_mr1", "build_mr2",
+    "IMAInputs", "IMARiskMeasure", "MR1Row", "MR2Row", "MR3Row",
+    "Pillar3MR1", "Pillar3MR2", "Pillar3MR3",
+    "build_mr1", "build_mr2", "build_mr3",
     # Operational risk
     "OR1Row", "Pillar3OR1", "build_or1",
     # Leverage

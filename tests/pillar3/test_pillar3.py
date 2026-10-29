@@ -89,23 +89,26 @@ class TestTemplateRegistry:
     """Tests for Pillar 3 template registry and metadata."""
 
     def test_registry_has_all_templates(self) -> None:
-        """Registry contains all 16 expected templates."""
+        """Registry contains the 15 templates (DIS50 has MR1-MR3; MR4 was withdrawn)."""
         expected = {
             "OV1", "KM1", "CC1", "CC2",
             "CR1", "CR2", "CR3", "CR4", "CR5",
-            "MR1", "MR2", "MR3", "MR4",
+            "MR1", "MR2", "MR3",
             "OR1", "LR1", "LR2",
         }
         assert set(TEMPLATE_REGISTRY.keys()) == expected
 
     def test_quarterly_templates(self) -> None:
-        """Quarterly templates include OV1, KM1, MR1-MR4, LR1, LR2."""
+        """Quarterly templates: OV1, KM1, LR1, LR2; MR2 only for IMA banks (DIS50)."""
         quarterly = get_templates_by_frequency(DisclosureFrequency.QUARTERLY)
         quarterly_ids = {t.template_id for t in quarterly}
-        assert "OV1" in quarterly_ids
-        assert "KM1" in quarterly_ids
-        assert "MR1" in quarterly_ids
-        assert "LR1" in quarterly_ids
+        assert {"OV1", "KM1", "LR1", "LR2"} <= quarterly_ids
+        assert "MR2" not in quarterly_ids  # SA-only bank by default
+        ima = get_templates_by_frequency(DisclosureFrequency.QUARTERLY, frozenset({"SA", "IMA"}))
+        assert "MR2" in {t.template_id for t in ima}
+        semi = get_templates_by_frequency(DisclosureFrequency.SEMI_ANNUAL)
+        assert "MR1" in {t.template_id for t in semi}  # DIS50: MR1 is semiannual
+        assert "MR3" not in {t.template_id for t in semi}
 
     def test_semi_annual_templates(self) -> None:
         """Semi-annual templates include CC1, CC2, CR1-CR5."""
@@ -365,23 +368,61 @@ class TestMR1:
         assert result.total_rwa == pytest.approx(expected_total * 12.5)
 
     def test_mr1_rows(self) -> None:
-        """MR1 has 14 rows."""
-        result = build_mr1(girr_charge=50.0)
-        assert len(result.rows) == 14
+        """MR1 has the 12 DIS50 rows in order; row 12 is the total."""
+        result = build_mr1(girr_charge=50.0, equity_charge=7.0, rrao_charge=1.0)
+        assert len(result.rows) == 12
+        assert result.rows[0].description == "General interest rate risk"
+        assert result.rows[1].description == "Equity risk"
+        assert result.rows[10].description == "Residual risk add-on"
+        assert result.rows[11].capital_charge == pytest.approx(58.0)
 
 
 class TestMR2:
-    """Tests for MR2 template generation."""
+    """Template MR2 (DIS50): market risk for banks using the IMA."""
 
-    def test_mr2_closing_rwa(self) -> None:
-        """MR2 computes correct closing RWA."""
-        result = build_mr2(
-            opening_rwa=1_500.0,
-            movement_levels=200.0,
-            movement_fx=-50.0,
+    def test_mr2_formulas(self) -> None:
+        """Rows 8, 12 and 16 follow the DIS50 MR2 instructions."""
+        from src.pillar3.templates.market_risk_disclosure import IMAInputs, IMARiskMeasure
+        inputs = IMAInputs(
+            unconstrained_es=IMARiskMeasure(most_recent=100.0, average=90.0),
+            constrained_es=IMARiskMeasure(most_recent=140.0, average=130.0),
+            ses=IMARiskMeasure(most_recent=20.0, average=18.0),
+            drc=IMARiskMeasure(most_recent=30.0, average=35.0),
+            multiplier=1.5, amber_desk_surcharge=5.0,
+            sa_ineligible_desks=40.0, ima_minus_sa_green_amber=-10.0, sa_all_desks=400.0,
         )
-        assert result.closing_rwa == pytest.approx(1_650.0)
-        assert len(result.rows) == 8
+        r = build_mr2(inputs)
+        assert len(r.rows) == 16
+        # Row 8 IMCC = 0.5 x unconstrained + 0.5 x constrained
+        assert r.imcc_most_recent == pytest.approx(120.0)
+        assert r.imcc_average == pytest.approx(110.0)
+        # Row 12 = max(120 + 20, 1.5 x 110 + 18) + max(30, 35) + 5 = 183 + 35 + 5
+        assert r.green_amber_capital == pytest.approx(223.0)
+        # Row 16 = min(223 + 40, 400) + max(0, -10)
+        assert r.total_capital_charge == pytest.approx(263.0)
+        assert r.total_rwa == pytest.approx(263.0 * 12.5)
+
+    def test_mr2_sa_cap(self) -> None:
+        """Row 16 is capped by the SA requirement for all desks (row 15)."""
+        from src.pillar3.templates.market_risk_disclosure import IMAInputs, IMARiskMeasure
+        m = IMARiskMeasure(most_recent=100.0, average=100.0)
+        r = build_mr2(IMAInputs(unconstrained_es=m, constrained_es=m, ses=m, drc=m, multiplier=1.5,
+                                sa_ineligible_desks=50.0, sa_all_desks=200.0,
+                                ima_minus_sa_green_amber=15.0))
+        assert r.total_capital_charge == pytest.approx(200.0 + 15.0)
+
+
+class TestMR3:
+    """Template MR3 (DIS50): simplified standardised approach."""
+
+    def test_mr3_totals(self) -> None:
+        from src.pillar3.templates.market_risk_disclosure import build_mr3
+        r = build_mr3({"Interest rate risk": (10.0, 1.0, 2.0, 0.0), "Equity risk": (5.0, 0.0, 0.0, 3.0)})
+        assert len(r.rows) == 6
+        assert r.rows[5].outright == pytest.approx(15.0)
+        assert r.total_capital_charge == pytest.approx(21.0)
+        with pytest.raises(ValueError):
+            build_mr3({"Credit risk": (1.0, 0.0, 0.0, 0.0)})
 
 
 # =========================================================================

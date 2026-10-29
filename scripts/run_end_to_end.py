@@ -61,6 +61,11 @@ from src.capital.capital_components import (  # noqa: E402
     compute_total_capital,
 )
 from src.capital.capital_ratios import compute_capital_adequacy  # noqa: E402
+from src.capital.gsib.gsib_params import GSIBRuleVersion  # noqa: E402
+from src.data_generation.frtb_inputs import (  # noqa: E402
+    DEFAULT_NET_FRACTION,
+    trading_positions_to_frtb_inputs,
+)
 from src.capital.gsib.gsib_calculator import (  # noqa: E402
     calculate_gsib_surcharge,
     create_indicator_data_from_dict,
@@ -76,16 +81,9 @@ from src.capital.rwa_aggregator import (  # noqa: E402
     build_ffiec_101_schedule_a,
 )
 from src.core.enums import (  # noqa: E402
-    DRCExposureType,
-    DRCRatingCategory,
-    DRCSeniority,
-    GIRRRiskFactorType,
-    GIRRTenor,
-    RiskClass,
-    RiskMeasure,
     RRAOCategory,
 )
-from src.core.models import DRCPosition, RRAOPosition, Sensitivity  # noqa: E402
+from src.core.models import RRAOPosition  # noqa: E402
 from src.counterparty_risk.saccr.saccr import (  # noqa: E402
     SACCRCalculator,
     SACCRNettingSet,
@@ -140,7 +138,7 @@ ENTITY = "First National Banking Corp (synthetic)"
 # hedged, so the net sensitivities fed to the SBM are this fraction of the
 # generator's gross sensitivities. Chosen so FRTB capital lands in the range
 # a Category I firm reports (~$10-25B).
-TRADING_NET_FRACTION = 0.35
+TRADING_NET_FRACTION = DEFAULT_NET_FRACTION
 # Derivative trade maturities: lognormal around this median (years), which
 # mirrors the short-dated skew of dealer books (most notional < 5y).
 DERIV_MEDIAN_MATURITY_YEARS = 2.5
@@ -458,57 +456,15 @@ def run_oprisk(p: Pipeline, st: StageResult) -> None:
     check(st, "RWA = 12.5 x BIC (no ILM)", res.rwa / res.bic, 12.5, 12.5, ".2f")
 
 
-_TENOR = {"3M": GIRRTenor.Y0_25, "6M": GIRRTenor.Y0_5, "1Y": GIRRTenor.Y1, "2Y": GIRRTenor.Y2,
-          "3Y": GIRRTenor.Y3, "5Y": GIRRTenor.Y5, "10Y": GIRRTenor.Y10, "30Y": GIRRTenor.Y30}
-_CSR_TENOR = {"3M": GIRRTenor.Y0_5, "6M": GIRRTenor.Y0_5, "1Y": GIRRTenor.Y1, "2Y": GIRRTenor.Y3,
-              "3Y": GIRRTenor.Y3, "5Y": GIRRTenor.Y5, "10Y": GIRRTenor.Y10, "30Y": GIRRTenor.Y10}
-
-
 def run_frtb(p: Pipeline, st: StageResult) -> None:
-    """Map generator trading positions to SBM sensitivities.
+    """FRTB-SA from the generator's trading book (src.data_generation.frtb_inputs).
 
     Generator ``delta_sensitivity`` is read as PV01 ($M per bp) for rates
     and credit, and as the $M P&L of a 1% move for equity, commodity and
     FX; sensitivities follow § __.207(b) (divide by 0.0001 or 0.01).
     """
-    rng = p.data["rng"]
-    sens: list[Sensitivity] = []
-    drc: list[DRCPosition] = []
-    for pos in p.data["gen_trading"].positions:
-        b = int(pos.bucket)
-        if pos.risk_class == "GIRR":
-            sens.append(Sensitivity(risk_class=RiskClass.GIRR, risk_measure=RiskMeasure.DELTA,
-                                    bucket=pos.currency, risk_factor_type=GIRRRiskFactorType.YIELD_CURVE,
-                                    tenor=_TENOR[pos.tenor], label="OIS", value=TRADING_NET_FRACTION * pos.delta_sensitivity / 1e-4))
-        elif pos.risk_class == "CSR_NONSEC":
-            issuer = f"ISSUER{b:02d}"
-            sens.append(Sensitivity(risk_class=RiskClass.CSR_NON_SEC, risk_measure=RiskMeasure.DELTA,
-                                    bucket=str(b), tenor=_CSR_TENOR[pos.tenor], label=f"{issuer}::BOND",
-                                    value=TRADING_NET_FRACTION * pos.delta_sensitivity / 1e-4))
-            drc.append(DRCPosition(issuer=issuer, seniority=DRCSeniority.SENIOR_UNSECURED,
-                                   rating=rng.choice([DRCRatingCategory.A, DRCRatingCategory.BBB, DRCRatingCategory.BB]),
-                                   exposure_type=DRCExposureType.CORPORATE, notional=pos.notional * 0.1,
-                                   market_value=pos.notional * 0.1 * 0.98, maturity_years=3.0,
-                                   is_long=pos.delta_sensitivity >= 0))
-        elif pos.risk_class == "EQUITY":
-            bucket = str(min(b, 13))
-            sens.append(Sensitivity(risk_class=RiskClass.EQUITY, risk_measure=RiskMeasure.DELTA, bucket=bucket,
-                                    label=f"EQ{pos.position_id}", value=TRADING_NET_FRACTION * pos.delta_sensitivity / 0.01))
-            if pos.instrument_type == "EQUITY_OPTION":
-                sens.append(Sensitivity(risk_class=RiskClass.EQUITY, risk_measure=RiskMeasure.VEGA, bucket=bucket,
-                                        label=f"EQ{pos.position_id}", value=TRADING_NET_FRACTION * pos.vega_sensitivity, option_maturity=1.0))
-                sens.append(Sensitivity(risk_class=RiskClass.EQUITY, risk_measure=RiskMeasure.CURVATURE,
-                                        bucket=bucket, label=f"EQ{pos.position_id}", value=TRADING_NET_FRACTION * pos.curvature_sensitivity))
-        elif pos.risk_class == "COMMODITY":
-            sens.append(Sensitivity(risk_class=RiskClass.COMMODITY, risk_measure=RiskMeasure.DELTA,
-                                    bucket=str(min(b, 12)), label=f"CMD{b}", value=TRADING_NET_FRACTION * pos.delta_sensitivity / 0.01))
-        elif pos.risk_class == "FX":
-            ccy = pos.currency if pos.currency != "USD" else "EUR"
-            sens.append(Sensitivity(risk_class=RiskClass.FX, risk_measure=RiskMeasure.DELTA, bucket=f"{ccy}USD",
-                                    label=f"{ccy}USD", value=TRADING_NET_FRACTION * pos.delta_sensitivity / 0.01))
-            if pos.instrument_type == "FX_OPTION":
-                sens.append(Sensitivity(risk_class=RiskClass.FX, risk_measure=RiskMeasure.VEGA, bucket=f"{ccy}USD",
-                                        label=f"{ccy}USD", value=TRADING_NET_FRACTION * pos.vega_sensitivity, option_maturity=1.0))
+    sens, drc = trading_positions_to_frtb_inputs(p.data["gen_trading"].positions, p.data["rng"],
+                                                 TRADING_NET_FRACTION)
     rrao = [RRAOPosition(instrument_id="WEATHER-1", notional=2_000.0, category=RRAOCategory.EXOTIC),
             RRAOPosition(instrument_id="BERMUDAN-BOOK", notional=60_000.0, category=RRAOCategory.OTHER)]
     res = FRTBCalculator().calculate(sensitivities=sens, drc_positions=drc, rrao_positions=rrao)
@@ -601,34 +557,59 @@ def run_capital(p: Pipeline, st: StageResult) -> None:
 
 
 def run_gsib(p: Pipeline, st: StageResult) -> None:
+    """G-SIB surcharge under the 2026 G-SIB NPR, with the current rule shown for comparison.
+
+    STWF is supplied by funding category x remaining maturity (Table 1 to
+    § 217.406); keys ``stwf_cat{c}_b{b}``.
+    """
     ind = {"total_exposures": 4_100_000.0, "intra_financial_system_assets": 420_000.0,
            "intra_financial_system_liabilities": 380_000.0, "securities_outstanding": 520_000.0,
            "payments_activity": 210_000_000.0, "assets_under_custody": 3_100_000.0,
            "underwriting_activity": 520_000.0, "otc_derivatives_notional": 46_000_000.0,
            "trading_and_afs_securities": 380_000.0, "level_3_assets": 20_000.0,
            "cross_jurisdictional_claims": 1_000_000.0, "cross_jurisdictional_liabilities": 880_000.0,
-           "stwf_0_30_days": 300_000.0, "stwf_31_90_days": 90_000.0, "stwf_91_180_days": 40_000.0,
-           "stwf_181_365_days": 25_000.0, "avg_total_assets": 3_200_000.0,
+           # STWF: Cat 1 L1-secured repo / non-financial wholesale; Cat 2 L2A repo;
+           # Cat 3 unsecured financial wholesale; Cat 4 other
+           "stwf_cat1_b1": 260_000.0, "stwf_cat1_b2": 60_000.0,
+           "stwf_cat2_b1": 70_000.0, "stwf_cat2_b2": 20_000.0,
+           "stwf_cat3_b1": 120_000.0, "stwf_cat3_b2": 45_000.0, "stwf_cat3_b3": 25_000.0,
+           "stwf_cat3_b4": 15_000.0, "stwf_cat4_b1": 30_000.0, "stwf_cat4_b4": 10_000.0,
+           "avg_total_assets": 3_200_000.0,
            "avg_risk_weighted_assets": p.data["rwa"].total_rwa}
     data = create_indicator_data_from_dict(ind, reporting_entity=ENTITY, reporting_date=REPORTING_DATE)
-    res = calculate_gsib_surcharge(data, total_rwa=p.data["rwa"].total_rwa)
+    res = calculate_gsib_surcharge(data, total_rwa=p.data["rwa"].total_rwa,
+                                   version=GSIBRuleVersion.PROPOSAL_2026)
+    cur = calculate_gsib_surcharge(data, total_rwa=p.data["rwa"].total_rwa,
+                                   version=GSIBRuleVersion.CURRENT_RULE)
     # final_surcharge_pct is in percent (2.9 = 2.9%); downstream modules take a decimal rate
-    p.data.update(gsib=res, gsib_indicators=ind, gsib_rate=res.final_surcharge_pct / 100.0)
-    st.headline = (f"Method 1 {res.method1_score_bps:,.0f}bp ({res.method1_surcharge_pct:.1f}%) | "
-                   f"Method 2 {res.method2_score_bps:,.0f}bp ({res.method2_surcharge_pct:.1f}%) -> "
-                   f"{res.final_surcharge_pct:.1f}% ({res.binding_method.value})")
-    check(st, "surcharge between 1.0% and 5.0%", res.final_surcharge_pct / 100.0, 0.010, 0.050, ".3f")
+    p.data.update(gsib=res, gsib_current=cur, gsib_indicators=ind, gsib_rate=res.final_surcharge_rate)
+    st.headline = (f"proposal: M1 {res.method1_score_bps:,.0f}bp ({res.method1_surcharge_pct:.1f}%) | "
+                   f"M2 {res.method2_score_bps:,.0f}bp ({res.method2_surcharge_pct:.1f}%) -> "
+                   f"{res.final_surcharge_pct:.1f}% ({res.binding_method.value}); current rule "
+                   f"M2 {cur.method2_score_bps:,.0f}bp -> {cur.final_surcharge_pct:.1f}%")
+    check(st, "surcharge between 1.0% and 5.0%", res.final_surcharge_rate, 0.010, 0.050, ".3f")
+    check(st, "identified as GSIB (method 1 >= 130 bp)", res.method1_score_bps, 130.0, 2000.0, ".0f")
+    check(st, "proposal lowers method 2 score vs current rule",
+          res.method2_score_bps / cur.method2_score_bps, 0.0, 0.9999, ".3f")
 
 
 def run_ratios(p: Pipeline, st: StageResult) -> None:
+    """Ratios and buffers, with the SCB taken from the CCAR stage.
+
+    SCB = max(2.5%, severely-adverse peak-to-trough CET1 decline + four
+    quarters of planned common dividends / RWA), computed by the capital
+    projector; the stress stage therefore runs first.
+    """
+    scb = p.data["stress"].stress_capital_buffer
     adq = compute_capital_adequacy(p.data["capital"], p.data["rwa"], p.data["leverage_inputs"],
-                                   ccyb_rate=0.0, scb_rate=0.032, gsib_surcharge=p.data["gsib_rate"])
+                                   ccyb_rate=0.0, scb_rate=scb, gsib_surcharge=p.data["gsib_rate"])
     p.data["adequacy"] = adq
     r = adq.ratios
     st.headline = (f"CET1 {r.cet1_ratio:.2%}  T1 {r.tier1_ratio:.2%}  Total {r.total_capital_ratio:.2%}  "
                    f"SLR {r.leverage_ratio:.2%}  PCA {adq.pca.category.value}")
     check(st, "CET1 ratio (CLAUDE.md 10-15%)", r.cet1_ratio, 0.10, 0.15, ".4f")
     check(st, "SLR (CLAUDE.md 5-7%)", r.leverage_ratio, 0.05, 0.07, ".4f")
+    check(st, "SCB in buffer stack = stress-test SCB", adq.buffers.stress_capital_buffer, scb, scb, ".4f")
 
 
 def run_large_exposures(p: Pipeline, st: StageResult) -> None:
@@ -911,9 +892,9 @@ def main() -> int:
         ("RWA aggregation", run_rwa),
         ("Capital stack", run_capital),
         ("G-SIB surcharge", run_gsib),
+        ("CCAR stress test", run_stress),
         ("Ratios, buffers, PCA", run_ratios),
         ("Large exposures (SCCL)", run_large_exposures),
-        ("CCAR stress test", run_stress),
         ("Fed reports (Y-9C, 101, Y-15, Y-14)", run_reports),
         ("Pillar 3 disclosures", run_pillar3),
     ]

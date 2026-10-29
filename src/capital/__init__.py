@@ -25,7 +25,6 @@ from src.capital.capital_params import (
     SLR_MINIMUM,
     TIER1_MINIMUM_RATIO,
     TOTAL_CAPITAL_MINIMUM_RATIO,
-    build_gsib_surcharge_schedule,
     lookup_gsib_surcharge,
 )
 
@@ -113,7 +112,6 @@ __all__ = [
     "SLR_MINIMUM",
     "TIER1_MINIMUM_RATIO",
     "TOTAL_CAPITAL_MINIMUM_RATIO",
-    "build_gsib_surcharge_schedule",
     "lookup_gsib_surcharge",
     # Components
     "AT1Instrument",

@@ -1,91 +1,106 @@
-"""G-SIB surcharge parameters per US Federal Reserve 2026 Re-Proposal.
+"""G-SIB surcharge parameters: 12 CFR 217 Subpart H and the March 2026 G-SIB NPR.
 
-All parameters sourced from:
-- G-SIB NPR (128 pages): "Risk-Based Capital Surcharges for GSIBs"
-- 12 CFR 217 Subpart H: G-SIB Surcharge
-- Federal Reserve Board Method 1 / Method 2 framework
-- FR Y-15: Systemic Risk Report instructions
+Two rule versions are carried side by side so that the current requirement
+and the proposal can be computed on the same data:
 
-Key US 2026 Re-Proposal changes from 2023 NPR:
-- Method 2 coefficients adjusted by 1.2x DOWNWARD factor (CLAUDE.md)
-- Surcharge bands: 20bp score ranges / 0.1% increments (NOT 100bp/0.5%)
-- Method 1 uses BCBS substitutability cap of 500bp
+``GSIBRuleVersion.CURRENT_RULE``
+    12 CFR 217.400-406 as in effect (eCFR, 1 January 2025; Reg. Q,
+    80 FR 49105, Aug. 14, 2015, as amended at 81 FR 90954, Dec. 16, 2016).
 
-All monetary amounts in USD millions ($M) unless explicitly stated.
+``GSIBRuleVersion.PROPOSAL_2026``
+    Board NPR "Regulatory Capital Rule (Regulation Q): Risk-Based Capital
+    Surcharges for Global Systemically Important Bank Holding Companies;
+    Systemic Risk Report (FR Y-15)", Docket No. 1889, RIN 7100-AH22,
+    91 FR 14908-14949 (Mar. 27, 2026), FR Doc. 2026-05961. The proposal:
+
+    * adds two substitutability indicators (trading volume -- fixed income;
+      trading volume -- equity and other) and re-weights underwriting
+      (revised Table 1 to § 217.404; preamble § II.E.ii.a);
+    * divides the fixed method 2 coefficients by 1.2 (one-time adjustment,
+      preamble § II.A.i) and indexes them annually by a GDP growth
+      adjustment (revised § 217.405(c); definition in § 217.401);
+    * removes § 217.406 -- weighted short-term wholesale funding becomes a
+      method 2 systemic indicator scored as $bn x coefficient 23.003
+      without the average-RWA denominator (preamble § II.B);
+    * replaces method 2 Table 2 with 20bp score bands / 0.1% surcharge
+      increments (revised § 217.403(c); preamble § II.D), while leaving
+      the method 1 bands unchanged ("The proposal would not amend the
+      score band ranges for method 1", preamble § II.D).
+
+Method 1 aggregate global indicator amounts: Board notice "2025 aggregate
+global indicator amounts", Docket No. OP-1875, 90 FR 58245-58246
+(Dec. 16, 2025), FR Doc. 2025-22964 (year-end 2024 BCBS amounts x 1.0389
+EUR/USD).
+
+Units: indicator inputs are in USD millions ($M). § 217.405(b)(1) expresses
+method 2 indicators "in billions of dollars"; coefficient values are
+published in percent.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Final
-
+from typing import Final, Optional
 
 # =========================================================================
-#  G-SIB Categories per 12 CFR 217.402
+#  Enumerations
 # =========================================================================
+
+
+class GSIBRuleVersion(Enum):
+    """Which version of 12 CFR 217 Subpart H to apply."""
+
+    CURRENT_RULE = "CURRENT_RULE"
+    """12 CFR 217.400-406 as in effect (eCFR 2025-01-01)."""
+    PROPOSAL_2026 = "PROPOSAL_2026"
+    """FR Doc. 2026-05961, 91 FR 14908 (Mar. 27, 2026)."""
+
 
 class GSIBCategory(Enum):
-    """G-SIB systemic importance categories.
+    """Prudential category of the reporting bank holding company (12 CFR 252.5)."""
 
-    Per 12 CFR 217.402, US G-SIBs are classified into Category I-IV
-    based on total consolidated assets and other risk indicators.
-    Only Category I and II banks are subject to the G-SIB surcharge
-    under the 2026 Re-Proposal.
-    """
-    CATEGORY_I = "CATEGORY_I"    # >= $700B total assets or >= $75B cross-jurisdictional
-    CATEGORY_II = "CATEGORY_II"  # >= $700B total assets or >= $100B in specific indicators
-    CATEGORY_III = "CATEGORY_III"  # >= $250B total assets (not subject to G-SIB surcharge)
-    CATEGORY_IV = "CATEGORY_IV"   # >= $100B total assets (not subject to G-SIB surcharge)
+    CATEGORY_I = "CATEGORY_I"
+    CATEGORY_II = "CATEGORY_II"
+    CATEGORY_III = "CATEGORY_III"
+    CATEGORY_IV = "CATEGORY_IV"
 
 
 class GSIBMethod(Enum):
-    """G-SIB surcharge calculation methods.
+    """Surcharge methods under 12 CFR 217.403(a)."""
 
-    Per 12 CFR 217.403:
-    - Method 1: BCBS substitutability-based approach (12 indicators, 5 categories)
-    - Method 2: US-specific short-term wholesale funding approach
-    - Final surcharge = higher of Method 1 vs Method 2
-    """
     METHOD_1 = "METHOD_1"
     METHOD_2 = "METHOD_2"
 
 
 class GSIBIndicatorCategory(Enum):
-    """Five systemic importance categories per BCBS / 12 CFR 217.404.
+    """Systemic-indicator categories (Table 1 to § 217.404; Table 1 to § 217.405)."""
 
-    Per G-SIB NPR Section II.B, the five categories each receive
-    equal 20% weight under Method 1.
-    """
     SIZE = "SIZE"
     INTERCONNECTEDNESS = "INTERCONNECTEDNESS"
     SUBSTITUTABILITY = "SUBSTITUTABILITY"
     COMPLEXITY = "COMPLEXITY"
     CROSS_JURISDICTIONAL = "CROSS_JURISDICTIONAL"
+    SHORT_TERM_WHOLESALE_FUNDING = "SHORT_TERM_WHOLESALE_FUNDING"
 
 
 # =========================================================================
-#  Method 1 Indicator Weights — FR Y-15 (12 indicators)
-#  Per G-SIB NPR Section II.B and BCBS d445
+#  Indicator specifications
 # =========================================================================
 
-# Each of the 5 categories receives 20% weight.
-# Within each category, indicators are equally weighted.
-# Per G-SIB NPR p.15-22
-
-CATEGORY_WEIGHT: Final[float] = 0.20  # 20% per category — G-SIB NPR p.15
 
 @dataclass(frozen=True)
 class IndicatorSpec:
-    """Specification for a single G-SIB systemic indicator.
+    """One systemic indicator with its method 1 weight.
 
     Attributes:
-        name: Human-readable indicator name
-        category: Which of the 5 systemic categories
-        weight: Weight within the overall score (category_weight / num_indicators_in_category)
-        fr_y15_line: FR Y-15 schedule/line reference
-        description: Brief description of what the indicator measures
+        name: Field name on :class:`GSIBIndicatorData`.
+        category: Systemic category.
+        weight: Method 1 indicator weight as a decimal (Table 1 to § 217.404).
+        fr_y15_line: FR Y-15 schedule reference (§ 217.401 definitions).
+        description: Indicator description as defined in § 217.401.
     """
+
     name: str
     category: GSIBIndicatorCategory
     weight: float
@@ -93,489 +108,564 @@ class IndicatorSpec:
     description: str
 
 
-# -------------------------------------------------------------------------
-#  12 Systemic Indicators per BCBS methodology / FR Y-15
-#  Weights: Size=20% (1 indicator), Interconnectedness=20% (3 indicators),
-#           Substitutability=20% (3 indicators), Complexity=20% (3 indicators),
-#           Cross-Jurisdictional=20% (2 indicators)
-#  Per G-SIB NPR Section II.B, pp.15-22
-# -------------------------------------------------------------------------
+_S = GSIBIndicatorCategory
 
-METHOD_1_INDICATORS: Final[list[IndicatorSpec]] = [
-    # Category 1: Size (20% total, 1 indicator @ 20%)
-    # Per G-SIB NPR p.16: Total exposures as defined by the leverage ratio
+# Table 1 to § 217.404 -- Systemic Indicator Weights (current rule).
+# "Total exposures 20 percent ... Intra-financial system assets 6.67 percent
+#  ... Cross-jurisdictional claims 10 percent ..."
+METHOD_1_INDICATORS_CURRENT: Final[tuple[IndicatorSpec, ...]] = (
+    IndicatorSpec("total_exposures", _S.SIZE, 0.20, "Schedule A", "Total exposures"),
     IndicatorSpec(
-        name="total_exposures",
-        category=GSIBIndicatorCategory.SIZE,
-        weight=0.20,
-        fr_y15_line="Schedule A, Line 1",
-        description="Total exposures as defined in the leverage ratio exposure measure"
-    ),
-
-    # Category 2: Interconnectedness (20% total, 3 indicators @ 6.667% each)
-    # Per G-SIB NPR pp.16-17
-    IndicatorSpec(
-        name="intra_financial_system_assets",
-        category=GSIBIndicatorCategory.INTERCONNECTEDNESS,
-        weight=0.20 / 3,
-        fr_y15_line="Schedule B, Line 1",
-        description="Lending to financial institutions, holdings of securities "
-                    "issued by financial institutions, net positive current "
-                    "exposure of SFTs and OTC derivatives"
+        "intra_financial_system_assets",
+        _S.INTERCONNECTEDNESS,
+        0.0667,
+        "Schedule B",
+        "Intra-financial system assets",
     ),
     IndicatorSpec(
-        name="intra_financial_system_liabilities",
-        category=GSIBIndicatorCategory.INTERCONNECTEDNESS,
-        weight=0.20 / 3,
-        fr_y15_line="Schedule B, Line 2",
-        description="Borrowings from financial institutions, net negative current "
-                    "exposure of SFTs and OTC derivatives"
+        "intra_financial_system_liabilities",
+        _S.INTERCONNECTEDNESS,
+        0.0667,
+        "Schedule B",
+        "Intra-financial system liabilities",
     ),
     IndicatorSpec(
-        name="securities_outstanding",
-        category=GSIBIndicatorCategory.INTERCONNECTEDNESS,
-        weight=0.20 / 3,
-        fr_y15_line="Schedule B, Line 3",
-        description="Debt securities outstanding plus equity securities outstanding"
-    ),
-
-    # Category 3: Substitutability / Financial Institution Infrastructure
-    # (20% total, 3 indicators @ 6.667% each)
-    # Per G-SIB NPR pp.17-19 — BCBS caps substitutability at 500bp
-    IndicatorSpec(
-        name="payments_activity",
-        category=GSIBIndicatorCategory.SUBSTITUTABILITY,
-        weight=0.20 / 3,
-        fr_y15_line="Schedule C, Line 1",
-        description="Payments made and received through large-value payment systems"
+        "securities_outstanding",
+        _S.INTERCONNECTEDNESS,
+        0.0667,
+        "Schedule B",
+        "Securities outstanding",
     ),
     IndicatorSpec(
-        name="assets_under_custody",
-        category=GSIBIndicatorCategory.SUBSTITUTABILITY,
-        weight=0.20 / 3,
-        fr_y15_line="Schedule C, Line 2",
-        description="Assets held as custodian on behalf of customers"
+        "payments_activity", _S.SUBSTITUTABILITY, 0.0667, "Schedule C", "Payments activity"
     ),
     IndicatorSpec(
-        name="underwriting_activity",
-        category=GSIBIndicatorCategory.SUBSTITUTABILITY,
-        weight=0.20 / 3,
-        fr_y15_line="Schedule C, Line 3",
-        description="Debt and equity underwriting activity"
-    ),
-
-    # Category 4: Complexity (20% total, 3 indicators @ 6.667% each)
-    # Per G-SIB NPR pp.19-20
-    IndicatorSpec(
-        name="otc_derivatives_notional",
-        category=GSIBIndicatorCategory.COMPLEXITY,
-        weight=0.20 / 3,
-        fr_y15_line="Schedule D, Line 1",
-        description="Notional amount of OTC derivatives"
+        "assets_under_custody", _S.SUBSTITUTABILITY, 0.0667, "Schedule C", "Assets under custody"
     ),
     IndicatorSpec(
-        name="trading_and_afs_securities",
-        category=GSIBIndicatorCategory.COMPLEXITY,
-        weight=0.20 / 3,
-        fr_y15_line="Schedule D, Line 2",
-        description="Trading securities and available-for-sale securities"
+        "underwriting_activity",
+        _S.SUBSTITUTABILITY,
+        0.0667,
+        "Schedule C",
+        "Underwritten transactions in debt and equity markets",
     ),
     IndicatorSpec(
-        name="level_3_assets",
-        category=GSIBIndicatorCategory.COMPLEXITY,
-        weight=0.20 / 3,
-        fr_y15_line="Schedule D, Line 3",
-        description="Level 3 assets under fair value hierarchy"
-    ),
-
-    # Category 5: Cross-Jurisdictional Activity (20% total, 2 indicators @ 10% each)
-    # Per G-SIB NPR pp.20-22
-    IndicatorSpec(
-        name="cross_jurisdictional_claims",
-        category=GSIBIndicatorCategory.CROSS_JURISDICTIONAL,
-        weight=0.20 / 2,
-        fr_y15_line="Schedule E, Line 1",
-        description="Claims on entities located outside the home jurisdiction"
+        "otc_derivatives_notional",
+        _S.COMPLEXITY,
+        0.0667,
+        "Schedule D",
+        "Notional amount of over-the-counter (OTC) derivatives",
     ),
     IndicatorSpec(
-        name="cross_jurisdictional_liabilities",
-        category=GSIBIndicatorCategory.CROSS_JURISDICTIONAL,
-        weight=0.20 / 2,
-        fr_y15_line="Schedule E, Line 2",
-        description="Liabilities to entities located outside the home jurisdiction"
+        "trading_and_afs_securities",
+        _S.COMPLEXITY,
+        0.0667,
+        "Schedule D",
+        "Trading and available-for-sale (AFS) securities",
     ),
-]
-
-# Quick lookup by indicator name
-INDICATOR_LOOKUP: Final[dict[str, IndicatorSpec]] = {
-    ind.name: ind for ind in METHOD_1_INDICATORS
-}
-
-# Number of indicators per category
-INDICATORS_PER_CATEGORY: Final[dict[GSIBIndicatorCategory, int]] = {
-    GSIBIndicatorCategory.SIZE: 1,
-    GSIBIndicatorCategory.INTERCONNECTEDNESS: 3,
-    GSIBIndicatorCategory.SUBSTITUTABILITY: 3,
-    GSIBIndicatorCategory.COMPLEXITY: 3,
-    GSIBIndicatorCategory.CROSS_JURISDICTIONAL: 2,
-}
-
-
-# =========================================================================
-#  Method 1 Substitutability Cap
-#  Per BCBS d445 / G-SIB NPR p.18
-# =========================================================================
-
-# The substitutability category score is capped at 500 basis points
-# to prevent it from dominating the overall score.
-# Per G-SIB NPR p.18: "cap the substitutability / financial institution
-# infrastructure category score at 500 basis points"
-SUBSTITUTABILITY_CAP_BPS: Final[float] = 500.0  # G-SIB NPR p.18
-
-
-# =========================================================================
-#  Method 1 Surcharge Bands
-#  Per G-SIB NPR Section II.C — US 2026 Re-Proposal
-#  CRITICAL: 20bp score ranges / 0.1% surcharge increments
-#  (NOT the Basel standard 100bp/0.5%)
-# =========================================================================
-
-# Method 1 score-to-surcharge mapping
-# Per G-SIB NPR p.25: surcharge increases by 0.1% (10bp) for every
-# 20bp increase in the G-SIB score above the 130bp initial threshold.
-# Per CLAUDE.md: "G-SIB surcharge bands: 20bp score ranges / 0.1% increments"
-
-METHOD_1_INITIAL_THRESHOLD_BPS: Final[float] = 130.0  # G-SIB NPR p.25
-METHOD_1_BAND_WIDTH_BPS: Final[float] = 20.0  # 20bp score ranges — G-SIB NPR p.25 / CLAUDE.md
-METHOD_1_SURCHARGE_INCREMENT_PCT: Final[float] = 0.1  # 0.1% per band — G-SIB NPR p.25 / CLAUDE.md
-METHOD_1_MIN_SURCHARGE_PCT: Final[float] = 1.0  # Minimum surcharge for any G-SIB — G-SIB NPR p.25
-
-
-# =========================================================================
-#  Method 1 Score Scaling Factor
-#  Per G-SIB NPR p.24, the raw score is divided by the denomination
-#  factor (global aggregate of each indicator across all 75+ BCBS banks)
-#  and multiplied by 10,000 to express in basis points.
-# =========================================================================
-
-METHOD_1_SCALING_FACTOR: Final[float] = 10_000.0  # Convert ratio to basis points
-
-
-# =========================================================================
-#  Method 2 — Short-Term Wholesale Funding
-#  Per G-SIB NPR Section II.D / 12 CFR 217.406
-#  CRITICAL: Coefficients adjusted by 1.2x DOWNWARD factor per CLAUDE.md
-# =========================================================================
-
-# Method 2 replaces the substitutability category with a short-term
-# wholesale funding (STWF) indicator, then applies its own conversion
-# table from scores to surcharge buckets.
-
-# Method 2 uses the same 4 categories as Method 1 (size, interconnectedness,
-# complexity, cross-jurisdictional) PLUS the STWF component.
-
-# The STWF component is calculated using weighted-average residual maturity
-# buckets for wholesale funding sources.
-# Per G-SIB NPR pp.30-35
-
-@dataclass(frozen=True)
-class STWFBucketSpec:
-    """Short-Term Wholesale Funding maturity bucket specification.
-
-    Per G-SIB NPR p.32 / 12 CFR 217.406(b):
-    Wholesale funding is bucketed by residual maturity and assigned
-    weights that decrease with maturity.
-
-    Attributes:
-        min_days: Minimum residual maturity (inclusive)
-        max_days: Maximum residual maturity (exclusive, None for open-ended)
-        weight: Weight applied to funding in this bucket
-        description: Human-readable bucket description
-    """
-    min_days: int
-    max_days: int | None
-    weight: float
-    description: str
-
-
-# STWF maturity buckets and weights
-# Per G-SIB NPR p.32, Table 1
-# These weights reflect the rollover risk — shorter maturities get higher weights.
-# TODO: VERIFY -- 12 CFR 217.406(b) Table 2 assigns STWF weights on a
-#   4 x 4 grid of (funding category 1-4) x (residual maturity <=30d /
-#   31-90d / 91-180d / 181-365d), e.g. Cat 1: 25/10/5/0 %, Cat 2:
-#   50/25/10/5 %, Cat 3: 75/50/25/10 %, Cat 4: 100/75/50/25 %.
-#   The single weight vector below (25/10/3/1 %) matches no single
-#   category and collapses the counterparty-type dimension.
-STWF_MATURITY_BUCKETS: Final[list[STWFBucketSpec]] = [
-    STWFBucketSpec(
-        min_days=0, max_days=30,
-        weight=0.25,
-        description="Overnight to 30 days"
+    IndicatorSpec("level_3_assets", _S.COMPLEXITY, 0.0667, "Schedule D", "Level 3 assets"),
+    IndicatorSpec(
+        "cross_jurisdictional_claims",
+        _S.CROSS_JURISDICTIONAL,
+        0.10,
+        "Schedule E",
+        "Cross-jurisdictional claims",
     ),
-    STWFBucketSpec(
-        min_days=31, max_days=90,
-        weight=0.10,
-        description="31 to 90 days"
+    IndicatorSpec(
+        "cross_jurisdictional_liabilities",
+        _S.CROSS_JURISDICTIONAL,
+        0.10,
+        "Schedule E",
+        "Cross-jurisdictional liabilities",
     ),
-    STWFBucketSpec(
-        min_days=91, max_days=180,
-        weight=0.03,
-        description="91 to 180 days"
-    ),
-    STWFBucketSpec(
-        min_days=181, max_days=365,
-        weight=0.01,
-        description="181 to 365 days"
-    ),
-]
-
-
-# -------------------------------------------------------------------------
-#  Method 2 STWF Score Coefficients
-#  Per G-SIB NPR p.34 / 12 CFR 217.406(c)
-#  CRITICAL: Adjusted by 1.2x DOWNWARD factor per 2026 Re-Proposal
-#  Per CLAUDE.md: "G-SIB Method 2 coefficients adjusted by 1.2x downward factor"
-# -------------------------------------------------------------------------
-
-# The base (unadjusted) Method 2 conversion coefficients from the original
-# 2015 rule. The 2026 Re-Proposal applies a 1.2x downward adjustment,
-# meaning the effective coefficient = base / 1.2.
-
-METHOD_2_DOWNWARD_FACTOR: Final[float] = 1.2  # Per CLAUDE.md / G-SIB NPR p.34
-
-# Base Method 2 coefficient for converting STWF amount to score contribution.
-# The STWF score = (STWF_weighted_amount / average RWA) * coefficient (12 CFR 217.406(c));
-# the coefficient already yields score points -- no x10,000 scaling.
-# Per G-SIB NPR p.34
-METHOD_2_BASE_COEFFICIENT: Final[float] = 350.0  # G-SIB NPR p.34
-METHOD_2_ADJUSTED_COEFFICIENT: Final[float] = METHOD_2_BASE_COEFFICIENT / METHOD_2_DOWNWARD_FACTOR
-# = 350.0 / 1.2 = 291.667
-
-
-# =========================================================================
-#  Method 2 Surcharge Bands
-#  Per G-SIB NPR Section II.D / 12 CFR 217.406(d)
-#  Same structure as Method 1: 20bp ranges / 0.1% increments
-# =========================================================================
-
-METHOD_2_INITIAL_THRESHOLD_BPS: Final[float] = 130.0  # G-SIB NPR p.36
-METHOD_2_BAND_WIDTH_BPS: Final[float] = 20.0  # 20bp score ranges — CLAUDE.md
-METHOD_2_SURCHARGE_INCREMENT_PCT: Final[float] = 0.1  # 0.1% per band — CLAUDE.md
-METHOD_2_MIN_SURCHARGE_PCT: Final[float] = 1.0  # Minimum surcharge — G-SIB NPR p.36
-
-
-# =========================================================================
-#  Method 2 Category Weights
-#  Per G-SIB NPR p.33 / 12 CFR 217.406(a)
-#  Method 2 uses the same 4 systemic categories as Method 1 (excluding
-#  substitutability) plus the STWF component. Each of the 5 components
-#  receives 20% weight.
-# =========================================================================
-
-METHOD_2_CATEGORY_WEIGHT: Final[float] = 0.20  # 20% per component — G-SIB NPR p.33
-
-
-# =========================================================================
-#  G-SIB Score-to-Surcharge Conversion Table
-#  Per G-SIB NPR pp.25-26, Table 2
-#  Generated from the band parameters above.
-#  Score range -> Surcharge (%)
-#  Band 1: 130-149 bp -> 1.0%
-#  Band 2: 150-169 bp -> 1.1%  (NOT 1.5% as in old Basel standard)
-#  Band 3: 170-189 bp -> 1.2%
-#  ... and so on in 20bp / 0.1% steps
-# =========================================================================
-
-def generate_surcharge_table(
-    initial_threshold_bps: float = METHOD_1_INITIAL_THRESHOLD_BPS,
-    band_width_bps: float = METHOD_1_BAND_WIDTH_BPS,
-    surcharge_increment_pct: float = METHOD_1_SURCHARGE_INCREMENT_PCT,
-    min_surcharge_pct: float = METHOD_1_MIN_SURCHARGE_PCT,
-    max_bands: int = 50,
-) -> list[tuple[float, float, float]]:
-    """Generate the score-to-surcharge mapping table.
-
-    Per G-SIB NPR pp.25-26 / 12 CFR 217.403(b):
-    The surcharge is determined by where the G-SIB's systemic importance
-    score falls within the band structure:
-    - Scores below initial_threshold_bps: 1.0% minimum surcharge
-    - Each additional band_width_bps of score: +surcharge_increment_pct
-
-    Args:
-        initial_threshold_bps: Score threshold for the first band (130bp)
-        band_width_bps: Width of each score band (20bp)
-        surcharge_increment_pct: Surcharge increase per band (0.1%)
-        min_surcharge_pct: Minimum surcharge for any G-SIB (1.0%)
-        max_bands: Maximum number of bands to generate
-
-    Returns:
-        List of (lower_bound_bps, upper_bound_bps, surcharge_pct) tuples.
-        The last band has upper_bound = float('inf').
-    """
-    table: list[tuple[float, float, float]] = []
-    for i in range(max_bands):
-        lower = initial_threshold_bps + i * band_width_bps
-        upper = initial_threshold_bps + (i + 1) * band_width_bps
-        surcharge = min_surcharge_pct + i * surcharge_increment_pct
-
-        if i == max_bands - 1:
-            upper = float("inf")
-
-        table.append((lower, upper, surcharge))
-
-    return table
-
-
-# Pre-generated surcharge tables for Method 1 and Method 2
-METHOD_1_SURCHARGE_TABLE: Final[list[tuple[float, float, float]]] = generate_surcharge_table(
-    initial_threshold_bps=METHOD_1_INITIAL_THRESHOLD_BPS,
-    band_width_bps=METHOD_1_BAND_WIDTH_BPS,
-    surcharge_increment_pct=METHOD_1_SURCHARGE_INCREMENT_PCT,
-    min_surcharge_pct=METHOD_1_MIN_SURCHARGE_PCT,
 )
 
-METHOD_2_SURCHARGE_TABLE: Final[list[tuple[float, float, float]]] = generate_surcharge_table(
-    initial_threshold_bps=METHOD_2_INITIAL_THRESHOLD_BPS,
-    band_width_bps=METHOD_2_BAND_WIDTH_BPS,
-    surcharge_increment_pct=METHOD_2_SURCHARGE_INCREMENT_PCT,
-    min_surcharge_pct=METHOD_2_MIN_SURCHARGE_PCT,
+# Revised Table 1 to § 217.404 (FR Doc. 2026-05961, amendatory instruction 5,
+# 91 FR 14948-14949): underwriting 3.33%, trading volume -- fixed income 1.67%,
+# trading volume -- equity and other 1.67%; other weights unchanged.
+METHOD_1_INDICATORS_PROPOSAL: Final[tuple[IndicatorSpec, ...]] = (
+    IndicatorSpec("total_exposures", _S.SIZE, 0.20, "Schedule A", "Total exposures"),
+    IndicatorSpec(
+        "intra_financial_system_assets",
+        _S.INTERCONNECTEDNESS,
+        0.0667,
+        "Schedule B",
+        "Intra-financial system assets",
+    ),
+    IndicatorSpec(
+        "intra_financial_system_liabilities",
+        _S.INTERCONNECTEDNESS,
+        0.0667,
+        "Schedule B",
+        "Intra-financial system liabilities",
+    ),
+    IndicatorSpec(
+        "securities_outstanding",
+        _S.INTERCONNECTEDNESS,
+        0.0667,
+        "Schedule B",
+        "Securities outstanding",
+    ),
+    IndicatorSpec(
+        "payments_activity", _S.SUBSTITUTABILITY, 0.0667, "Schedule C", "Payments activity"
+    ),
+    IndicatorSpec(
+        "assets_under_custody", _S.SUBSTITUTABILITY, 0.0667, "Schedule C", "Assets under custody"
+    ),
+    IndicatorSpec(
+        "underwriting_activity",
+        _S.SUBSTITUTABILITY,
+        0.0333,
+        "Schedule C",
+        "Underwritten transactions in debt and equity markets",
+    ),
+    IndicatorSpec(
+        "trading_volume_fixed_income",
+        _S.SUBSTITUTABILITY,
+        0.0167,
+        "Schedule C",
+        "Trading volume -- fixed income",
+    ),
+    IndicatorSpec(
+        "trading_volume_equity_other",
+        _S.SUBSTITUTABILITY,
+        0.0167,
+        "Schedule C",
+        "Trading volume -- equity and other",
+    ),
+    IndicatorSpec(
+        "otc_derivatives_notional",
+        _S.COMPLEXITY,
+        0.0667,
+        "Schedule D",
+        "Notional amount of over-the-counter (OTC) derivatives",
+    ),
+    IndicatorSpec(
+        "trading_and_afs_securities",
+        _S.COMPLEXITY,
+        0.0667,
+        "Schedule D",
+        "Trading and available-for-sale (AFS) securities",
+    ),
+    IndicatorSpec("level_3_assets", _S.COMPLEXITY, 0.0667, "Schedule D", "Level 3 assets"),
+    IndicatorSpec(
+        "cross_jurisdictional_claims",
+        _S.CROSS_JURISDICTIONAL,
+        0.10,
+        "Schedule E",
+        "Cross-jurisdictional claims",
+    ),
+    IndicatorSpec(
+        "cross_jurisdictional_liabilities",
+        _S.CROSS_JURISDICTIONAL,
+        0.10,
+        "Schedule E",
+        "Cross-jurisdictional liabilities",
+    ),
 )
 
 
+def method1_indicators(version: GSIBRuleVersion) -> tuple[IndicatorSpec, ...]:
+    """Method 1 indicator set for a rule version (Table 1 to § 217.404)."""
+    if version == GSIBRuleVersion.PROPOSAL_2026:
+        return METHOD_1_INDICATORS_PROPOSAL
+    return METHOD_1_INDICATORS_CURRENT
+
+
+METHOD_1_SCALING_FACTOR: Final[float] = 10_000.0
+"""§ 217.404(b)(1)(ii): the indicator ratio is "Multiplied by 10,000"."""
+
+SUBSTITUTABILITY_CAP_BPS: Final[float] = 100.0
+"""§ 217.404(b)(2): "The sum of the systemic indicator scores for the indicators
+in the substitutability category ... will not exceed 100 basis points." The
+proposal does not amend § 217.404(b)(2)."""
+
+GSIB_IDENTIFICATION_THRESHOLD_BPS: Final[float] = 130.0
+"""A bank holding company is identified as a GSIB if its method 1 score equals
+or exceeds 130 basis points (§ 217.402; 2026 NPR fn. 53)."""
+
+
 # =========================================================================
-#  Global Denomination Factors
-#  Per G-SIB NPR p.24 / BCBS d445 Section 3.2
-#  These are the aggregate amounts across all 75+ G-SIB sample banks
-#  used to normalize individual bank indicators.
-#  Updated annually by the BCBS; values below are illustrative for
-#  the 2024 assessment exercise (based on end-2023 data).
+#  Method 1 aggregate global indicator amounts (denominators)
 # =========================================================================
+
 
 @dataclass(frozen=True)
 class DenominationFactors:
-    """Global aggregate denomination factors for G-SIB score calculation.
+    """Aggregate global indicator amounts in $M (§ 217.401, § 217.404(b)(1)(i)(B)).
 
-    Per BCBS d445 / G-SIB NPR p.24:
-    Each bank's raw indicator value is divided by the global aggregate
-    for that indicator across all 75+ banks in the BCBS sample.
-
-    All values in USD millions ($M).
-    These are updated annually based on BCBS publications.
+    ``trading_volume_*`` are None when the Board has not published them; they
+    are required only for the proposal's method 1 trading-volume indicators.
     """
-    # Category 1: Size
-    total_exposures: float
 
-    # Category 2: Interconnectedness
+    total_exposures: float
     intra_financial_system_assets: float
     intra_financial_system_liabilities: float
     securities_outstanding: float
-
-    # Category 3: Substitutability
     payments_activity: float
     assets_under_custody: float
     underwriting_activity: float
-
-    # Category 4: Complexity
     otc_derivatives_notional: float
     trading_and_afs_securities: float
     level_3_assets: float
-
-    # Category 5: Cross-Jurisdictional
     cross_jurisdictional_claims: float
     cross_jurisdictional_liabilities: float
+    trading_volume_fixed_income: Optional[float] = None
+    trading_volume_equity_other: Optional[float] = None
+    source: str = ""
+
+    def get(self, name: str) -> Optional[float]:
+        """Return the denominator for an indicator name."""
+        return getattr(self, name)
 
 
-# Default denomination factors based on 2024 BCBS assessment
-# (end-2023 reporting data). These represent the sum across all
-# 75+ banks in the sample for each indicator.
-# Source: BCBS G-SIB assessment exercise results, November 2024
-# TODO: VERIFY — These are illustrative values based on publicly available
-# BCBS aggregate data. Actual values should be sourced from the official
-# BCBS annual publication for the relevant assessment year.
-DEFAULT_DENOMINATION_FACTORS: Final[DenominationFactors] = DenominationFactors(
-    # Size — global aggregate ~€95T ($M equivalent)
-    total_exposures=105_000_000.0,  # $105T in $M
+_USD_TO_MILLIONS: Final[float] = 1e-6
 
-    # Interconnectedness
-    intra_financial_system_assets=12_500_000.0,   # $12.5T
-    intra_financial_system_liabilities=13_000_000.0,  # $13T
-    securities_outstanding=14_500_000.0,  # $14.5T
-
-    # Substitutability
-    payments_activity=2_800_000_000.0,  # $2,800T (annual flow)
-    assets_under_custody=42_000_000.0,  # $42T
-    underwriting_activity=8_500_000.0,  # $8.5T
-
-    # Complexity
-    otc_derivatives_notional=420_000_000.0,  # $420T
-    trading_and_afs_securities=9_200_000.0,  # $9.2T
-    level_3_assets=550_000.0,  # $550B
-
-    # Cross-Jurisdictional
-    cross_jurisdictional_claims=19_500_000.0,  # $19.5T
-    cross_jurisdictional_liabilities=17_000_000.0,  # $17T
+# FR Doc. 2025-22964, 90 FR 58246, "Aggregate Global Indicator Amounts in U.S.
+# Dollars (USD) for 2025" (values transcribed in USD, converted to $M).
+AGGREGATE_GLOBAL_INDICATORS_2025: Final[DenominationFactors] = DenominationFactors(
+    total_exposures=115_610_567_459_028 * _USD_TO_MILLIONS,
+    intra_financial_system_assets=11_744_530_471_538 * _USD_TO_MILLIONS,
+    intra_financial_system_liabilities=11_549_951_568_929 * _USD_TO_MILLIONS,
+    securities_outstanding=20_989_667_733_564 * _USD_TO_MILLIONS,
+    payments_activity=3_583_068_096_731_293 * _USD_TO_MILLIONS,
+    assets_under_custody=236_728_086_197_216 * _USD_TO_MILLIONS,
+    underwriting_activity=9_458_987_280_583 * _USD_TO_MILLIONS,
+    otc_derivatives_notional=743_719_670_668_380 * _USD_TO_MILLIONS,
+    trading_and_afs_securities=4_617_580_286_026 * _USD_TO_MILLIONS,
+    level_3_assets=785_843_290_915 * _USD_TO_MILLIONS,
+    cross_jurisdictional_claims=27_556_319_815_579 * _USD_TO_MILLIONS,
+    cross_jurisdictional_liabilities=22_625_378_519_775 * _USD_TO_MILLIONS,
+    # TODO: VERIFY -- the 2025 notice publishes only the twelve current-rule
+    # indicators; trading-volume aggregates (needed under the proposal) must be
+    # supplied from the BCBS denominators (bis.org/bcbs/gsib/denominators.htm).
+    trading_volume_fixed_income=None,
+    trading_volume_equity_other=None,
+    source="FR Doc. 2025-22964, 90 FR 58246 (Dec. 16, 2025); EUR/USD 1.0389 at 31 Dec 2024",
 )
+
+AGGREGATE_GLOBAL_INDICATORS_EURUSD_2024: Final[float] = 1.0389
+"""Euro to US dollar spot rate used for the 2025 amounts (90 FR 58246)."""
+
+DEFAULT_DENOMINATION_FACTORS: Final[DenominationFactors] = AGGREGATE_GLOBAL_INDICATORS_2025
 
 
 # =========================================================================
-#  FR Y-15 Report Configuration
-#  Per FR Y-15 instructions (OMB No. 7100-0352)
+#  Method 1 surcharge -- Table 1 to § 217.403 (unchanged by the proposal)
+# =========================================================================
+
+
+@dataclass(frozen=True)
+class SurchargeBand:
+    """A score band [lower, upper) mapped to a surcharge in percent."""
+
+    lower_bps: float
+    upper_bps: float
+    surcharge_pct: float
+
+
+# Table 1 to § 217.403 -- Method 1 Surcharge: "Below 130 0.0 percent; 130-229
+# 1.0; 230-329 1.5; 330-429 2.0; 430-529 2.5; 530-629 3.5". Integer score
+# ranges are applied as half-open intervals [130, 230), [230, 330), ...
+METHOD_1_SURCHARGE_BANDS: Final[tuple[SurchargeBand, ...]] = (
+    SurchargeBand(float("-inf"), 130.0, 0.0),
+    SurchargeBand(130.0, 230.0, 1.0),
+    SurchargeBand(230.0, 330.0, 1.5),
+    SurchargeBand(330.0, 430.0, 2.0),
+    SurchargeBand(430.0, 530.0, 2.5),
+    SurchargeBand(530.0, 630.0, 3.5),
+)
+METHOD_1_HIGHER_THRESHOLD_BPS: Final[float] = 630.0
+"""§ 217.403(b)(2): scores that equal or exceed 630 basis points."""
+METHOD_1_HIGHER_BASE_PCT: Final[float] = 4.5
+"""§ 217.403(b)(2)(i): 4.5 percent."""
+METHOD_1_HIGHER_STEP_BPS: Final[float] = 100.0
+METHOD_1_HIGHER_STEP_PCT: Final[float] = 1.0
+"""§ 217.403(b)(2)(ii): "An additional 1.0 percent for each 100 basis points
+that the ... score exceeds 630 basis points"."""
+
+
+# =========================================================================
+#  Method 2 surcharge
+# =========================================================================
+
+# Current rule: Table 2 to § 217.403 -- Method 2 Surcharge.
+METHOD_2_SURCHARGE_BANDS_CURRENT: Final[tuple[SurchargeBand, ...]] = (
+    SurchargeBand(float("-inf"), 130.0, 0.0),
+    SurchargeBand(130.0, 230.0, 1.0),
+    SurchargeBand(230.0, 330.0, 1.5),
+    SurchargeBand(330.0, 430.0, 2.0),
+    SurchargeBand(430.0, 530.0, 2.5),
+    SurchargeBand(530.0, 630.0, 3.0),
+    SurchargeBand(630.0, 730.0, 3.5),
+    SurchargeBand(730.0, 830.0, 4.0),
+    SurchargeBand(830.0, 930.0, 4.5),
+    SurchargeBand(930.0, 1030.0, 5.0),
+    SurchargeBand(1030.0, 1130.0, 5.5),
+)
+METHOD_2_HIGHER_THRESHOLD_BPS_CURRENT: Final[float] = 1130.0
+"""§ 217.403(c)(2): scores that equal or exceed 1130 basis points."""
+METHOD_2_HIGHER_BASE_PCT_CURRENT: Final[float] = 6.5
+"""§ 217.403(c)(2)(i): 6.5 percent."""
+METHOD_2_HIGHER_STEP_BPS_CURRENT: Final[float] = 100.0
+METHOD_2_HIGHER_STEP_PCT_CURRENT: Final[float] = 0.5
+"""§ 217.403(c)(2)(ii): "An additional 0.5 percent for each 100 basis points"."""
+
+# Proposal: revised § 217.403(c) (91 FR 14948).
+METHOD_2_PROPOSAL_FLOOR_PCT: Final[float] = 1.0
+"""Revised § 217.403(c)(1): 1.0 percent if the score is 189 basis points or less."""
+METHOD_2_PROPOSAL_FLOOR_MAX_SCORE_BPS: Final[float] = 189.0
+METHOD_2_PROPOSAL_START_BPS: Final[float] = 190.0
+"""Revised § 217.403(c)(2): scores that equal or exceed 190 basis points."""
+METHOD_2_PROPOSAL_START_PCT: Final[float] = 1.1
+"""Revised § 217.403(c)(2)(i): 1.1 percent."""
+METHOD_2_PROPOSAL_BAND_WIDTH_BPS: Final[float] = 20.0
+METHOD_2_PROPOSAL_INCREMENT_PCT: Final[float] = 0.1
+"""Revised § 217.403(c)(2)(ii): "An additional 0.1 percent for each 20 basis
+points that the ... score exceeds 190 basis points"."""
+
+
+# =========================================================================
+#  Method 2 coefficients -- Table 1 to § 217.405
+# =========================================================================
+
+# Current rule Table 1 to § 217.405 -- Coefficients for Systemic Indicators
+# (coefficient value, %; applied to the indicator in billions of dollars).
+METHOD_2_COEFFICIENTS_CURRENT_PCT: Final[dict[str, float]] = {
+    "total_exposures": 4.423,
+    "intra_financial_system_assets": 12.007,
+    "intra_financial_system_liabilities": 12.490,
+    "securities_outstanding": 9.056,
+    "otc_derivatives_notional": 0.155,
+    "trading_and_afs_securities": 30.169,
+    "level_3_assets": 161.177,
+    "cross_jurisdictional_claims": 9.277,
+    "cross_jurisdictional_liabilities": 9.926,
+}
+
+# Proposed Table 1 to § 217.405 -- Coefficients for Systemic Indicators as of
+# December 31, 202[X] (91 FR 14949). The size / interconnectedness /
+# complexity / cross-jurisdictional values equal the current coefficients
+# divided by the one-time factor of 1.2 (preamble § II.A.i).
+METHOD_2_COEFFICIENTS_PROPOSAL_PCT: Final[dict[str, float]] = {
+    "total_exposures": 3.686,
+    "intra_financial_system_assets": 10.006,
+    "intra_financial_system_liabilities": 10.408,
+    "securities_outstanding": 7.547,
+    "otc_derivatives_notional": 0.129,
+    "trading_and_afs_securities": 25.141,
+    "level_3_assets": 134.314,
+    "cross_jurisdictional_claims": 7.731,
+    "cross_jurisdictional_liabilities": 8.272,
+    "weighted_stwf_amount": 23.003,
+}
+
+METHOD_2_ONE_TIME_DOWNWARD_FACTOR: Final[float] = 1.2
+"""Preamble § II.A.i: "a one-time downward adjustment of the method 2
+coefficients by a factor of 1.2" (already reflected in the proposed table)."""
+
+METHOD_2_INDICATOR_CATEGORY: Final[dict[str, GSIBIndicatorCategory]] = {
+    "total_exposures": _S.SIZE,
+    "intra_financial_system_assets": _S.INTERCONNECTEDNESS,
+    "intra_financial_system_liabilities": _S.INTERCONNECTEDNESS,
+    "securities_outstanding": _S.INTERCONNECTEDNESS,
+    "otc_derivatives_notional": _S.COMPLEXITY,
+    "trading_and_afs_securities": _S.COMPLEXITY,
+    "level_3_assets": _S.COMPLEXITY,
+    "cross_jurisdictional_claims": _S.CROSS_JURISDICTIONAL,
+    "cross_jurisdictional_liabilities": _S.CROSS_JURISDICTIONAL,
+    "weighted_stwf_amount": _S.SHORT_TERM_WHOLESALE_FUNDING,
+}
+
+MILLIONS_PER_BILLION: Final[float] = 1_000.0
+"""§ 217.405(b)(1): indicator "expressed in billions of dollars"; inputs are $M."""
+PERCENT: Final[float] = 100.0
+"""Coefficient values in Table 1 to § 217.405 are stated in percent."""
+
+
+def method2_coefficients_pct(version: GSIBRuleVersion) -> dict[str, float]:
+    """Method 2 coefficient table (in %) for a rule version (Table 1 to § 217.405)."""
+    if version == GSIBRuleVersion.PROPOSAL_2026:
+        return dict(METHOD_2_COEFFICIENTS_PROPOSAL_PCT)
+    return dict(METHOD_2_COEFFICIENTS_CURRENT_PCT)
+
+
+def gdp_growth_adjustment(
+    avg_nominal_gdp_three_years_prior_to_publication: float,
+    avg_nominal_gdp_three_years_prior_to_effective_date: float,
+    prior_year_adjustment: Optional[float] = None,
+) -> float:
+    """GDP growth adjustment scalar (proposed § 217.401 definition).
+
+    "GDP growth adjustment means the most recent annual scalar published by
+    the Board equal to the greater of: (1) The ratio of: (i) The average of
+    nominal United States gross domestic product in the three calendar years
+    prior to publication of the scalar ...; to (ii) The average of nominal
+    United States gross domestic product in the three calendar years prior to
+    [the effective date of a final rule] ...; or (2) The GDP growth adjustment
+    published by the Board the prior calendar year."
+
+    Args:
+        avg_nominal_gdp_three_years_prior_to_publication: Numerator average.
+        avg_nominal_gdp_three_years_prior_to_effective_date: Base average.
+        prior_year_adjustment: Scalar published the prior year (None in the
+            first year).
+
+    Returns:
+        The scalar; proposed § 217.405(c)(2) divides each coefficient by it.
+    """
+    if avg_nominal_gdp_three_years_prior_to_effective_date <= 0:
+        raise ValueError("base-period average nominal GDP must be positive")
+    ratio = (
+        avg_nominal_gdp_three_years_prior_to_publication
+        / avg_nominal_gdp_three_years_prior_to_effective_date
+    )
+    if prior_year_adjustment is None:
+        return ratio
+    return max(ratio, prior_year_adjustment)
+
+
+INITIAL_GDP_GROWTH_ADJUSTMENT: Final[float] = 1.0
+"""Before the first annual publication the coefficients apply as tabulated
+(ratio of the base-period average to itself)."""
+
+
+# =========================================================================
+#  Short-term wholesale funding -- Table 1 to § 217.406
+# =========================================================================
+
+
+class STWFMaturityBucket(Enum):
+    """Remaining-maturity columns of Table 1 to § 217.406.
+
+    The proposal (preamble § II.E.iv.a) re-labels the last two columns
+    91-179 and 180-364 days to align with FR 2052a; the weights are unchanged
+    and move to the FR Y-15 Schedule G instructions (§ II.E.iv.b).
+    """
+
+    UP_TO_30_DAYS = "30 days or less or no maturity"
+    DAYS_31_TO_90 = "31 to 90 days"
+    DAYS_91_TO_180 = "91 to 180 days (proposal: 91 to 179)"
+    DAYS_181_TO_365 = "181 to 365 days (proposal: 180 to 364)"
+
+
+STWF_MATURITY_BUCKETS: Final[tuple[STWFMaturityBucket, ...]] = tuple(STWFMaturityBucket)
+
+STWF_BUCKET_BOUNDS_DAYS_CURRENT: Final[dict[STWFMaturityBucket, tuple[int, int]]] = {
+    STWFMaturityBucket.UP_TO_30_DAYS: (0, 30),
+    STWFMaturityBucket.DAYS_31_TO_90: (31, 90),
+    STWFMaturityBucket.DAYS_91_TO_180: (91, 180),
+    STWFMaturityBucket.DAYS_181_TO_365: (181, 365),
+}
+STWF_BUCKET_BOUNDS_DAYS_PROPOSAL: Final[dict[STWFMaturityBucket, tuple[int, int]]] = {
+    STWFMaturityBucket.UP_TO_30_DAYS: (0, 30),
+    STWFMaturityBucket.DAYS_31_TO_90: (31, 90),
+    STWFMaturityBucket.DAYS_91_TO_180: (91, 179),
+    STWFMaturityBucket.DAYS_181_TO_365: (180, 364),
+}
+
+# Table 1 to § 217.406 -- Short-Term Wholesale Funding Components and Weights.
+STWF_WEIGHTS: Final[dict[int, tuple[float, float, float, float]]] = {
+    # Category 1: secured funding by a level 1 liquid asset; unsecured wholesale
+    # funding from non-financial-sector entities; brokered deposits from retail
+    # customers; short positions where the borrowed asset is not level 1/2A.
+    1: (0.25, 0.10, 0.00, 0.00),
+    # Category 2: secured funding by a level 2A liquid asset; covered asset
+    # exchanges of level 1 for level 2A.
+    2: (0.50, 0.25, 0.10, 0.00),
+    # Category 3: secured funding by a level 2B liquid asset; other covered asset
+    # exchanges; unsecured wholesale funding other than Category 1.
+    3: (0.75, 0.50, 0.25, 0.10),
+    # Category 4: any other component of short-term wholesale funding.
+    4: (1.00, 0.75, 0.50, 0.25),
+}
+
+STWF_CATEGORY_DESCRIPTIONS: Final[dict[int, str]] = {
+    1: (
+        "Secured funding by level 1 liquid asset; unsecured wholesale funding from a "
+        "non-financial-sector counterparty; retail brokered deposits; short positions in "
+        "non-level-1/2A assets"
+    ),
+    2: "Secured funding by level 2A liquid asset; level 1 for level 2A covered asset exchanges",
+    3: (
+        "Secured funding by level 2B liquid asset; other covered asset exchanges; unsecured "
+        "wholesale funding (other than Category 1)"
+    ),
+    4: "Any other component of short-term wholesale funding",
+}
+
+STWF_FIXED_FACTOR_CURRENT: Final[float] = 350.0
+"""§ 217.406(a)(3): "Multiplied by a fixed factor of 350" (ratio of the average
+weighted STWF amount to average risk-weighted assets)."""
+
+LEGACY_STWF_CATEGORY: Final[int] = 4
+"""Category assumed for STWF amounts supplied without a funding category: the
+Category 4 weights are the highest in every maturity column (conservative)."""
+
+
+# =========================================================================
+#  Effective-date mechanics -- § 217.403(d)
+# =========================================================================
+
+
+def effective_surcharge_pct(
+    calculated_prior_year_pct: float,
+    calculated_two_years_prior_pct: Optional[float] = None,
+) -> float:
+    """GSIB surcharge in effect for a calendar year (proposed § 217.403(d)).
+
+    "As of January 1 of a calendar year, the GSIB surcharge in effect ... is
+    the GSIB surcharge calculated ... in the immediately prior calendar year,
+    unless the GSIB surcharge calculated ... in the calendar year two years
+    prior was lower, in which case the GSIB surcharge calculated in the
+    calendar year two years prior shall be in effect." The preamble (§ II.F)
+    states this restates current § 217.403(d)(1)-(2) without changing its
+    substance.
+    """
+    if calculated_two_years_prior_pct is None:
+        return calculated_prior_year_pct
+    return min(calculated_prior_year_pct, calculated_two_years_prior_pct)
+
+
+# =========================================================================
+#  FR Y-15 metadata and validation bounds
 # =========================================================================
 
 FR_Y15_REPORT_NAME: Final[str] = "FR Y-15"
-FR_Y15_REPORT_TITLE: Final[str] = "Banking Organization Systemic Risk Report"
+FR_Y15_REPORT_TITLE: Final[str] = "Systemic Risk Report"
 FR_Y15_OMB_NUMBER: Final[str] = "7100-0352"
-
-# Reporting frequency: Quarterly for Category I G-SIBs
 FR_Y15_FREQUENCY: Final[str] = "QUARTERLY"
-
-# Assessment date: December 31 of each year (for annual G-SIB determination)
-# Quarterly filings also required but annual determines surcharge
 FR_Y15_ASSESSMENT_MONTH: Final[int] = 12
 FR_Y15_ASSESSMENT_DAY: Final[int] = 31
 
-# Schedules
 FR_Y15_SCHEDULES: Final[dict[str, str]] = {
     "A": "Size Indicators",
     "B": "Interconnectedness Indicators",
     "C": "Substitutability Indicators",
     "D": "Complexity Indicators",
     "E": "Cross-Jurisdictional Activity Indicators",
-    "F": "Ancillary Indicators",  # Not scored but reported
-    "G": "Short-Term Wholesale Funding",  # Method 2 input
-    "H": "G-SIB Surcharge Calculation",
+    "F": "Ancillary Indicators",
+    "G": "Short-Term Wholesale Funding Indicator",
 }
 
 
-# =========================================================================
-#  Validation Bounds
-#  Conservative bounds for data quality checks per BCBS 239
-# =========================================================================
-
 @dataclass(frozen=True)
 class ValidationBounds:
-    """Plausibility bounds for G-SIB indicator values.
+    """Plausibility bounds for data-quality checks (BCBS 239 / SR 11-7).
 
-    Per SR 11-7 / BCBS 239 data quality requirements.
-    Values outside these bounds trigger validation warnings.
-    All values in USD millions ($M).
+    These are model-governance tolerances, not regulatory parameters.
     """
-    # A Category I G-SIB should have total exposures between $500B and $10T
-    min_total_exposures: float = 500_000.0  # $500B
-    max_total_exposures: float = 10_000_000.0  # $10T
 
-    # G-SIB scores should be between 0 and 2000 bps
+    min_total_exposures: float = 500_000.0
+    max_total_exposures: float = 10_000_000.0
     min_score_bps: float = 0.0
     max_score_bps: float = 2_000.0
-
-    # Surcharge should be between 1.0% and 6.0% for any realistic G-SIB
-    min_surcharge_pct: float = 1.0
-    max_surcharge_pct: float = 6.0
-
-    # STWF ratio should be between 0% and 100% of total assets
-    min_stwf_ratio: float = 0.0
-    max_stwf_ratio: float = 1.0
+    min_surcharge_pct: float = 0.0
+    max_surcharge_pct: float = 10.0
+    max_stwf_to_total_exposures: float = 1.0
 
 
 DEFAULT_VALIDATION_BOUNDS: Final[ValidationBounds] = ValidationBounds()
+
+DEFAULT_RULE_VERSION: Final[GSIBRuleVersion] = GSIBRuleVersion.PROPOSAL_2026
+"""The engine's basis is the March 2026 re-proposal (CLAUDE.md)."""

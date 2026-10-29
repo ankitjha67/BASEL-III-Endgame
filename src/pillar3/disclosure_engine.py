@@ -48,8 +48,13 @@ from src.pillar3.templates.credit_risk_disclosure import (
     build_cr5,
 )
 from src.pillar3.templates.market_risk_disclosure import (
+    IMAInputs,
     Pillar3MR1,
+    Pillar3MR2,
+    Pillar3MR3,
     build_mr1,
+    build_mr2,
+    build_mr3,
 )
 from src.pillar3.templates.operational_risk_disclosure import (
     Pillar3OR1,
@@ -175,6 +180,8 @@ class DisclosurePackage(BaseModel):
     cc1: Optional[Pillar3CC1] = None
     cc2: Optional[Pillar3CC2] = None
     mr1: Optional[Pillar3MR1] = None
+    mr2: Optional[Pillar3MR2] = None
+    mr3: Optional[Pillar3MR3] = None
     or1: Optional[Pillar3OR1] = None
     lr1: Optional[Pillar3LR1] = None
     lr2: Optional[Pillar3LR2] = None
@@ -211,6 +218,8 @@ def generate_disclosure_package(
     gsib_surcharge: float = 0.015,
     total_rwa: Optional[float] = None,
     entity_name: str = "",
+    ima_inputs: Optional[IMAInputs] = None,
+    ssa_requirements: Optional[dict[str, tuple[float, float, float, float]]] = None,
 ) -> DisclosurePackage:
     """Generate a complete Pillar 3 disclosure package.
 
@@ -231,6 +240,13 @@ def generate_disclosure_package(
         gsib_surcharge: G-SIB surcharge rate.
         total_rwa: Override total RWA (if None, sum from rwa_data).
         entity_name: Entity name.
+        ima_inputs: MAR33 inputs for Template MR2 (banks using the IMA).
+        ssa_requirements: MAR40 requirements for Template MR3 (banks using
+            the simplified standardised approach).
+
+    Market-risk templates follow the DIS50 scope of application: MR1 for
+    SA capital, MR2 only if the bank uses the IMA, MR3 only if it uses the
+    simplified SA.
 
     Returns:
         DisclosurePackage with all generated templates.
@@ -343,6 +359,17 @@ def generate_disclosure_package(
         )
         templates_included.append("MR1")
 
+    # MR2 -- IMA banks only (DIS50 scope of application)
+    if ima_inputs is not None:
+        package.mr2 = build_mr2(ima_inputs, reporting_date=reporting_date, entity_name=entity_name)
+        templates_included.append("MR2")
+
+    # MR3 -- simplified-SA banks only
+    if ssa_requirements is not None:
+        package.mr3 = build_mr3(ssa_requirements, reporting_date=reporting_date,
+                                entity_name=entity_name)
+        templates_included.append("MR3")
+
     # LR1, LR2
     if leverage_data is not None:
         ld = leverage_data
@@ -405,14 +432,22 @@ def generate_disclosure_package(
     if frequency == DisclosureFrequency.ANNUAL:
         templates_included.append("OR1")  # OR1 populated separately
 
-    # Completeness check
-    required = get_templates_by_frequency(frequency)
+    # Completeness check -- market-risk templates are scoped by approach (DIS50)
+    approaches: set[str] = set()
+    if market_risk_data is not None:
+        approaches.add("SA")
+    if ima_inputs is not None:
+        approaches.add("IMA")
+    if ssa_requirements is not None:
+        approaches.add("SSA")
+    scope = frozenset(approaches)
+    required = get_templates_by_frequency(frequency, scope)
     # Also include lower-frequency templates
     if frequency == DisclosureFrequency.SEMI_ANNUAL:
-        required += get_templates_by_frequency(DisclosureFrequency.QUARTERLY)
+        required += get_templates_by_frequency(DisclosureFrequency.QUARTERLY, scope)
     elif frequency == DisclosureFrequency.ANNUAL:
-        required += get_templates_by_frequency(DisclosureFrequency.QUARTERLY)
-        required += get_templates_by_frequency(DisclosureFrequency.SEMI_ANNUAL)
+        required += get_templates_by_frequency(DisclosureFrequency.QUARTERLY, scope)
+        required += get_templates_by_frequency(DisclosureFrequency.SEMI_ANNUAL, scope)
 
     required_ids = set(t.template_id for t in required)
     missing = sorted(required_ids - set(templates_included))

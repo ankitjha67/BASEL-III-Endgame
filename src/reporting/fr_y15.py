@@ -2,39 +2,44 @@
 
 Generates the FR Y-15 Banking Organization Systemic Risk Report for a
 Category I US G-SIB, covering:
-- 12 systemic risk indicators across 5 categories
-- Size, Interconnectedness, Substitutability, Complexity, Cross-Jurisdictional
-- Method 1 score computation (BCBS-based, 12 indicators)
-- Method 2 score computation (STWF-based, US-specific)
-- Score-to-surcharge mapping (20bp bands / 0.1% increments per 2026 proposal)
-- FR Y-15 Schedules A-G population
+- Systemic indicators (12 under the current rule, 14 under the 2026
+  proposal, which adds the two trading-volume indicators)
+- Method 1 / Method 2 scores and the surcharge -- delegated to
+  ``src.capital.gsib.GSIBCalculator`` so the FR Y-15 and the capital stack
+  share one implementation
+- Data-quality checks and FR Y-15 Schedules A-G population
 
 All monetary amounts in USD millions ($M).
 
 References:
 - FR Y-15 Instructions (OMB 7100-0352): Banking Organization Systemic Risk Report
-- G-SIB NPR (128 pages): Risk-Based Capital Surcharges for GSIBs
-- 12 CFR 217.403-406: G-SIB surcharge calculation
-- BCBS d445: Global Systemically Important Banks assessment methodology
-- CLAUDE.md: Method 2 coefficients adjusted by 1.2x downward factor;
-  surcharge bands: 20bp score ranges / 0.1% increments
+- 12 CFR 217.403-406 (current rule)
+- G-SIB NPR, FR Doc. 2026-05961, 91 FR 14908 (Mar. 27, 2026)
 """
 
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field as dc_field
 from datetime import date
 from typing import Optional
 
 from pydantic import BaseModel, Field
 
-from src.reporting.reporting_params import (
-    BCBS_239_THRESHOLDS,
-    DataQualityThresholds,
-    FR_Y15_INDICATORS,
-    FR_Y15_STWF_INDICATORS,
+from src.capital.gsib import (
+    DEFAULT_DENOMINATION_FACTORS,
+    DEFAULT_RULE_VERSION,
+    METHOD_1_INDICATORS_PROPOSAL,
+    DenominationFactors,
+    GSIBCalculator,
+    GSIBIndicatorCategory,
+    GSIBRuleVersion,
+    MethodResult,
+    create_indicator_data_from_dict,
+    score_to_method1_surcharge,
+    score_to_method2_surcharge,
 )
+from src.capital.gsib.gsib_params import INITIAL_GDP_GROWTH_ADJUSTMENT
+from src.reporting.reporting_params import FR_Y15_INDICATORS
 
 logger = logging.getLogger(__name__)
 
@@ -83,456 +88,137 @@ class FRY15CategoryScore(BaseModel):
     )
     capped_score_bps: float = Field(
         default=0.0,
-        description="Score after caps (substitutability capped at 500bps). "
-                    "Reference: G-SIB NPR p. 18."
+        description="Score after caps (substitutability capped at 100 bp). "
+                    "Reference: 12 CFR 217.404(b)(2)."
     )
     cap_applied: bool = Field(default=False)
 
 
 # =========================================================================
-#  Method 1 and Method 2 Scores
+#  Method 1 and Method 2 Scores (delegated to src.capital.gsib)
 # =========================================================================
 
 class FRY15MethodScore(BaseModel):
     """Score for a single G-SIB surcharge method (Method 1 or Method 2).
 
-    Reference: 12 CFR 217.403-406.
+    Reference: 12 CFR 217.403-405 (and § 217.406 under the current rule).
     """
     method: str = Field(description="'Method 1' or 'Method 2'")
-    total_score_bps: float = Field(
-        description="Total systemic importance score in basis points"
-    )
-    surcharge_pct: float = Field(
-        description="Capital surcharge as percentage of RWA"
-    )
-    surcharge_bucket: int = Field(
-        default=0,
-        description="Band number in the surcharge schedule"
-    )
+    total_score_bps: float = Field(description="Total systemic importance score in basis points")
+    surcharge_pct: float = Field(description="Capital surcharge as percentage of RWA")
+    surcharge_bucket: int = Field(default=0, description="Band index in the surcharge schedule")
     band_lower_bps: float = Field(default=0.0, description="Lower bound of band")
     band_upper_bps: float = Field(default=0.0, description="Upper bound of band")
     category_scores: list[FRY15CategoryScore] = Field(default_factory=list)
+    citation: str = Field(default="")
 
 
-# =========================================================================
-#  Surcharge Determination
-# =========================================================================
-
-# Surcharge schedule parameters per 2026 Re-Proposal
-# Reference: G-SIB NPR pp. 18-22, CLAUDE.md
-METHOD_1_INITIAL_THRESHOLD_BPS: float = 130.0
-"""Method 1 initial score threshold in basis points.
-Reference: 12 CFR 217.403(b)."""
-
-METHOD_2_INITIAL_THRESHOLD_BPS: float = 130.0
-"""Method 2 initial score threshold in basis points.
-Reference: 12 CFR 217.406(d)."""
-
-BAND_WIDTH_BPS: float = 20.0
-"""Score band width: 20bp per 2026 Re-Proposal (NOT 100bp from BCBS).
-Reference: G-SIB NPR p. 18."""
-
-SURCHARGE_INCREMENT_PCT: float = 0.1
-"""Surcharge increment: 0.1% per band per 2026 Re-Proposal (NOT 0.5%).
-Reference: G-SIB NPR p. 18."""
-
-MIN_SURCHARGE_PCT: float = 1.0
-"""Minimum G-SIB surcharge: 1.0%.
-Reference: 12 CFR 217.403(b)."""
-
-SUBSTITUTABILITY_CAP_BPS: float = 500.0
-"""Substitutability category score cap: 500 basis points.
-Reference: G-SIB NPR p. 18, 12 CFR 217.404(b)(3)."""
-
-METHOD_2_DOWNWARD_FACTOR: float = 1.0 / 1.2
-"""Method 2 coefficients adjusted by 1.2x downward factor.
-Reference: G-SIB NPR p. 24, CLAUDE.md."""
-
-METHOD_2_STWF_COEFFICIENT: float = 350.0
-"""STWF coefficient: score = (weighted STWF / average RWA) x 350.
-Reference: 12 CFR 217.406(c)."""
+_CATEGORY_LABELS: dict[GSIBIndicatorCategory, str] = {
+    GSIBIndicatorCategory.SIZE: "Size",
+    GSIBIndicatorCategory.INTERCONNECTEDNESS: "Interconnectedness",
+    GSIBIndicatorCategory.SUBSTITUTABILITY: "Substitutability",
+    GSIBIndicatorCategory.COMPLEXITY: "Complexity",
+    GSIBIndicatorCategory.CROSS_JURISDICTIONAL: "Cross-Jurisdictional Activity",
+    GSIBIndicatorCategory.SHORT_TERM_WHOLESALE_FUNDING: "STWF (Method 2)",
+}
 
 
 def score_to_surcharge(
     score_bps: float,
-    initial_threshold: float = METHOD_1_INITIAL_THRESHOLD_BPS,
-    band_width: float = BAND_WIDTH_BPS,
-    increment: float = SURCHARGE_INCREMENT_PCT,
-    min_surcharge: float = MIN_SURCHARGE_PCT,
+    method: int = 1,
+    version: GSIBRuleVersion = DEFAULT_RULE_VERSION,
 ) -> tuple[float, int, float, float]:
-    """Convert a G-SIB score to a surcharge percentage.
+    """Map a score to a surcharge using the calculator's tables.
 
-    Per G-SIB NPR pp. 25-26 / 12 CFR 217.403(b):
-    Uses 20bp bands and 0.1% increments per 2026 Re-Proposal.
-
-    Args:
-        score_bps: G-SIB score in basis points.
-        initial_threshold: First band lower bound (130bp).
-        band_width: Width of each band (20bp).
-        increment: Surcharge increase per band (0.1%).
-        min_surcharge: Minimum surcharge (1.0%).
+    Method 1: Table 1 to § 217.403 (100 bp bands, unchanged by the 2026
+    proposal). Method 2: Table 2 to § 217.403 (current rule) or revised
+    § 217.403(c) (proposal: 1.0% up to 189 bp, then 1.1% + 0.1% per 20 bp).
 
     Returns:
-        Tuple of (surcharge_pct, bucket_number, band_lower, band_upper).
-
-    Reference: G-SIB NPR pp. 25-26, 12 CFR 217.403(b).
+        (surcharge_pct, bucket, band_lower_bps, band_upper_bps).
     """
-    if score_bps < initial_threshold:
-        return min_surcharge, 1, 0.0, initial_threshold
-
-    import math
-    bands_above = (score_bps - initial_threshold) / band_width
-    bucket_index = int(math.floor(bands_above))
-    surcharge = min_surcharge + bucket_index * increment
-    band_lower = initial_threshold + bucket_index * band_width
-    band_upper = band_lower + band_width
-
-    return surcharge, bucket_index + 1, band_lower, band_upper
+    if method == 1:
+        return score_to_method1_surcharge(score_bps)
+    return score_to_method2_surcharge(score_bps, version)
 
 
-# =========================================================================
-#  Indicator Scoring
-# =========================================================================
+def _to_method_score(label: str, result: MethodResult) -> FRY15MethodScore:
+    """Convert a calculator MethodResult to the FR Y-15 report model."""
+    cats: list[FRY15CategoryScore] = []
+    for cs in result.category_scores:
+        cat_label = _CATEGORY_LABELS[cs.category]
+        indicators: list[FRY15IndicatorValue] = []
+        for iv in cs.indicators:
+            ind_def = FR_Y15_INDICATORS.get(iv.indicator_name)
+            indicators.append(FRY15IndicatorValue(
+                indicator_name=iv.indicator_name,
+                schedule=(ind_def.schedule if ind_def
+                          else ("G" if "stwf" in iv.indicator_name else "")),
+                line_number=ind_def.line_number if ind_def else "",
+                description=ind_def.description if ind_def else iv.indicator_name,
+                category=cat_label,
+                amount=iv.raw_value,
+                denomination_factor=iv.denomination_factor,
+                score_contribution=iv.weighted_score_bps,
+                regulatory_reference=ind_def.regulatory_reference if ind_def else result.citation,
+            ))
+        cats.append(FRY15CategoryScore(
+            category=cat_label,
+            weight=sum((s.weight for s in METHOD_1_INDICATORS_PROPOSAL
+                        if s.category == cs.category), 0.0),
+            indicators=indicators,
+            raw_score_bps=cs.raw_score_bps,
+            capped_score_bps=cs.capped_score_bps,
+            cap_applied=cs.cap_applied,
+        ))
+    return FRY15MethodScore(
+        method=label, total_score_bps=result.score_bps, surcharge_pct=result.surcharge_pct,
+        surcharge_bucket=result.surcharge_bucket, band_lower_bps=result.band_lower_bps,
+        band_upper_bps=result.band_upper_bps, category_scores=cats, citation=result.citation,
+    )
 
-# Default global denomination factors (annual BCBS publication)
-# These are representative values for a typical assessment year
-# Reference: BCBS d445, published annually
-DEFAULT_DENOMINATION_FACTORS: dict[str, float] = {
-    "total_exposures": 117_000_000.0,
-    "intra_financial_system_assets": 12_500_000.0,
-    "intra_financial_system_liabilities": 12_300_000.0,
-    "securities_outstanding": 14_800_000.0,
-    "payments_activity": 2_900_000_000.0,
-    "assets_under_custody": 177_000_000.0,
-    "underwriting_activity": 9_200_000.0,
-    "otc_derivatives_notional": 620_000_000.0,
-    "trading_and_afs_securities": 16_000_000.0,
-    "level_3_assets": 1_300_000.0,
-    "cross_jurisdictional_claims": 21_000_000.0,
-    "cross_jurisdictional_liabilities": 18_000_000.0,
-}
 
-
-def compute_indicator_score(
-    indicator_name: str,
-    bank_value: float,
-    denomination_factor: float,
-    category_weight: float,
-    indicator_weight: float,
-) -> float:
-    """Compute a single indicator's contribution to the G-SIB score.
-
-    Per BCBS d445 Section 3.2 / G-SIB NPR p. 24:
-    score_i = (bank_value / global_aggregate) * category_weight
-              * indicator_weight * 10,000
-
-    Args:
-        indicator_name: Name of the indicator (for logging).
-        bank_value: Bank's indicator value in $M.
-        denomination_factor: Global aggregate in $M.
-        category_weight: Category weight (0.20).
-        indicator_weight: Within-category weight.
-
-    Returns:
-        Score contribution in basis points.
-
-    Reference: BCBS d445 Section 3.2, G-SIB NPR p. 24.
-    """
-    if denomination_factor <= 0:
-        logger.warning(
-            "Denomination factor for %s is zero or negative: %.0f",
-            indicator_name, denomination_factor
-        )
-        return 0.0
-
-    ratio = bank_value / denomination_factor
-    score = ratio * category_weight * indicator_weight * 10_000.0
-    return score
+def _calculator(
+    denomination_factors: Optional[DenominationFactors],
+    version: GSIBRuleVersion,
+    gdp_growth_adjustment: float,
+) -> GSIBCalculator:
+    """Single source of G-SIB scoring for the FR Y-15 (src.capital.gsib)."""
+    return GSIBCalculator(
+        denomination_factors=denomination_factors or DEFAULT_DENOMINATION_FACTORS,
+        version=version, gdp_growth_adjustment=gdp_growth_adjustment, validate_inputs=False,
+    )
 
 
 def compute_method1_score(
     indicator_values: dict[str, float],
-    denomination_factors: Optional[dict[str, float]] = None,
+    denomination_factors: Optional[DenominationFactors] = None,
+    version: GSIBRuleVersion = DEFAULT_RULE_VERSION,
 ) -> FRY15MethodScore:
-    """Compute Method 1 G-SIB score from indicator values.
+    """Method 1 score and surcharge for the FR Y-15 (12 CFR 217.404).
 
-    Per 12 CFR 217.404 / G-SIB NPR Section II.B:
-    Method 1 uses 12 indicators across 5 categories, each weighted 20%.
-    Substitutability category is capped at 500bps.
-
-    Args:
-        indicator_values: Dict mapping indicator names to values in $M.
-        denomination_factors: Global aggregates for normalization.
-            If None, uses DEFAULT_DENOMINATION_FACTORS.
-
-    Returns:
-        FRY15MethodScore with full breakdown.
-
-    Reference: 12 CFR 217.404, G-SIB NPR pp. 15-22.
+    Delegates to :class:`src.capital.gsib.GSIBCalculator` so the FR Y-15 and
+    the capital stack always agree.
     """
-    if denomination_factors is None:
-        denomination_factors = DEFAULT_DENOMINATION_FACTORS
-
-    # Group indicators by category
-    categories: dict[str, list[str]] = {
-        "Size": ["total_exposures"],
-        "Interconnectedness": [
-            "intra_financial_system_assets",
-            "intra_financial_system_liabilities",
-            "securities_outstanding",
-        ],
-        "Substitutability": [
-            "payments_activity",
-            "assets_under_custody",
-            "underwriting_activity",
-        ],
-        "Complexity": [
-            "otc_derivatives_notional",
-            "trading_and_afs_securities",
-            "level_3_assets",
-        ],
-        "Cross-Jurisdictional Activity": [
-            "cross_jurisdictional_claims",
-            "cross_jurisdictional_liabilities",
-        ],
-    }
-
-    category_scores: list[FRY15CategoryScore] = []
-    total_score = 0.0
-
-    for cat_name, indicator_names in categories.items():
-        cat_weight = 0.20
-        n_indicators = len(indicator_names)
-        ind_weight = 1.0 / n_indicators if n_indicators > 0 else 0.0
-
-        indicators: list[FRY15IndicatorValue] = []
-        cat_score = 0.0
-
-        for ind_name in indicator_names:
-            bank_val = indicator_values.get(ind_name, 0.0)
-            denom = denomination_factors.get(ind_name, 0.0)
-            ind_def = FR_Y15_INDICATORS.get(ind_name)
-
-            score = compute_indicator_score(
-                ind_name, bank_val, denom, cat_weight, ind_weight
-            )
-            cat_score += score
-
-            indicators.append(FRY15IndicatorValue(
-                indicator_name=ind_name,
-                schedule=ind_def.schedule if ind_def else "",
-                line_number=ind_def.line_number if ind_def else "",
-                description=ind_def.description if ind_def else ind_name,
-                category=cat_name,
-                amount=bank_val,
-                denomination_factor=denom,
-                score_contribution=score,
-                regulatory_reference=(
-                    ind_def.regulatory_reference if ind_def else ""
-                ),
-            ))
-
-        # Apply substitutability cap
-        cap_applied = False
-        capped_score = cat_score
-        if cat_name == "Substitutability" and cat_score > SUBSTITUTABILITY_CAP_BPS:
-            capped_score = SUBSTITUTABILITY_CAP_BPS
-            cap_applied = True
-            logger.info(
-                "Substitutability cap applied: %.1f bps capped to %.1f bps",
-                cat_score, SUBSTITUTABILITY_CAP_BPS
-            )
-
-        total_score += capped_score
-
-        category_scores.append(FRY15CategoryScore(
-            category=cat_name,
-            weight=cat_weight,
-            indicators=indicators,
-            raw_score_bps=cat_score,
-            capped_score_bps=capped_score,
-            cap_applied=cap_applied,
-        ))
-
-    surcharge, bucket, band_lower, band_upper = score_to_surcharge(
-        total_score, METHOD_1_INITIAL_THRESHOLD_BPS
-    )
-
-    return FRY15MethodScore(
-        method="Method 1",
-        total_score_bps=total_score,
-        surcharge_pct=surcharge,
-        surcharge_bucket=bucket,
-        band_lower_bps=band_lower,
-        band_upper_bps=band_upper,
-        category_scores=category_scores,
-    )
+    data = create_indicator_data_from_dict(indicator_values)
+    calc = _calculator(denomination_factors, version, INITIAL_GDP_GROWTH_ADJUSTMENT)
+    return _to_method_score("Method 1", calc.method1(data))
 
 
 def compute_method2_score(
     indicator_values: dict[str, float],
-    stwf_values: dict[str, float],
-    avg_total_assets: float,
-    denomination_factors: Optional[dict[str, float]] = None,
-    avg_risk_weighted_assets: float = 0.0,
+    version: GSIBRuleVersion = DEFAULT_RULE_VERSION,
+    gdp_growth_adjustment: float = INITIAL_GDP_GROWTH_ADJUSTMENT,
 ) -> FRY15MethodScore:
-    """Compute Method 2 G-SIB score from indicator and STWF values.
+    """Method 2 score and surcharge for the FR Y-15 (12 CFR 217.405).
 
-    Per 12 CFR 217.406 / G-SIB NPR Section II.D:
-    Method 2 replaces Substitutability with the STWF component.
-    Method 2 coefficients adjusted by 1.2x downward factor per 2026
-    Re-Proposal (CLAUDE.md).
-
-    STWF score = (weighted_funding / average RWA) * 350 / 1.2
-    (12 CFR 217.406(c); the coefficient yields score points directly).
-
-    Args:
-        indicator_values: Dict mapping indicator names to values in $M.
-        stwf_values: Dict with keys stwf_0_30_days, stwf_31_90_days,
-            stwf_91_180_days, stwf_181_365_days — all in $M.
-        avg_total_assets: Average total consolidated assets in $M (STWF
-            denominator fallback when average RWA is not supplied).
-        denomination_factors: Global aggregates for normalization.
-        avg_risk_weighted_assets: Average RWA in $M -- the STWF denominator.
-
-    Returns:
-        FRY15MethodScore with full breakdown.
-
-    Reference: 12 CFR 217.406, G-SIB NPR pp. 30-35.
+    ``indicator_values`` carries the STWF inputs as well (``stwf_cat{c}_b{b}``
+    cells, a reported ``weighted_stwf_amount``, or legacy ``stwf_*_days``)
+    and ``avg_risk_weighted_assets`` for the current rule's § 217.406 ratio.
     """
-    if denomination_factors is None:
-        denomination_factors = DEFAULT_DENOMINATION_FACTORS
-
-    # STWF maturity bucket weights
-    # Reference: G-SIB NPR p. 32, 12 CFR 217.406(b)
-    stwf_weights: dict[str, float] = {
-        "stwf_0_30_days": 1.00,     # Full weight for shortest maturity
-        "stwf_31_90_days": 0.75,
-        "stwf_91_180_days": 0.50,
-        "stwf_181_365_days": 0.25,  # Lowest weight for longest maturity
-    }
-
-    # Compute weighted STWF
-    total_weighted_stwf = 0.0
-    for bucket, weight in stwf_weights.items():
-        amount = stwf_values.get(bucket, 0.0)
-        total_weighted_stwf += amount * weight
-
-    # STWF score contribution
-    stwf_score = 0.0
-    # TODO: VERIFY -- fallback to total assets understates the STWF score
-    stwf_denominator = avg_risk_weighted_assets if avg_risk_weighted_assets > 0 else avg_total_assets
-    stwf_coefficient = METHOD_2_STWF_COEFFICIENT * METHOD_2_DOWNWARD_FACTOR
-    if stwf_denominator > 0:
-        stwf_ratio = total_weighted_stwf / stwf_denominator
-        stwf_score = stwf_ratio * stwf_coefficient
-
-    # Categories for Method 2 (same as Method 1 except Substitutability -> STWF)
-    categories_m2: dict[str, list[str]] = {
-        "Size": ["total_exposures"],
-        "Interconnectedness": [
-            "intra_financial_system_assets",
-            "intra_financial_system_liabilities",
-            "securities_outstanding",
-        ],
-        "Complexity": [
-            "otc_derivatives_notional",
-            "trading_and_afs_securities",
-            "level_3_assets",
-        ],
-        "Cross-Jurisdictional Activity": [
-            "cross_jurisdictional_claims",
-            "cross_jurisdictional_liabilities",
-        ],
-    }
-
-    category_scores: list[FRY15CategoryScore] = []
-    total_score = 0.0
-
-    for cat_name, indicator_names in categories_m2.items():
-        cat_weight = 0.20
-        n_indicators = len(indicator_names)
-        ind_weight = 1.0 / n_indicators if n_indicators > 0 else 0.0
-
-        indicators: list[FRY15IndicatorValue] = []
-        cat_score = 0.0
-
-        for ind_name in indicator_names:
-            bank_val = indicator_values.get(ind_name, 0.0)
-            denom = denomination_factors.get(ind_name, 0.0)
-            ind_def = FR_Y15_INDICATORS.get(ind_name)
-
-            score = compute_indicator_score(
-                ind_name, bank_val, denom, cat_weight, ind_weight
-            )
-            cat_score += score
-
-            indicators.append(FRY15IndicatorValue(
-                indicator_name=ind_name,
-                schedule=ind_def.schedule if ind_def else "",
-                line_number=ind_def.line_number if ind_def else "",
-                description=ind_def.description if ind_def else ind_name,
-                category=cat_name,
-                amount=bank_val,
-                denomination_factor=denom,
-                score_contribution=score,
-                regulatory_reference=(
-                    ind_def.regulatory_reference if ind_def else ""
-                ),
-            ))
-
-        total_score += cat_score
-
-        category_scores.append(FRY15CategoryScore(
-            category=cat_name,
-            weight=cat_weight,
-            indicators=indicators,
-            raw_score_bps=cat_score,
-            capped_score_bps=cat_score,
-        ))
-
-    # Add STWF category
-    stwf_indicators: list[FRY15IndicatorValue] = []
-    for bucket_name, weight in stwf_weights.items():
-        amount = stwf_values.get(bucket_name, 0.0)
-        stwf_def = FR_Y15_STWF_INDICATORS.get(bucket_name)
-        stwf_indicators.append(FRY15IndicatorValue(
-            indicator_name=bucket_name,
-            schedule=stwf_def.schedule if stwf_def else "G",
-            line_number=stwf_def.line_number if stwf_def else "",
-            description=stwf_def.description if stwf_def else bucket_name,
-            category="STWF (Method 2)",
-            amount=amount,
-            denomination_factor=stwf_denominator,
-            score_contribution=amount * weight / stwf_denominator * stwf_coefficient if stwf_denominator > 0 else 0.0,
-            regulatory_reference=(
-                stwf_def.regulatory_reference if stwf_def else ""
-            ),
-        ))
-
-    total_score += stwf_score
-
-    category_scores.append(FRY15CategoryScore(
-        category="STWF (Method 2)",
-        weight=0.20,
-        indicators=stwf_indicators,
-        raw_score_bps=stwf_score,
-        capped_score_bps=stwf_score,
-    ))
-
-    surcharge, bucket, band_lower, band_upper = score_to_surcharge(
-        total_score, METHOD_2_INITIAL_THRESHOLD_BPS
-    )
-
-    return FRY15MethodScore(
-        method="Method 2",
-        total_score_bps=total_score,
-        surcharge_pct=surcharge,
-        surcharge_bucket=bucket,
-        band_lower_bps=band_lower,
-        band_upper_bps=band_upper,
-        category_scores=category_scores,
-    )
+    data = create_indicator_data_from_dict(indicator_values)
+    calc = _calculator(None, version, gdp_growth_adjustment)
+    return _to_method_score("Method 2", calc.method2(data))
 
 
 # =========================================================================
@@ -713,60 +399,47 @@ def generate_fr_y15(
     rssd_id: str = "",
     assessment_year: Optional[int] = None,
     total_rwa: float = 0.0,
-    denomination_factors: Optional[dict[str, float]] = None,
+    denomination_factors: Optional[DenominationFactors] = None,
+    version: GSIBRuleVersion = DEFAULT_RULE_VERSION,
+    gdp_growth_adjustment: float = INITIAL_GDP_GROWTH_ADJUSTMENT,
 ) -> FRY15Report:
-    """Generate complete FR Y-15 Systemic Risk Report.
+    """Generate the FR Y-15 with method 1 / method 2 scores and the surcharge.
 
-    This is the master function that produces the full FR Y-15 filing
-    including Method 1 and Method 2 scores, surcharge determination,
-    and data quality validation.
+    Scoring is delegated to :class:`src.capital.gsib.GSIBCalculator`
+    (12 CFR 217.403(a): surcharge = greater of the two methods), so the
+    FR Y-15 determination is identical to the capital-stack surcharge.
 
     Args:
-        indicator_values: Dict mapping indicator names to values in $M.
-            Must include the 12 Method 1 indicators plus STWF data.
-        reporting_date: As-of date for the report.
-        entity_name: Reporting entity name.
+        indicator_values: Indicator values in $M (see
+            :func:`src.capital.gsib.create_indicator_data_from_dict` keys).
+        reporting_date: As-of date.
+        entity_name: Reporting entity.
         rssd_id: RSSD identifier.
-        assessment_year: G-SIB assessment year.
-        total_rwa: Total RWA in $M for surcharge dollar amount.
-        denomination_factors: Global aggregates for normalization.
+        assessment_year: Assessment year.
+        total_rwa: Total RWA ($M) for the dollar surcharge.
+        denomination_factors: Aggregate global indicator amounts.
+        version: Rule version (current rule or 2026 proposal).
+        gdp_growth_adjustment: Proposed § 217.405(c)(2) scalar.
 
     Returns:
-        FRY15Report with complete systemic risk analysis.
+        FRY15Report.
 
-    Reference: FR Y-15 Instructions (OMB 7100-0352).
+    Reference: FR Y-15 (OMB 7100-0352); 12 CFR 217.403-405.
     """
-    # Method 1 score
-    method1 = compute_method1_score(indicator_values, denomination_factors)
-
-    # Method 2 score
-    stwf_values = {
-        k: indicator_values.get(k, 0.0)
-        for k in ["stwf_0_30_days", "stwf_31_90_days",
-                   "stwf_91_180_days", "stwf_181_365_days"]
-    }
-    avg_total_assets = indicator_values.get("avg_total_assets", 0.0)
-    method2 = compute_method2_score(
-        indicator_values, stwf_values, avg_total_assets, denomination_factors,
-        avg_risk_weighted_assets=indicator_values.get("avg_risk_weighted_assets", 0.0),
-    )
-
-    # Surcharge determination: higher of Method 1 and Method 2
-    if method2.surcharge_pct >= method1.surcharge_pct:
-        binding = "Method 2"
-        final_surcharge = method2.surcharge_pct
-    else:
-        binding = "Method 1"
-        final_surcharge = method1.surcharge_pct
-
-    surcharge_amount = total_rwa * (final_surcharge / 100.0) if total_rwa > 0 else 0.0
-
+    data = create_indicator_data_from_dict(
+        indicator_values, entity_name, reporting_date, assessment_year)
+    calc = _calculator(denomination_factors, version, gdp_growth_adjustment)
+    result = calc.calculate(data, total_rwa)
+    method1 = _to_method_score("Method 1", result.method1_result)
+    method2 = _to_method_score("Method 2", result.method2_result)
+    binding = "Method 2" if result.binding_method.value == "METHOD_2" else "Method 1"
+    final_surcharge = result.final_surcharge_pct
     determination = FRY15SurchargeDetermination(
         method1=method1,
         method2=method2,
         binding_method=binding,
         final_surcharge_pct=final_surcharge,
-        surcharge_amount=surcharge_amount,
+        surcharge_amount=result.cet1_surcharge_amount,
     )
 
     # Data quality

@@ -1,24 +1,12 @@
-"""G-SIB surcharge calculator implementing Method 1 and Method 2.
+"""G-SIB surcharge calculator: method 1, method 2 and the binding surcharge.
 
-This module is the core engine for computing the G-SIB capital surcharge
-per the US Federal Reserve 2026 Re-Proposal. It implements:
-- Method 1: BCBS substitutability-based approach (12 indicators, 5 categories)
-- Method 2: US-specific short-term wholesale funding approach
-- Higher-of Method 1 vs Method 2 determination
-- Score-to-surcharge band mapping
+12 CFR 217.403(a): the GSIB surcharge is the greater of the method 1
+surcharge (Table 1 to § 217.403, method 1 score per § 217.404) and the
+method 2 surcharge (Table 2 to § 217.403 under the current rule; revised
+§ 217.403(c) under the March 2026 proposal, FR Doc. 2026-05961), with the
+effective-date mechanics of § 217.403(d).
 
-Regulatory References:
-- G-SIB NPR (128 pages): "Risk-Based Capital Surcharges for GSIBs"
-- 12 CFR 217.403: G-SIB surcharge calculation
-- 12 CFR 217.404: Method 1 (substitutability-based)
-- 12 CFR 217.406: Method 2 (STWF-based)
-- BCBS d445: Global Systemically Important Banks assessment methodology
-
-Key 2026 Re-Proposal provisions per CLAUDE.md:
-- Method 2 coefficients adjusted by 1.2x DOWNWARD factor
-- Surcharge bands: 20bp score ranges / 0.1% increments (NOT 100bp/0.5%)
-
-All monetary amounts in USD millions ($M).
+All monetary amounts in USD millions ($M); surcharges in percent of RWA.
 """
 
 from __future__ import annotations
@@ -27,11 +15,12 @@ import logging
 import math
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Optional
+from typing import Optional, Sequence
 
 from src.capital.gsib.gsib_indicators import (
     CategoryScore,
     GSIBIndicatorData,
+    STWFComponent,
     STWFScore,
     calculate_method1_score,
     calculate_method2_score,
@@ -39,52 +28,61 @@ from src.capital.gsib.gsib_indicators import (
 )
 from src.capital.gsib.gsib_params import (
     DEFAULT_DENOMINATION_FACTORS,
+    DEFAULT_RULE_VERSION,
     DEFAULT_VALIDATION_BOUNDS,
+    GSIB_IDENTIFICATION_THRESHOLD_BPS,
+    INITIAL_GDP_GROWTH_ADJUSTMENT,
+    METHOD_1_HIGHER_BASE_PCT,
+    METHOD_1_HIGHER_STEP_BPS,
+    METHOD_1_HIGHER_STEP_PCT,
+    METHOD_1_HIGHER_THRESHOLD_BPS,
+    METHOD_1_SURCHARGE_BANDS,
+    METHOD_2_HIGHER_BASE_PCT_CURRENT,
+    METHOD_2_HIGHER_STEP_BPS_CURRENT,
+    METHOD_2_HIGHER_STEP_PCT_CURRENT,
+    METHOD_2_HIGHER_THRESHOLD_BPS_CURRENT,
+    METHOD_2_PROPOSAL_BAND_WIDTH_BPS,
+    METHOD_2_PROPOSAL_FLOOR_MAX_SCORE_BPS,
+    METHOD_2_PROPOSAL_FLOOR_PCT,
+    METHOD_2_PROPOSAL_INCREMENT_PCT,
+    METHOD_2_PROPOSAL_START_BPS,
+    METHOD_2_PROPOSAL_START_PCT,
+    METHOD_2_SURCHARGE_BANDS_CURRENT,
+    STWF_MATURITY_BUCKETS,
     DenominationFactors,
     GSIBCategory,
-    GSIBIndicatorCategory,
     GSIBMethod,
-    METHOD_1_BAND_WIDTH_BPS,
-    METHOD_1_INITIAL_THRESHOLD_BPS,
-    METHOD_1_MIN_SURCHARGE_PCT,
-    METHOD_1_SURCHARGE_INCREMENT_PCT,
-    METHOD_1_SURCHARGE_TABLE,
-    METHOD_2_BAND_WIDTH_BPS,
-    METHOD_2_INITIAL_THRESHOLD_BPS,
-    METHOD_2_MIN_SURCHARGE_PCT,
-    METHOD_2_SURCHARGE_INCREMENT_PCT,
-    METHOD_2_SURCHARGE_TABLE,
+    GSIBRuleVersion,
+    SurchargeBand,
     ValidationBounds,
-    generate_surcharge_table,
+    effective_surcharge_pct,
+    method1_indicators,
 )
 
 logger = logging.getLogger(__name__)
 
 
 # =========================================================================
-#  Result Data Classes
+#  Results
 # =========================================================================
+
 
 @dataclass
 class MethodResult:
-    """Result of a single G-SIB surcharge method calculation.
-
-    Per 12 CFR 217.403-406, each method produces:
-    - A systemic importance score in basis points
-    - A surcharge bucket assignment
-    - A surcharge percentage
+    """Score and surcharge under one method.
 
     Attributes:
-        method: Which method (1 or 2)
-        score_bps: Total systemic importance score in basis points
-        surcharge_pct: Capital surcharge as a percentage of RWA
-        surcharge_bucket: Which band the score falls into (1-based)
-        band_lower_bps: Lower bound of the assigned band
-        band_upper_bps: Upper bound of the assigned band
-        category_scores: Breakdown by systemic importance category
-        stwf_score: STWF score (Method 2 only)
-        validation_warnings: Any data quality warnings
+        method: Method 1 or 2.
+        score_bps: Score in basis points.
+        surcharge_pct: Surcharge in percent of RWA.
+        surcharge_bucket: 1-based band index (0 for "below 130").
+        band_lower_bps / band_upper_bps: The band the score falls in.
+        category_scores: Category breakdown.
+        stwf_score: STWF breakdown (method 2 only).
+        validation_warnings: Data-quality warnings.
+        citation: Provision producing the surcharge.
     """
+
     method: GSIBMethod
     score_bps: float = 0.0
     surcharge_pct: float = 0.0
@@ -94,33 +92,26 @@ class MethodResult:
     category_scores: list[CategoryScore] = field(default_factory=list)
     stwf_score: Optional[STWFScore] = None
     validation_warnings: list[str] = field(default_factory=list)
+    citation: str = ""
 
 
 @dataclass
 class GSIBSurchargeResult:
-    """Complete G-SIB surcharge calculation result.
+    """Method 1, method 2 and the binding surcharge (§ 217.403(a)).
 
-    Per 12 CFR 217.403(a):
-    The G-SIB surcharge is the HIGHER of Method 1 and Method 2.
-    This result contains both method calculations and the final
-    determination.
-
-    Attributes:
-        method1_result: Full Method 1 calculation
-        method2_result: Full Method 2 calculation
-        binding_method: Which method produced the higher surcharge
-        final_surcharge_pct: The binding surcharge percentage
-        gsib_category: Bank's G-SIB category classification
-        reporting_entity: Name of the reporting bank
-        reporting_date: As-of date for the calculation
-        assessment_year: G-SIB assessment year
-        cet1_surcharge_amount: Surcharge amount in $M (if RWA provided)
-        total_rwa: Total RWA used for surcharge amount calculation ($M)
+    ``final_surcharge_pct`` is the surcharge calculated this year;
+    ``effective_surcharge_pct`` applies § 217.403(d) when the prior
+    calculations are supplied.
     """
+
     method1_result: MethodResult
     method2_result: MethodResult
     binding_method: GSIBMethod = GSIBMethod.METHOD_1
     final_surcharge_pct: float = 0.0
+    is_gsib: bool = True
+    rule_version: GSIBRuleVersion = DEFAULT_RULE_VERSION
+    gdp_growth_adjustment: float = INITIAL_GDP_GROWTH_ADJUSTMENT
+    effective_surcharge_pct: Optional[float] = None
     gsib_category: GSIBCategory = GSIBCategory.CATEGORY_I
     reporting_entity: str = ""
     reporting_date: Optional[date] = None
@@ -130,448 +121,282 @@ class GSIBSurchargeResult:
 
     @property
     def method1_score_bps(self) -> float:
-        """Method 1 systemic importance score in basis points."""
+        """Method 1 score (bp)."""
         return self.method1_result.score_bps
 
     @property
     def method2_score_bps(self) -> float:
-        """Method 2 systemic importance score in basis points."""
+        """Method 2 score (bp)."""
         return self.method2_result.score_bps
 
     @property
     def method1_surcharge_pct(self) -> float:
-        """Method 1 surcharge as percentage of RWA."""
+        """Method 1 surcharge (%)."""
         return self.method1_result.surcharge_pct
 
     @property
     def method2_surcharge_pct(self) -> float:
-        """Method 2 surcharge as percentage of RWA."""
+        """Method 2 surcharge (%)."""
         return self.method2_result.surcharge_pct
 
     @property
+    def final_surcharge_rate(self) -> float:
+        """Binding surcharge as a decimal rate (2.9% -> 0.029)."""
+        return self.final_surcharge_pct / 100.0
+
+    @property
     def score_differential_bps(self) -> float:
-        """Difference between Method 2 and Method 1 scores."""
+        """Method 2 score minus method 1 score."""
         return self.method2_result.score_bps - self.method1_result.score_bps
 
     @property
     def surcharge_differential_pct(self) -> float:
-        """Difference between Method 2 and Method 1 surcharges."""
+        """Method 2 surcharge minus method 1 surcharge."""
         return self.method2_result.surcharge_pct - self.method1_result.surcharge_pct
 
 
 # =========================================================================
-#  Score-to-Surcharge Mapping
+#  Score -> surcharge
 # =========================================================================
+
 
 def score_to_surcharge(
     score_bps: float,
-    initial_threshold_bps: float,
-    band_width_bps: float,
-    surcharge_increment_pct: float,
-    min_surcharge_pct: float,
+    bands: Sequence[SurchargeBand],
+    higher_threshold_bps: float,
+    higher_base_pct: float,
+    higher_step_bps: float,
+    higher_step_pct: float,
 ) -> tuple[float, int, float, float]:
-    """Convert a G-SIB score to a surcharge percentage.
+    """Map a score to a surcharge using a banded table plus the open-ended rule.
 
-    Per G-SIB NPR pp.25-26 / 12 CFR 217.403(b):
-    The surcharge is determined by which band the score falls into.
-    Bands are defined by:
-    - Initial threshold: score must exceed this to be a G-SIB
-    - Band width: 20bp per band (per 2026 Re-Proposal)
-    - Increment: 0.1% per band (per 2026 Re-Proposal)
-    - Minimum: 1.0% for any G-SIB
-
-    CRITICAL per CLAUDE.md:
-    - Surcharge bands: 20bp score ranges / 0.1% increments
-    - NOT the BCBS standard 100bp/0.5%
-
-    Args:
-        score_bps: G-SIB systemic importance score in basis points
-        initial_threshold_bps: First band lower bound (130bp)
-        band_width_bps: Width of each band (20bp)
-        surcharge_increment_pct: Surcharge increase per band (0.1%)
-        min_surcharge_pct: Minimum surcharge (1.0%)
+    Used for Table 1 to § 217.403 with § 217.403(b)(2) and for Table 2 to
+    § 217.403 with § 217.403(c)(2): above the table, the surcharge is the base
+    percentage plus one step "for each" full step of score above the threshold.
 
     Returns:
-        Tuple of (surcharge_pct, bucket_number, band_lower, band_upper)
+        (surcharge_pct, bucket_index, band_lower_bps, band_upper_bps); bucket
+        0 is the "below 130" row.
     """
-    if score_bps < initial_threshold_bps:
-        # Below the first band — technically not a G-SIB under this method.
-        # However, if already designated, minimum surcharge applies.
-        logger.info(
-            "Score (%.2f bps) below initial threshold (%.2f bps). "
-            "Applying minimum surcharge of %.1f%%.",
-            score_bps, initial_threshold_bps, min_surcharge_pct,
-        )
-        return min_surcharge_pct, 1, 0.0, initial_threshold_bps
-
-    # Determine which band the score falls into
-    bands_above_threshold = (score_bps - initial_threshold_bps) / band_width_bps
-    bucket_index = int(math.floor(bands_above_threshold))
-
-    surcharge = min_surcharge_pct + bucket_index * surcharge_increment_pct
-    band_lower = initial_threshold_bps + bucket_index * band_width_bps
-    band_upper = band_lower + band_width_bps
-
-    bucket_number = bucket_index + 1  # 1-based
-
-    logger.info(
-        "Score %.2f bps -> Band %d [%.0f, %.0f) -> Surcharge %.1f%%",
-        score_bps, bucket_number, band_lower, band_upper, surcharge,
+    for i, band in enumerate(bands):
+        if band.lower_bps <= score_bps < band.upper_bps:
+            return band.surcharge_pct, i, band.lower_bps, band.upper_bps
+    steps = math.floor((score_bps - higher_threshold_bps) / higher_step_bps)
+    lower = higher_threshold_bps + steps * higher_step_bps
+    return (
+        higher_base_pct + steps * higher_step_pct,
+        len(bands) + steps,
+        lower,
+        lower + higher_step_bps,
     )
-
-    return surcharge, bucket_number, band_lower, band_upper
 
 
 def score_to_method1_surcharge(score_bps: float) -> tuple[float, int, float, float]:
-    """Convert a Method 1 G-SIB score to surcharge.
+    """Method 1 surcharge (Table 1 to § 217.403 and § 217.403(b)(2)).
 
-    Per G-SIB NPR pp.25-26 / 12 CFR 217.404:
-    Uses 20bp bands and 0.1% increments per 2026 Re-Proposal.
-
-    Args:
-        score_bps: Method 1 score in basis points
-
-    Returns:
-        Tuple of (surcharge_pct, bucket, band_lower, band_upper)
+    Unchanged by the 2026 proposal (preamble § II.D: "The proposal would not
+    amend the score band ranges for method 1").
     """
     return score_to_surcharge(
-        score_bps=score_bps,
-        initial_threshold_bps=METHOD_1_INITIAL_THRESHOLD_BPS,
-        band_width_bps=METHOD_1_BAND_WIDTH_BPS,
-        surcharge_increment_pct=METHOD_1_SURCHARGE_INCREMENT_PCT,
-        min_surcharge_pct=METHOD_1_MIN_SURCHARGE_PCT,
+        score_bps,
+        METHOD_1_SURCHARGE_BANDS,
+        METHOD_1_HIGHER_THRESHOLD_BPS,
+        METHOD_1_HIGHER_BASE_PCT,
+        METHOD_1_HIGHER_STEP_BPS,
+        METHOD_1_HIGHER_STEP_PCT,
     )
 
 
-def score_to_method2_surcharge(score_bps: float) -> tuple[float, int, float, float]:
-    """Convert a Method 2 G-SIB score to surcharge.
+def score_to_method2_surcharge(
+    score_bps: float,
+    version: GSIBRuleVersion = DEFAULT_RULE_VERSION,
+) -> tuple[float, int, float, float]:
+    """Method 2 surcharge.
 
-    Per G-SIB NPR p.36 / 12 CFR 217.406(d):
-    Uses 20bp bands and 0.1% increments per 2026 Re-Proposal.
-
-    Args:
-        score_bps: Method 2 score in basis points
-
-    Returns:
-        Tuple of (surcharge_pct, bucket, band_lower, band_upper)
+    Current rule: Table 2 to § 217.403 and § 217.403(c)(2).
+    Proposal (revised § 217.403(c)): 1.0% if the score is 189 bp or less;
+    otherwise 1.1% plus 0.1% for each 20 bp the score exceeds 190 bp.
     """
-    return score_to_surcharge(
-        score_bps=score_bps,
-        initial_threshold_bps=METHOD_2_INITIAL_THRESHOLD_BPS,
-        band_width_bps=METHOD_2_BAND_WIDTH_BPS,
-        surcharge_increment_pct=METHOD_2_SURCHARGE_INCREMENT_PCT,
-        min_surcharge_pct=METHOD_2_MIN_SURCHARGE_PCT,
-    )
+    if version == GSIBRuleVersion.CURRENT_RULE:
+        return score_to_surcharge(
+            score_bps,
+            METHOD_2_SURCHARGE_BANDS_CURRENT,
+            METHOD_2_HIGHER_THRESHOLD_BPS_CURRENT,
+            METHOD_2_HIGHER_BASE_PCT_CURRENT,
+            METHOD_2_HIGHER_STEP_BPS_CURRENT,
+            METHOD_2_HIGHER_STEP_PCT_CURRENT,
+        )
+    if score_bps < METHOD_2_PROPOSAL_START_BPS:
+        # Revised § 217.403(c)(1) covers scores of 189 bp or less; a fractional
+        # score between 189 and 190 has not reached the 190 bp threshold of (c)(2).
+        return METHOD_2_PROPOSAL_FLOOR_PCT, 0, 0.0, METHOD_2_PROPOSAL_FLOOR_MAX_SCORE_BPS + 1.0
+    steps = math.floor((score_bps - METHOD_2_PROPOSAL_START_BPS) / METHOD_2_PROPOSAL_BAND_WIDTH_BPS)
+    lower = METHOD_2_PROPOSAL_START_BPS + steps * METHOD_2_PROPOSAL_BAND_WIDTH_BPS
+    surcharge = round(METHOD_2_PROPOSAL_START_PCT + steps * METHOD_2_PROPOSAL_INCREMENT_PCT, 10)
+    return surcharge, steps + 1, lower, lower + METHOD_2_PROPOSAL_BAND_WIDTH_BPS
+
+
+def get_surcharge_for_score(
+    score_bps: float,
+    method: GSIBMethod = GSIBMethod.METHOD_1,
+    version: GSIBRuleVersion = DEFAULT_RULE_VERSION,
+) -> float:
+    """Surcharge (%) for a score under one method."""
+    if method == GSIBMethod.METHOD_1:
+        return score_to_method1_surcharge(score_bps)[0]
+    return score_to_method2_surcharge(score_bps, version)[0]
 
 
 # =========================================================================
-#  Main Calculator
+#  Calculator
 # =========================================================================
+
 
 class GSIBCalculator:
-    """G-SIB surcharge calculator implementing Method 1 and Method 2.
-
-    Per 12 CFR 217.403:
-    A G-SIB's capital surcharge is the higher of the surcharge
-    calculated under Method 1 (substitutability-based, 12 indicators)
-    and Method 2 (short-term wholesale funding-based).
-
-    Key 2026 Re-Proposal changes per CLAUDE.md:
-    - Method 2 coefficients adjusted by 1.2x downward factor
-    - Surcharge bands: 20bp score ranges / 0.1% increments
-
-    Usage:
-        calculator = GSIBCalculator()
-        result = calculator.calculate(indicator_data)
-        print(f"G-SIB surcharge: {result.final_surcharge_pct}%")
-    """
+    """GSIB surcharge under 12 CFR 217 Subpart H (current rule or 2026 proposal)."""
 
     def __init__(
         self,
         denomination_factors: DenominationFactors = DEFAULT_DENOMINATION_FACTORS,
+        version: GSIBRuleVersion = DEFAULT_RULE_VERSION,
+        gdp_growth_adjustment: float = INITIAL_GDP_GROWTH_ADJUSTMENT,
         validation_bounds: ValidationBounds = DEFAULT_VALIDATION_BOUNDS,
         validate_inputs: bool = True,
     ) -> None:
-        """Initialize the G-SIB calculator.
-
-        Per G-SIB NPR p.24 / BCBS d445:
-        Denomination factors are the global aggregates used to
-        normalize individual bank indicators. These are published
-        annually by the BCBS.
+        """Configure the calculator.
 
         Args:
-            denomination_factors: Global aggregates for score normalization
-            validation_bounds: Plausibility bounds for data quality checks
-            validate_inputs: Whether to run validation checks on input data
+            denomination_factors: Aggregate global indicator amounts (§ 217.401).
+            version: Rule version.
+            gdp_growth_adjustment: Scalar of proposed § 217.405(c)(2).
+            validation_bounds: Data-quality tolerances.
+            validate_inputs: Run data-quality checks.
         """
-        self._denomination_factors = denomination_factors
+        self.denomination_factors = denomination_factors
+        self.version = version
+        self.gdp_growth_adjustment = gdp_growth_adjustment
         self._validation_bounds = validation_bounds
         self._validate_inputs = validate_inputs
+
+    def method1(
+        self, data: GSIBIndicatorData, warnings: Optional[list[str]] = None
+    ) -> MethodResult:
+        """Method 1 score and surcharge (§ 217.404, Table 1 to § 217.403)."""
+        score, cats = calculate_method1_score(data, self.denomination_factors, self.version)
+        pct, bucket, lo, hi = score_to_method1_surcharge(score)
+        return MethodResult(
+            GSIBMethod.METHOD_1,
+            score,
+            pct,
+            bucket,
+            lo,
+            hi,
+            cats,
+            validation_warnings=list(warnings or []),
+            citation="12 CFR 217.404; Table 1 to § 217.403",
+        )
+
+    def method2(
+        self, data: GSIBIndicatorData, warnings: Optional[list[str]] = None
+    ) -> MethodResult:
+        """Method 2 score and surcharge (§ 217.405-406 / revised § 217.403(c), § 217.405)."""
+        score, cats, stwf = calculate_method2_score(data, self.version, self.gdp_growth_adjustment)
+        pct, bucket, lo, hi = score_to_method2_surcharge(score, self.version)
+        cite = (
+            "12 CFR 217.405-406; Table 2 to § 217.403"
+            if self.version == GSIBRuleVersion.CURRENT_RULE
+            else "Proposed § 217.405 and § 217.403(c), FR Doc. 2026-05961"
+        )
+        return MethodResult(
+            GSIBMethod.METHOD_2, score, pct, bucket, lo, hi, cats, stwf, list(warnings or []), cite
+        )
 
     def calculate(
         self,
         indicator_data: GSIBIndicatorData,
         total_rwa: float = 0.0,
+        calculated_prior_year_pct: Optional[float] = None,
     ) -> GSIBSurchargeResult:
-        """Calculate the G-SIB surcharge using both methods.
-
-        Per 12 CFR 217.403(a):
-        1. Calculate Method 1 score and surcharge
-        2. Calculate Method 2 score and surcharge
-        3. Final surcharge = max(Method 1, Method 2)
-
-        The final surcharge is an additional CET1 requirement on top of
-        the minimum 4.5% CET1 ratio.
+        """Full determination (§ 217.403(a), (d)).
 
         Args:
-            indicator_data: Complete set of indicator values
-            total_rwa: Total risk-weighted assets ($M) for computing
-                        the surcharge dollar amount. Optional.
+            indicator_data: FR Y-15 indicators.
+            total_rwa: Total RWA ($M) for the dollar surcharge amount.
+            calculated_prior_year_pct: Surcharge calculated in the previous
+                calendar year; with it, ``effective_surcharge_pct`` for the
+                following year is the lower of the two (§ 217.403(d)).
 
         Returns:
-            GSIBSurchargeResult with full breakdown of both methods
+            GSIBSurchargeResult.
         """
-        # Step 0: Validate inputs
-        validation_warnings: list[str] = []
-        if self._validate_inputs:
-            validation_warnings = validate_indicator_data(
-                indicator_data, self._validation_bounds
-            )
-            for warning in validation_warnings:
-                logger.warning("Validation: %s", warning)
-
-        # Step 1: Calculate Method 1
-        # Per 12 CFR 217.404
-        method1_result = self._calculate_method1(indicator_data, validation_warnings)
-
-        # Step 2: Calculate Method 2
-        # Per 12 CFR 217.406
-        method2_result = self._calculate_method2(indicator_data, validation_warnings)
-
-        # Step 3: Determine binding method
-        # Per 12 CFR 217.403(a): surcharge = max(Method 1, Method 2)
-        if method2_result.surcharge_pct >= method1_result.surcharge_pct:
-            binding_method = GSIBMethod.METHOD_2
-            final_surcharge = method2_result.surcharge_pct
-        else:
-            binding_method = GSIBMethod.METHOD_1
-            final_surcharge = method1_result.surcharge_pct
-
-        logger.info(
-            "G-SIB surcharge determination: Method 1=%.1f%%, Method 2=%.1f%%, "
-            "Binding=%s, Final=%.1f%%",
-            method1_result.surcharge_pct,
-            method2_result.surcharge_pct,
-            binding_method.value,
-            final_surcharge,
+        warnings = (
+            validate_indicator_data(indicator_data, self._validation_bounds)
+            if self._validate_inputs
+            else []
         )
-
-        # Calculate surcharge dollar amount if RWA provided
-        cet1_surcharge_amount = 0.0
-        if total_rwa > 0:
-            cet1_surcharge_amount = total_rwa * (final_surcharge / 100.0)
-            logger.info(
-                "CET1 surcharge amount: $%.0fM (%.1f%% of $%.0fM RWA)",
-                cet1_surcharge_amount, final_surcharge, total_rwa,
-            )
-
+        for w in warnings:
+            logger.warning("G-SIB data quality: %s", w)
+        m1 = self.method1(indicator_data, warnings)
+        is_gsib = m1.score_bps >= GSIB_IDENTIFICATION_THRESHOLD_BPS
+        m2 = self.method2(indicator_data, warnings)
+        if not is_gsib:
+            # § 217.402: method 2 applies only to a BHC identified as a GSIB.
+            m2.surcharge_pct = 0.0
+        binding = (
+            GSIBMethod.METHOD_2 if m2.surcharge_pct >= m1.surcharge_pct else GSIBMethod.METHOD_1
+        )
+        final = max(m1.surcharge_pct, m2.surcharge_pct)
+        effective = (
+            effective_surcharge_pct(final, calculated_prior_year_pct)
+            if calculated_prior_year_pct is not None
+            else None
+        )
         return GSIBSurchargeResult(
-            method1_result=method1_result,
-            method2_result=method2_result,
-            binding_method=binding_method,
-            final_surcharge_pct=final_surcharge,
-            gsib_category=GSIBCategory.CATEGORY_I,
+            method1_result=m1,
+            method2_result=m2,
+            binding_method=binding,
+            final_surcharge_pct=final,
+            is_gsib=is_gsib,
+            rule_version=self.version,
+            gdp_growth_adjustment=self.gdp_growth_adjustment,
+            effective_surcharge_pct=effective,
             reporting_entity=indicator_data.reporting_entity,
             reporting_date=indicator_data.reporting_date,
             assessment_year=indicator_data.assessment_year,
-            cet1_surcharge_amount=cet1_surcharge_amount,
+            cet1_surcharge_amount=total_rwa * final / 100.0 if total_rwa > 0 else 0.0,
             total_rwa=total_rwa,
         )
 
-    def _calculate_method1(
-        self,
-        indicator_data: GSIBIndicatorData,
-        validation_warnings: list[str],
-    ) -> MethodResult:
-        """Calculate Method 1 G-SIB score and surcharge.
+    def calculate_method1_only(self, indicator_data: GSIBIndicatorData) -> MethodResult:
+        """Method 1 only."""
+        return self.method1(indicator_data)
 
-        Per 12 CFR 217.404 / G-SIB NPR Section II.B:
-        Method 1 uses 12 indicators across 5 categories, each
-        weighted at 20%. The substitutability category is capped
-        at 500bp.
-
-        Args:
-            indicator_data: Bank's indicator values
-            validation_warnings: Pre-computed validation warnings
-
-        Returns:
-            MethodResult with Method 1 score and surcharge
-        """
-        score_bps, category_scores = calculate_method1_score(
-            indicator_data, self._denomination_factors
-        )
-
-        surcharge, bucket, band_lower, band_upper = score_to_method1_surcharge(score_bps)
-
-        return MethodResult(
-            method=GSIBMethod.METHOD_1,
-            score_bps=score_bps,
-            surcharge_pct=surcharge,
-            surcharge_bucket=bucket,
-            band_lower_bps=band_lower,
-            band_upper_bps=band_upper,
-            category_scores=category_scores,
-            validation_warnings=validation_warnings,
-        )
-
-    def _calculate_method2(
-        self,
-        indicator_data: GSIBIndicatorData,
-        validation_warnings: list[str],
-    ) -> MethodResult:
-        """Calculate Method 2 G-SIB score and surcharge.
-
-        Per 12 CFR 217.406 / G-SIB NPR Section II.D:
-        Method 2 replaces the substitutability category with
-        the Short-Term Wholesale Funding (STWF) component.
-
-        CRITICAL per CLAUDE.md:
-        Method 2 coefficients are adjusted by 1.2x downward factor.
-
-        Args:
-            indicator_data: Bank's indicator values
-            validation_warnings: Pre-computed validation warnings
-
-        Returns:
-            MethodResult with Method 2 score and surcharge
-        """
-        score_bps, category_scores, stwf_score = calculate_method2_score(
-            indicator_data, self._denomination_factors
-        )
-
-        surcharge, bucket, band_lower, band_upper = score_to_method2_surcharge(score_bps)
-
-        return MethodResult(
-            method=GSIBMethod.METHOD_2,
-            score_bps=score_bps,
-            surcharge_pct=surcharge,
-            surcharge_bucket=bucket,
-            band_lower_bps=band_lower,
-            band_upper_bps=band_upper,
-            category_scores=category_scores,
-            stwf_score=stwf_score,
-            validation_warnings=validation_warnings,
-        )
-
-    def calculate_method1_only(
-        self,
-        indicator_data: GSIBIndicatorData,
-    ) -> MethodResult:
-        """Calculate only Method 1 G-SIB score and surcharge.
-
-        Per 12 CFR 217.404: standalone Method 1 calculation
-        for analysis or comparison purposes.
-
-        Args:
-            indicator_data: Bank's indicator values
-
-        Returns:
-            MethodResult with Method 1 results
-        """
-        warnings = (
-            validate_indicator_data(indicator_data, self._validation_bounds)
-            if self._validate_inputs else []
-        )
-        return self._calculate_method1(indicator_data, warnings)
-
-    def calculate_method2_only(
-        self,
-        indicator_data: GSIBIndicatorData,
-    ) -> MethodResult:
-        """Calculate only Method 2 G-SIB score and surcharge.
-
-        Per 12 CFR 217.406: standalone Method 2 calculation
-        for analysis or comparison purposes.
-
-        Args:
-            indicator_data: Bank's indicator values
-
-        Returns:
-            MethodResult with Method 2 results
-        """
-        warnings = (
-            validate_indicator_data(indicator_data, self._validation_bounds)
-            if self._validate_inputs else []
-        )
-        return self._calculate_method2(indicator_data, warnings)
+    def calculate_method2_only(self, indicator_data: GSIBIndicatorData) -> MethodResult:
+        """Method 2 only."""
+        return self.method2(indicator_data)
 
     def sensitivity_analysis(
         self,
         indicator_data: GSIBIndicatorData,
         indicator_name: str,
-        shock_pcts: list[float] | None = None,
+        shock_pcts: Optional[list[float]] = None,
     ) -> list[tuple[float, float, float]]:
-        """Run sensitivity analysis on a single indicator.
-
-        Per SR 11-7 model governance requirements, models must
-        include sensitivity analysis capabilities.
-
-        Shocks the specified indicator by each percentage and
-        recalculates the surcharge.
-
-        Args:
-            indicator_data: Base case indicator values
-            indicator_name: Name of the indicator to shock
-            shock_pcts: List of shock percentages (e.g., [-20, -10, 0, 10, 20])
-                        Defaults to [-20, -10, -5, 0, 5, 10, 20]
+        """Shock one indicator and recompute (SR 11-7 sensitivity analysis).
 
         Returns:
-            List of (shock_pct, score_bps, surcharge_pct) tuples
+            (shock_pct, max(method 1, method 2) score, final surcharge) tuples.
         """
-        if shock_pcts is None:
-            shock_pcts = [-20.0, -10.0, -5.0, 0.0, 5.0, 10.0, 20.0]
-
-        base_value = indicator_data.get_indicator_value(indicator_name)
-        results: list[tuple[float, float, float]] = []
-
-        for shock in shock_pcts:
-            # Create shocked data by copying and modifying the indicator
-            shocked_data = GSIBIndicatorData(
-                reporting_entity=indicator_data.reporting_entity,
-                reporting_date=indicator_data.reporting_date,
-                assessment_year=indicator_data.assessment_year,
-                total_exposures=indicator_data.total_exposures,
-                intra_financial_system_assets=indicator_data.intra_financial_system_assets,
-                intra_financial_system_liabilities=indicator_data.intra_financial_system_liabilities,
-                securities_outstanding=indicator_data.securities_outstanding,
-                payments_activity=indicator_data.payments_activity,
-                assets_under_custody=indicator_data.assets_under_custody,
-                underwriting_activity=indicator_data.underwriting_activity,
-                otc_derivatives_notional=indicator_data.otc_derivatives_notional,
-                trading_and_afs_securities=indicator_data.trading_and_afs_securities,
-                level_3_assets=indicator_data.level_3_assets,
-                cross_jurisdictional_claims=indicator_data.cross_jurisdictional_claims,
-                cross_jurisdictional_liabilities=indicator_data.cross_jurisdictional_liabilities,
-                stwf_0_30_days=indicator_data.stwf_0_30_days,
-                stwf_31_90_days=indicator_data.stwf_31_90_days,
-                stwf_91_180_days=indicator_data.stwf_91_180_days,
-                stwf_181_365_days=indicator_data.stwf_181_365_days,
-                avg_total_assets=indicator_data.avg_total_assets,
+        shocks = (
+            shock_pcts if shock_pcts is not None else [-20.0, -10.0, -5.0, 0.0, 5.0, 10.0, 20.0]
+        )
+        base = indicator_data.get_indicator_value(indicator_name)
+        out: list[tuple[float, float, float]] = []
+        for s in shocks:
+            r = self.calculate(
+                indicator_data.with_indicator(indicator_name, base * (1 + s / 100.0))
             )
-
-            # Apply shock
-            shocked_value = base_value * (1 + shock / 100.0)
-            setattr(shocked_data, indicator_name, shocked_value)
-
-            # Recalculate
-            calc_result = self.calculate(shocked_data)
-            results.append((
-                shock,
-                max(calc_result.method1_score_bps, calc_result.method2_score_bps),
-                calc_result.final_surcharge_pct,
-            ))
-
-        return results
+            out.append((s, max(r.method1_score_bps, r.method2_score_bps), r.final_surcharge_pct))
+        return out
 
     def what_if_analysis(
         self,
@@ -579,190 +404,78 @@ class GSIBCalculator:
         target_surcharge_pct: float,
         indicator_name: str,
     ) -> Optional[float]:
-        """Determine what indicator value would achieve a target surcharge.
+        """Largest value of one indicator at which the surcharge stays at or below a target.
 
-        Per SR 11-7 requirements for model interpretability,
-        this function performs a reverse calculation to find what
-        indicator level would result in a specific surcharge.
-
-        Uses bisection method to find the indicator value.
-
-        Args:
-            indicator_data: Base case indicator values
-            target_surcharge_pct: Desired surcharge percentage
-            indicator_name: Which indicator to adjust
+        Bisection over 0x-3x the current value; the surcharge is a step
+        function, so the boundary is located to within 0.01% of the value.
 
         Returns:
-            Required indicator value in $M, or None if not achievable
+            Indicator value ($M), or None if even 3x stays below the target or
+            0x exceeds it.
         """
-        base_value = indicator_data.get_indicator_value(indicator_name)
-        if base_value <= 0:
+        base = indicator_data.get_indicator_value(indicator_name)
+        if base <= 0:
             return None
 
-        # Search range: 10% to 300% of current value
-        low_mult = 0.1
-        high_mult = 3.0
+        def surcharge(mult: float) -> float:
+            return self.calculate(
+                indicator_data.with_indicator(indicator_name, base * mult)
+            ).final_surcharge_pct
 
-        for _ in range(50):  # Max 50 iterations
-            mid_mult = (low_mult + high_mult) / 2.0
-            test_value = base_value * mid_mult
-
-            # Create modified data
-            modified_data = GSIBIndicatorData(
-                reporting_entity=indicator_data.reporting_entity,
-                total_exposures=indicator_data.total_exposures,
-                intra_financial_system_assets=indicator_data.intra_financial_system_assets,
-                intra_financial_system_liabilities=indicator_data.intra_financial_system_liabilities,
-                securities_outstanding=indicator_data.securities_outstanding,
-                payments_activity=indicator_data.payments_activity,
-                assets_under_custody=indicator_data.assets_under_custody,
-                underwriting_activity=indicator_data.underwriting_activity,
-                otc_derivatives_notional=indicator_data.otc_derivatives_notional,
-                trading_and_afs_securities=indicator_data.trading_and_afs_securities,
-                level_3_assets=indicator_data.level_3_assets,
-                cross_jurisdictional_claims=indicator_data.cross_jurisdictional_claims,
-                cross_jurisdictional_liabilities=indicator_data.cross_jurisdictional_liabilities,
-                stwf_0_30_days=indicator_data.stwf_0_30_days,
-                stwf_31_90_days=indicator_data.stwf_31_90_days,
-                stwf_91_180_days=indicator_data.stwf_91_180_days,
-                stwf_181_365_days=indicator_data.stwf_181_365_days,
-                avg_total_assets=indicator_data.avg_total_assets,
-            )
-            setattr(modified_data, indicator_name, test_value)
-
-            result = self.calculate(modified_data)
-            actual = result.final_surcharge_pct
-
-            if abs(actual - target_surcharge_pct) < 0.01:
-                return test_value
-
-            if actual < target_surcharge_pct:
-                low_mult = mid_mult
+        lo, hi = 0.0, 3.0
+        if surcharge(lo) > target_surcharge_pct or surcharge(hi) <= target_surcharge_pct:
+            return None
+        while hi - lo > 1e-4:
+            mid = (lo + hi) / 2.0
+            if surcharge(mid) <= target_surcharge_pct:
+                lo = mid
             else:
-                high_mult = mid_mult
-
-        logger.warning(
-            "What-if analysis did not converge for indicator '%s' "
-            "targeting %.1f%% surcharge.",
-            indicator_name, target_surcharge_pct,
-        )
-        return None
+                hi = mid
+        return base * lo
 
     def marginal_contribution(
         self,
         indicator_data: GSIBIndicatorData,
         shock_pct: float = 1.0,
-    ) -> dict[str, float]:
-        """Calculate the marginal contribution of each indicator to the score.
-
-        Per SR 11-7 model documentation requirements:
-        Shows how much the overall G-SIB score changes when each
-        indicator increases by shock_pct%.
-
-        Args:
-            indicator_data: Base case indicator values
-            shock_pct: Percentage shock to apply (default 1%)
+    ) -> dict[str, dict[str, float]]:
+        """Change in each method's score for a shock_pct rise in each indicator.
 
         Returns:
-            Dict mapping indicator name to marginal score change in bps
+            {indicator: {"method1_bps": ..., "method2_bps": ...}}.
         """
-        base_result = self.calculate(indicator_data)
-        base_score = max(base_result.method1_score_bps, base_result.method2_score_bps)
-
-        contributions: dict[str, float] = {}
-        indicator_names = [ind.name for ind in METHOD_1_INDICATORS]
-
-        for name in indicator_names:
-            base_value = indicator_data.get_indicator_value(name)
-            if base_value <= 0:
-                contributions[name] = 0.0
-                continue
-
-            shocked_data = GSIBIndicatorData(
-                reporting_entity=indicator_data.reporting_entity,
-                total_exposures=indicator_data.total_exposures,
-                intra_financial_system_assets=indicator_data.intra_financial_system_assets,
-                intra_financial_system_liabilities=indicator_data.intra_financial_system_liabilities,
-                securities_outstanding=indicator_data.securities_outstanding,
-                payments_activity=indicator_data.payments_activity,
-                assets_under_custody=indicator_data.assets_under_custody,
-                underwriting_activity=indicator_data.underwriting_activity,
-                otc_derivatives_notional=indicator_data.otc_derivatives_notional,
-                trading_and_afs_securities=indicator_data.trading_and_afs_securities,
-                level_3_assets=indicator_data.level_3_assets,
-                cross_jurisdictional_claims=indicator_data.cross_jurisdictional_claims,
-                cross_jurisdictional_liabilities=indicator_data.cross_jurisdictional_liabilities,
-                stwf_0_30_days=indicator_data.stwf_0_30_days,
-                stwf_31_90_days=indicator_data.stwf_31_90_days,
-                stwf_91_180_days=indicator_data.stwf_91_180_days,
-                stwf_181_365_days=indicator_data.stwf_181_365_days,
-                avg_total_assets=indicator_data.avg_total_assets,
-            )
-            setattr(shocked_data, name, base_value * (1 + shock_pct / 100.0))
-
-            shocked_result = self.calculate(shocked_data)
-            shocked_score = max(
-                shocked_result.method1_score_bps,
-                shocked_result.method2_score_bps,
-            )
-            contributions[name] = shocked_score - base_score
-
-        return contributions
+        base = self.calculate(indicator_data)
+        names = [s.name for s in method1_indicators(self.version)] + ["weighted_stwf_amount"]
+        out: dict[str, dict[str, float]] = {}
+        for name in names:
+            v = indicator_data.get_indicator_value(name)
+            r = self.calculate(indicator_data.with_indicator(name, v * (1 + shock_pct / 100.0)))
+            out[name] = {
+                "method1_bps": r.method1_score_bps - base.method1_score_bps,
+                "method2_bps": r.method2_score_bps - base.method2_score_bps,
+            }
+        return out
 
 
 # =========================================================================
-#  Convenience Functions
+#  Convenience
 # =========================================================================
+
 
 def calculate_gsib_surcharge(
     indicator_data: GSIBIndicatorData,
     total_rwa: float = 0.0,
     denomination_factors: DenominationFactors = DEFAULT_DENOMINATION_FACTORS,
+    version: GSIBRuleVersion = DEFAULT_RULE_VERSION,
+    gdp_growth_adjustment: float = INITIAL_GDP_GROWTH_ADJUSTMENT,
 ) -> GSIBSurchargeResult:
-    """Calculate G-SIB surcharge using default settings.
-
-    Per 12 CFR 217.403(a):
-    Convenience function that creates a GSIBCalculator with default
-    denomination factors and computes the surcharge.
-
-    Args:
-        indicator_data: Complete set of indicator values
-        total_rwa: Total RWA ($M) for computing dollar surcharge amount
-        denomination_factors: Global aggregates for normalization
-
-    Returns:
-        GSIBSurchargeResult with full breakdown
-    """
-    calculator = GSIBCalculator(denomination_factors=denomination_factors)
-    return calculator.calculate(indicator_data, total_rwa=total_rwa)
+    """One-call GSIB surcharge (§ 217.403(a))."""
+    return GSIBCalculator(denomination_factors, version, gdp_growth_adjustment).calculate(
+        indicator_data, total_rwa=total_rwa
+    )
 
 
-def get_surcharge_for_score(
-    score_bps: float,
-    method: GSIBMethod = GSIBMethod.METHOD_1,
-) -> float:
-    """Quick lookup: convert a G-SIB score to a surcharge percentage.
+_STWF_KEY_PREFIX = "stwf_cat"
 
-    Per G-SIB NPR pp.25-26 / CLAUDE.md:
-    Uses 20bp bands and 0.1% increments.
-
-    Args:
-        score_bps: G-SIB score in basis points
-        method: Which method's conversion table to use
-
-    Returns:
-        Surcharge percentage
-    """
-    if method == GSIBMethod.METHOD_1:
-        surcharge, _, _, _ = score_to_method1_surcharge(score_bps)
-    else:
-        surcharge, _, _, _ = score_to_method2_surcharge(score_bps)
-    return surcharge
-
-
-# =========================================================================
-#  Helper: Create indicator data from a dict
-# =========================================================================
 
 def create_indicator_data_from_dict(
     data: dict[str, float],
@@ -770,47 +483,29 @@ def create_indicator_data_from_dict(
     reporting_date: Optional[date] = None,
     assessment_year: Optional[int] = None,
 ) -> GSIBIndicatorData:
-    """Create GSIBIndicatorData from a flat dictionary.
+    """Build :class:`GSIBIndicatorData` from a flat dict of $M values.
 
-    Convenience function for building indicator data from external
-    sources (e.g., FR Y-15 filings, data warehouses).
-
-    Per FR Y-15 Instructions:
-    Maps standard field names to indicator data attributes.
-
-    Args:
-        data: Dictionary mapping indicator names to values in $M
-        reporting_entity: Name of the bank
-        reporting_date: As-of date
-        assessment_year: G-SIB assessment year
-
-    Returns:
-        GSIBIndicatorData populated from the dictionary
+    Recognised keys: every indicator field name; ``weighted_stwf_amount``
+    (reported Schedule G total); ``stwf_cat{1-4}_b{1-4}`` for the category x
+    maturity cells of Table 1 to § 217.406 (b1 = 30 days or less, b2 = 31-90,
+    b3 = 91-180/179, b4 = 181-365/180-364); the legacy ``stwf_*_days``
+    fields; ``avg_risk_weighted_assets``; ``avg_total_assets``.
     """
-    return GSIBIndicatorData(
+    obj = GSIBIndicatorData(
         reporting_entity=reporting_entity,
         reporting_date=reporting_date,
         assessment_year=assessment_year,
-        total_exposures=data.get("total_exposures", 0.0),
-        intra_financial_system_assets=data.get("intra_financial_system_assets", 0.0),
-        intra_financial_system_liabilities=data.get("intra_financial_system_liabilities", 0.0),
-        securities_outstanding=data.get("securities_outstanding", 0.0),
-        payments_activity=data.get("payments_activity", 0.0),
-        assets_under_custody=data.get("assets_under_custody", 0.0),
-        underwriting_activity=data.get("underwriting_activity", 0.0),
-        otc_derivatives_notional=data.get("otc_derivatives_notional", 0.0),
-        trading_and_afs_securities=data.get("trading_and_afs_securities", 0.0),
-        level_3_assets=data.get("level_3_assets", 0.0),
-        cross_jurisdictional_claims=data.get("cross_jurisdictional_claims", 0.0),
-        cross_jurisdictional_liabilities=data.get("cross_jurisdictional_liabilities", 0.0),
-        stwf_0_30_days=data.get("stwf_0_30_days", 0.0),
-        stwf_31_90_days=data.get("stwf_31_90_days", 0.0),
-        stwf_91_180_days=data.get("stwf_91_180_days", 0.0),
-        stwf_181_365_days=data.get("stwf_181_365_days", 0.0),
-        avg_total_assets=data.get("avg_total_assets", 0.0),
-        avg_risk_weighted_assets=data.get("avg_risk_weighted_assets", 0.0),
     )
-
-
-# Import for convenient access
-from src.capital.gsib.gsib_params import METHOD_1_INDICATORS  # noqa: E402
+    components: list[STWFComponent] = []
+    for key, value in data.items():
+        if key.startswith(_STWF_KEY_PREFIX):
+            cat, bucket = key[len(_STWF_KEY_PREFIX) :].split("_b")
+            components.append(
+                STWFComponent(int(cat), STWF_MATURITY_BUCKETS[int(bucket) - 1], float(value))
+            )
+        elif key == "weighted_stwf_amount":
+            obj.weighted_stwf_amount_reported = float(value)
+        elif hasattr(obj, key):
+            setattr(obj, key, float(value))
+    obj.stwf_components = components
+    return obj
